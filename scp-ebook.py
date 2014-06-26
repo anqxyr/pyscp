@@ -19,16 +19,20 @@ def make_epub(title, pages):
     book = epub.EpubBook()
     spine = []
     book.set_title(title)
+    toc = ()
     for p in pages:
-        epub_page = epub.EpubHtml(title = p["title"], file_name = p["title"].lower().replace(" ", "_") + ".xhtml")
+        filename = p["title"].lower().replace(" ", "_") + ".xhtml"
+        epub_page = epub.EpubHtml(p["title"], filename)
         epub_page.content = p["content"]
         book.add_item(epub_page)
         spine.append(epub_page)
-    #book.toc = (p in spine) #???
+        toc = toc + (epub.Link(filename, p["title"], filename), )
+    book.toc = toc
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())
     book.spine = spine
     return book
+
 
 def prettify(title, content):
     chapter = "<h2>" + title + "</h2>" + content
@@ -44,6 +48,7 @@ def main():
     pages = []
     pages.append({"title": "Title Page", "content": "Placeholder Title Page"})
     pages.append({"title": "License", "content": "Placeholder Creative Commons disclaimer"})
+    pages.append({"title": "Introduction", "content": "Some introduction text"})
     for url in url_list:
         page = get_page(url)
         page["content"] = prettify(page["title"], page["content"])
