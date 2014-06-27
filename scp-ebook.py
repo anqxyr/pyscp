@@ -11,23 +11,36 @@ def get_page(url):
     page = BeautifulSoup(urlopen(url).read())
     title = str(page.select("#page-title")[0].text).strip()
     content = page.select("#page-content")[0]
-    return {"title": title, "content": content}
+    return {"title": title, "content": content, "section": "SCP Objects"}
 
 
 def make_epub(title, pages):
+
+    #this makes magic happen
     book = epub.EpubBook()
     spine = []
     book.set_title(title)
     style = epub_add_css(book)
+    #do not for the love of god touch the toc
     toc = ()
+    #sc is for sections, used in making toc
+    sc = {}
     for p in pages:
         filename = p["title"].lower().replace(" ", "_") + ".xhtml"
         epub_page = epub.EpubHtml(p["title"], filename)
+        epub_page.title = p["title"]
         epub_page.content = p["content"]
         epub_page.add_item(style)
         book.add_item(epub_page)
         spine.append(epub_page)
-        toc = toc + (epub.Link(filename, p["title"], filename), )
+        if "section" in p:
+            if not p["section"] in sc:
+                sc[p["section"]] = ()
+            sc[p["section"]] = sc[p["section"]] + (epub_page, )
+        else:
+            toc = toc + (epub.Link(filename, p["title"], filename), )
+    for key in sc:
+        toc = toc + ((epub.Section(key), sc[key]), )
     book.toc = toc
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())
@@ -88,6 +101,7 @@ def main():
         page = get_page(url)
         page["content"] = prettify(page["title"], page["content"])
         pages.append(page)
+    pages[6]["section"] = "Tales"
     pages.append({"title": "Appendix", "content": "Placeholder; list of article authors, image artists, etc, etc."})
     book = make_epub("SCP TEST Ebook", pages)
     epub.write_epub("test.epub", book, {})
