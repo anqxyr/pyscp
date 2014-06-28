@@ -23,7 +23,7 @@ def make_epub(title, pages):
     #do not for the love of god touch the toc
     toc = []
     section_list = {}
-    n = 1    #counts the pages
+    n = 1    # counts the pages
     for page in pages:
         filename = "page_" + str(n).zfill(4) + ".xhtml"
         n += 1
@@ -64,9 +64,12 @@ def epub_add_css(book):
 .title1 {
     text-align: center;
     }
-.bold {
-    font-style: bold;
+.title1-bold {
+    font-weight: bold;
     font-size: 200%;
+}
+.bold {
+    font-weight: bold;
     }
 .italic {
     font-style: italic;
@@ -78,10 +81,37 @@ def epub_add_css(book):
     margin-left: 10%;
     margin-top: 40%;
     }
-blockquote {
+.quote {
     border: 1px dashed #999;
     padding: 0 1em;
+    margin: 0.5em 5%;
     background-color: #f4f4f4;
+    }
+.col {
+    border: 1px solid #444;
+    padding: 0 1em;
+    margin: 0.5em 5%;
+    background-color: #ECECEC;
+    }
+.col-title {
+    border-bottom: 1px solid #444;
+    margin: 0 -1em;
+    padding: 0.5em 1em;
+    font-weight: bold;
+    }
+.col .quote{
+    background-color: #E0E0E0;
+}
+.scp-title {
+    font-weight: bold;
+    font-size: 120%;
+    margin: 2em 0;
+    }
+.tale-title {
+    font-style: italic;
+    text-align: center;
+    font-size: 120%;
+    margin: 2em 0;
     }'''
     stylesheet_css = epub.EpubItem(uid="stylesheet", file_name="style/stylesheet.css", media_type="text/css", content=stylesheet)
     book.add_item(stylesheet_css)
@@ -91,47 +121,53 @@ blockquote {
 def prettify(page):
     soup = BeautifulSoup(page["content"])
     soup.body.div.unwrap()
-    soup.body.div.decompose()
+    soup.body.div.decompose()    # remove the rating module
+    #collapsibles
     for item in soup.body.select("div.collapsible-block"):
         subtitle = item.select("a.collapsible-block-link")[0].text
         content = item.select("div.collapsible-block-content")[0]
-        content["class"] = "cl-content"
-        cl = soup.new_tag("div")
-        cl["class"] = "cl"
-        content = content.wrap(cl)
-        cl_title = soup.new_tag("p")
-        cl_title["class"] = "cl-title"
-        cl_title.string = subtitle
-        content.div.insert_before(cl_title)
+        content["class"] = "col-content"
+        col = soup.new_tag("div")
+        col["class"] = "col"
+        content = content.wrap(col)
+        col_title = soup.new_tag("p")
+        col_title["class"] = "col-title"
+        col_title.string = subtitle
+        content.div.insert_before(col_title)
         item.replace_with(content)
-
-    print soup
-    page["content"] = "<h2>" + str(page["title"]) + "</h2>" + "".join([str(i) for i in soup.body.children])
-    print page["content"]
+    #quote boxes
+    for item in soup.body.select("blockquote"):
+        item.name = "div"
+        item["class"] = "quote"
+    #add title to the page
+    if page["part"] == "SCP Objects":
+        page["content"] = "<p class='scp-title'>" + str(page["title"]) + "</p>"
+    else:
+        page["content"] = "<p class='tale-title'>" + str(page["title"]) + "</p>"
+    page["content"] += "".join([str(i) for i in soup.body.children])
     return page
 
 
 def main():
     url_list = ["http://www.scp-wiki.net/scp-1511",
-        "http://www.scp-wiki.net/scp-1425"]
-        #"http://www.scp-wiki.net/scp-9005-2",
-        #"http://www.scp-wiki.net/quiet-days",
-        #"http://www.scp-wiki.net/black-white-black-white-black-white-black-white-black-white"]
+        "http://www.scp-wiki.net/scp-1425",
+        "http://www.scp-wiki.net/scp-9005-2",
+        "http://www.scp-wiki.net/quiet-days",
+        "http://www.scp-wiki.net/black-white-black-white-black-white-black-white-black-white"]
     pages = []
-    titlepage = "<div class='title1'><h1 class='bold'>SCP Foundation</h1><p class='italic'>Ebook edition</p></div>"
+    titlepage_text = "<div class='title1'><h1 class='title1-bold'>SCP Foundation</h1><p class='italic'>Ebook edition</p></div>"
     license_text = """<div class='license'><p>This book contains the collected works of the SCP Foundation,
     a collaborative fiction writing website. All contents are licensed under the CC-BY-SA 3.0 license.
     The stories comprising the book are available online at www.scp-wiki.net .</p></div>"""
-    pages.append({"title": "Title Page", "content": titlepage})
+    pages.append({"title": "Title Page", "content": titlepage_text})
     pages.append({"title": "License", "content": license_text})
     pages.append({"title": "Introduction", "content": "Some introduction text"})
     for url in url_list:
         page = get_page(url)
+        if len(pages) >= 5:
+            page["part"] = "Tales"
         page = prettify(page)
         pages.append(page)
-    #pages[5]["part"] = "Tales"
-    #pages[6]["part"] = "Tales"
-    #pages[7]["part"] = "Tales"
     pages.append({"title": "Appendix", "content": "Placeholder; list of article authors, image artists, etc, etc."})
     book = make_epub("SCP Foundation", pages)
     epub.write_epub("test.epub", book, {})
