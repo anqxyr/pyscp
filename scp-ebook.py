@@ -11,40 +11,51 @@ def get_page(url):
     page = BeautifulSoup(urlopen(url).read())
     title = str(page.select("#page-title")[0].text).strip()
     content = page.select("#page-content")[0]
-    return {"title": title, "content": content, "section": "SCP Objects"}
+    return {"title": title, "content": content, "part": "SCP Objects"}
 
 
 def make_epub(title, pages):
 
     #this makes magic happen
     book = epub.EpubBook()
-    spine = []
     book.set_title(title)
     style = epub_add_css(book)
     #do not for the love of god touch the toc
-    toc = ()
-    #sc is for sections, used in making toc
-    sc = {}
-    for p in pages:
-        filename = p["title"].lower().replace(" ", "_") + ".xhtml"
-        epub_page = epub.EpubHtml(p["title"], filename)
-        epub_page.title = p["title"]
-        epub_page.content = p["content"]
+    toc = []
+    section_list = {}
+    n = 1    #counts the pages
+    for page in pages:
+        filename = "page_" + str(n).zfill(4) + ".xhtml"
+        n += 1
+        epub_page = epub.EpubHtml(page["title"], filename)
+        #the above should also set the title, but apparently it doesn't, so setting it by hand below
+        epub_page.title = page["title"]
+        epub_page.content = page["content"]
+        #each page should have the link to css in it, or the css won't work
         epub_page.add_item(style)
         book.add_item(epub_page)
-        spine.append(epub_page)
-        if "section" in p:
-            if not p["section"] in sc:
-                sc[p["section"]] = ()
-            sc[p["section"]] = sc[p["section"]] + (epub_page, )
+        #building toc
+        #ideally, all the pages belonging to the same section will be added in sequential order
+        if "part" in page:
+            part = page["part"]
+            if not part in toc:
+                toc.append(part)
+                section_list[part] = []
+            section_list[part].append(epub_page)
         else:
-            toc = toc + (epub.Link(filename, p["title"], filename), )
-    for key in sc:
-        toc = toc + ((epub.Section(key), sc[key]), )
-    book.toc = toc
+            #pages without a section are things like title page, introducion, etc.
+            toc.append(epub_page)
+    for item in toc:
+        if type(item) == str:
+            for page in section_list[item]:
+                book.spine.append(page)
+            index = toc.index(item)
+            toc[index] = (epub.Section(item), tuple(section_list[item]))
+        else:
+            book.spine.append(item)
+    book.toc = tuple(toc)
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())
-    book.spine = spine
     return book
 
 
@@ -101,7 +112,9 @@ def main():
         page = get_page(url)
         page["content"] = prettify(page["title"], page["content"])
         pages.append(page)
-    pages[6]["section"] = "Tales"
+    pages[5]["part"] = "Tales"
+    pages[6]["part"] = "Tales"
+    pages[7]["part"] = "Tales"
     pages.append({"title": "Appendix", "content": "Placeholder; list of article authors, image artists, etc, etc."})
     book = make_epub("SCP TEST Ebook", pages)
     epub.write_epub("test.epub", book, {})
