@@ -11,7 +11,7 @@ def get_page(url):
     page = BeautifulSoup(urlopen(url).read())
     title = str(page.select("#page-title")[0].text).strip()
     content = page.select("#page-content")[0]
-    return {"title": title, "content": content, "part": "SCP Objects"}
+    return {"title": str(title), "content": str(content), "part": "SCP Objects"}
 
 
 def make_epub(title, pages):
@@ -88,18 +88,35 @@ blockquote {
     return stylesheet_css
 
 
-def prettify(title, content):
-    content.div.decompose()
-    chapter = "<h2>" + str(title) + "</h2>" + str(content)
-    return chapter
+def prettify(page):
+    soup = BeautifulSoup(page["content"])
+    soup.body.div.unwrap()
+    soup.body.div.decompose()
+    for item in soup.body.select("div.collapsible-block"):
+        subtitle = item.select("a.collapsible-block-link")[0].text
+        content = item.select("div.collapsible-block-content")[0]
+        content["class"] = "cl-content"
+        cl = soup.new_tag("div")
+        cl["class"] = "cl"
+        content = content.wrap(cl)
+        cl_title = soup.new_tag("p")
+        cl_title["class"] = "cl-title"
+        cl_title.string = subtitle
+        content.div.insert_before(cl_title)
+        item.replace_with(content)
+
+    print soup
+    page["content"] = "<h2>" + str(page["title"]) + "</h2>" + "".join([str(i) for i in soup.body.children])
+    print page["content"]
+    return page
 
 
 def main():
     url_list = ["http://www.scp-wiki.net/scp-1511",
-        "http://www.scp-wiki.net/scp-1425",
-        "http://www.scp-wiki.net/scp-9005-2",
-        "http://www.scp-wiki.net/quiet-days",
-        "http://www.scp-wiki.net/black-white-black-white-black-white-black-white-black-white"]
+        "http://www.scp-wiki.net/scp-1425"]
+        #"http://www.scp-wiki.net/scp-9005-2",
+        #"http://www.scp-wiki.net/quiet-days",
+        #"http://www.scp-wiki.net/black-white-black-white-black-white-black-white-black-white"]
     pages = []
     titlepage = "<div class='title1'><h1 class='bold'>SCP Foundation</h1><p class='italic'>Ebook edition</p></div>"
     license_text = """<div class='license'><p>This book contains the collected works of the SCP Foundation,
@@ -110,13 +127,13 @@ def main():
     pages.append({"title": "Introduction", "content": "Some introduction text"})
     for url in url_list:
         page = get_page(url)
-        page["content"] = prettify(page["title"], page["content"])
+        page = prettify(page)
         pages.append(page)
-    pages[5]["part"] = "Tales"
-    pages[6]["part"] = "Tales"
-    pages[7]["part"] = "Tales"
+    #pages[5]["part"] = "Tales"
+    #pages[6]["part"] = "Tales"
+    #pages[7]["part"] = "Tales"
     pages.append({"title": "Appendix", "content": "Placeholder; list of article authors, image artists, etc, etc."})
-    book = make_epub("SCP TEST Ebook", pages)
+    book = make_epub("SCP Foundation", pages)
     epub.write_epub("test.epub", book, {})
 
 main()
