@@ -5,27 +5,49 @@ from urllib import urlopen
 from bs4 import BeautifulSoup
 import re
 
-scp_index1 = ""
-scp_index2 = ""
+scp_index1 = {"url": "http://www.scp-wiki.net/scp-series"}
+scp_index2 = {"url": "http://www.scp-wiki.net/scp-series-2"}
+scp_index3 = {"url": "http://www.scp-wiki.net/scp-series-3"}
+
 
 def scrape(page):
     '''Scrape the contents of the given url.'''
     print("downloading " + page["url"])
     soup = BeautifulSoup(urlopen(page["url"]).read())
-    title = str(soup.select("#page-title")[0].text).strip()
-#    if page["part"] == "scp":
-#        title = get_scp_title(page)
-    content = soup.select("#page-content")[0]
-    page["title"] = str(title)
-    page["content"] = str(content)
+    page["title"] = str(soup.select("#page-title")[0].text).strip()
+    if page["part"] == "scp":
+        page["title"] = get_scp_title(page)
+    page["content"] = str(soup.select("#page-content")[0])
     return page
+
+
+def get_scp_title(page):
+    n = int(page["title"][4:])
+    if n < 1000:
+        index = scp_index1
+    elif n < 2000:
+        index = scp_index2
+    elif n < 3000:
+        index = scp_index3
+    if not "data" in index:
+        index["data"] = []
+        soup = BeautifulSoup(urlopen(index["url"]).read())
+        entries = soup.select("ul li")
+        for e in entries:
+            if re.match(".*>SCP-[0-9]*<.*", str(e)):
+                index["data"].append(e)
+    for i in index["data"]:
+        if page["title"] == i.a.string:
+            return page["title"] + ": " + [s[3:] for s in i.strings][1]
+
 
 def make_epub(title, pages):
 
     #this makes magic happen
     book = epub.EpubBook()
     book.set_title(title)
-    style = epub_add_css(book)
+    style = epub.EpubItem(uid="stylesheet", file_name="style/stylesheet.css", media_type="text/css", content=stylesheet())
+    book.add_item(style)
     #do not for the love of god touch the toc
     toc = []
     section_list = {}
@@ -65,7 +87,7 @@ def make_epub(title, pages):
     return book
 
 
-def epub_add_css(book):
+def stylesheet():
     stylesheet = '''@namespace h "http://www.w3.org/1999/xhtml";
     .title1 {
         text-align: center;
@@ -119,9 +141,8 @@ def epub_add_css(book):
         font-size: 120%;
         margin: 2em 0;
         }'''
-    stylesheet_css = epub.EpubItem(uid="stylesheet", file_name="style/stylesheet.css", media_type="text/css", content=stylesheet)
-    book.add_item(stylesheet_css)
-    return stylesheet_css
+
+    return stylesheet
 
 
 def prettify(page):
