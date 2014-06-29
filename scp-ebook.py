@@ -3,16 +3,22 @@
 from ebooklib import epub
 from urllib import urlopen
 from bs4 import BeautifulSoup
+import re
 
+scp_index1 = ""
+scp_index2 = ""
 
-def get_page(url):
+def scrape(page):
     '''Scrape the contents of the given url.'''
-    print("downloading " + url)
-    page = BeautifulSoup(urlopen(url).read())
-    title = str(page.select("#page-title")[0].text).strip()
-    content = page.select("#page-content")[0]
-    return {"title": str(title), "content": str(content), "part": "SCP Objects"}
-
+    print("downloading " + page["url"])
+    soup = BeautifulSoup(urlopen(page["url"]).read())
+    title = str(soup.select("#page-title")[0].text).strip()
+#    if page["part"] == "scp":
+#        title = get_scp_title(page)
+    content = soup.select("#page-content")[0]
+    page["title"] = str(title)
+    page["content"] = str(content)
+    return page
 
 def make_epub(title, pages):
 
@@ -61,58 +67,58 @@ def make_epub(title, pages):
 
 def epub_add_css(book):
     stylesheet = '''@namespace h "http://www.w3.org/1999/xhtml";
-.title1 {
-    text-align: center;
+    .title1 {
+        text-align: center;
+        }
+    .title1-bold {
+        font-weight: bold;
+        font-size: 200%;
     }
-.title1-bold {
-    font-weight: bold;
-    font-size: 200%;
-}
-.bold {
-    font-weight: bold;
+    .bold {
+        font-weight: bold;
+        }
+    .italic {
+        font-style: italic;
+        }
+    .license {
+        font-style: italic;
+        text-align: justify;
+        max-width: 80%;
+        margin-left: 10%;
+        margin-top: 40%;
+        }
+    .quote {
+        border: 1px dashed #999;
+        padding: 0 1em;
+        margin: 0.5em 5%;
+        background-color: #f4f4f4;
+        }
+    .col {
+        border: 1px solid #444;
+        padding: 0 1em;
+        margin: 0.5em 5%;
+        background-color: #ECECEC;
+        }
+    .col-title {
+        border-bottom: 1px solid #444;
+        margin: 0 -1em;
+        padding: 0.5em 1em;
+        font-weight: bold;
+        }
+    .col .quote{
+        background-color: #E0E0E0;
     }
-.italic {
-    font-style: italic;
-    }
-.license {
-    font-style: italic;
-    text-align: justify;
-    max-width: 80%;
-    margin-left: 10%;
-    margin-top: 40%;
-    }
-.quote {
-    border: 1px dashed #999;
-    padding: 0 1em;
-    margin: 0.5em 5%;
-    background-color: #f4f4f4;
-    }
-.col {
-    border: 1px solid #444;
-    padding: 0 1em;
-    margin: 0.5em 5%;
-    background-color: #ECECEC;
-    }
-.col-title {
-    border-bottom: 1px solid #444;
-    margin: 0 -1em;
-    padding: 0.5em 1em;
-    font-weight: bold;
-    }
-.col .quote{
-    background-color: #E0E0E0;
-}
-.scp-title {
-    font-weight: bold;
-    font-size: 120%;
-    margin: 2em 0;
-    }
-.tale-title {
-    font-style: italic;
-    text-align: center;
-    font-size: 120%;
-    margin: 2em 0;
-    }'''
+    .scp-title {
+        font-weight: bold;
+        font-size: 120%;
+        margin: 2em 0;
+        }
+    .tale-title {
+        font-style: italic;
+        text-align: center;
+        font-size: 120%;
+        margin: 2em 0;
+        }'''
     stylesheet_css = epub.EpubItem(uid="stylesheet", file_name="style/stylesheet.css", media_type="text/css", content=stylesheet)
     book.add_item(stylesheet_css)
     return stylesheet_css
@@ -140,20 +146,33 @@ def prettify(page):
         item.name = "div"
         item["class"] = "quote"
     #add title to the page
-    if page["part"] == "SCP Objects":
+    if page["part"] == "scp":
         page["content"] = "<p class='scp-title'>" + str(page["title"]) + "</p>"
     else:
         page["content"] = "<p class='tale-title'>" + str(page["title"]) + "</p>"
     page["content"] += "".join([str(i) for i in soup.body.children])
     return page
 
+def list_pages():
+    pages = []
+    scp_base = "http://www.scp-wiki.net/system:page-tags/tag/scp"
+    soup = BeautifulSoup(urlopen(scp_base).read())
+    scp_urls_all = ["http://www.scp-wiki.net" + a["href"] for a in soup.select("div.pages-list div.pages-list-item div.title a")]
+    scp_urls_main = []
+    for url in scp_urls_all:
+        if re.match(".*scp-[0-9]*$", url):
+            scp_urls_main.append(url)
+    scp_urls_main = sorted(scp_urls_main, key=natural_key)
+    for url in scp_urls_main:
+        pages.append({"url": url, "part": "scp"})
+    return pages[:3]
+
+
+def natural_key(s):
+    re_natural = re.compile('[0-9]+|[^0-9]+')
+    return [(1, int(c)) if c.isdigit() else (0, c.lower()) for c in re_natural.findall(s)] + [s]
 
 def main():
-    url_list = ["http://www.scp-wiki.net/scp-1511",
-        "http://www.scp-wiki.net/scp-1425",
-        "http://www.scp-wiki.net/scp-9005-2",
-        "http://www.scp-wiki.net/quiet-days",
-        "http://www.scp-wiki.net/black-white-black-white-black-white-black-white-black-white"]
     pages = []
     titlepage_text = "<div class='title1'><h1 class='title1-bold'>SCP Foundation</h1><p class='italic'>Ebook edition</p></div>"
     license_text = """<div class='license'><p>This book contains the collected works of the SCP Foundation,
@@ -162,10 +181,8 @@ def main():
     pages.append({"title": "Title Page", "content": titlepage_text})
     pages.append({"title": "License", "content": license_text})
     pages.append({"title": "Introduction", "content": "Some introduction text"})
-    for url in url_list:
-        page = get_page(url)
-        if len(pages) >= 5:
-            page["part"] = "Tales"
+    for page in list_pages():
+        page = scrape(page)
         page = prettify(page)
         pages.append(page)
     pages.append({"title": "Appendix", "content": "Placeholder; list of article authors, image artists, etc, etc."})
