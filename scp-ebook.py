@@ -166,13 +166,20 @@ def prettify(page):
     for item in soup.body.select("blockquote"):
         item.name = "div"
         item["class"] = "quote"
+    #remove the image block
+    for item in soup.body.select("div.scp-image-block"):
+        item.decompose()
+    for item in soup.body.select("table tr td img"):
+        item.parent.parent.parent.parent.decompose()
     #add title to the page
     if page["part"] == "scp":
         page["content"] = "<p class='scp-title'>" + str(page["title"]) + "</p>"
     else:
         page["content"] = "<p class='tale-title'>" + str(page["title"]) + "</p>"
     page["content"] += "".join([str(i) for i in soup.body.children])
+
     return page
+
 
 def list_pages():
     pages = []
@@ -186,12 +193,13 @@ def list_pages():
     scp_urls_main = sorted(scp_urls_main, key=natural_key)
     for url in scp_urls_main:
         pages.append({"url": url, "part": "scp"})
-    return pages[:3]
+    return pages[:98]
 
 
 def natural_key(s):
     re_natural = re.compile('[0-9]+|[^0-9]+')
     return [(1, int(c)) if c.isdigit() else (0, c.lower()) for c in re_natural.findall(s)] + [s]
+
 
 def main():
     pages = []
