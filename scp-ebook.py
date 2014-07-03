@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 from ebooklib import epub
-from urllib import urlopen
+from urllib.request import urlopen
 from bs4 import BeautifulSoup
 import re
 
@@ -14,7 +14,7 @@ def scrape(page):
     '''Scrape the contents of the given url.'''
     print("downloading " + page["url"])
     soup = BeautifulSoup(urlopen(page["url"]).read())
-    page["title"] = str(soup.select("#page-title")[0].text).strip()
+    page["title"] = soup.select("#page-title")[0].text.strip()
     if page["part"] == "scp":
         page["title"] = get_scp_title(page)
     page["content"] = str(soup.select("#page-content")[0])
@@ -169,8 +169,9 @@ def prettify(page):
     #remove the image block
     for item in soup.body.select("div.scp-image-block"):
         item.decompose()
-    for item in soup.body.select("table tr td img"):
-        item.parent.parent.parent.parent.decompose()
+    for item in soup.body.select("table"):
+        if item.select("img"):
+            item.decompose()
     #add title to the page
     if page["part"] == "scp":
         page["content"] = "<p class='scp-title'>" + str(page["title"]) + "</p>"
