@@ -10,15 +10,78 @@ scp_index2 = {"url": "http://www.scp-wiki.net/scp-series-2"}
 scp_index3 = {"url": "http://www.scp-wiki.net/scp-series-3"}
 
 
-def scrape(page):
-    '''Scrape the contents of the given url.'''
-    print("downloading " + page["url"])
-    soup = BeautifulSoup(urlopen(page["url"]).read())
-    page["title"] = soup.select("#page-title")[0].text.strip()
-    if page["part"] == "scp":
-        page["title"] = get_scp_title(page)
-    page["content"] = str(soup.select("#page-content")[0])
-    return page
+class Page():
+
+    """placeholder docstring"""
+
+    def __init__(self, url=None):
+        self.url = url
+        if url is not None:
+            self.soup = self.scrape()
+            self.title = self.get_title()
+            self.data = self.get_data()
+            self.sect = "scp"
+        else:
+            self.soup = ""
+            self.title = ""
+            self.data = ""
+            self.sect = None
+
+    def scrape(self):
+        '''Scrape the contents of the given url.'''
+        print("downloading " + self.url)
+        soup = BeautifulSoup(urlopen(self.url).read())
+        return soup
+
+    def get_title(self):
+        title = self.soup.select("#page-title")[0].text.strip()
+        #if page["part"] == "scp":
+        #    page["title"] = get_scp_title(page)
+        return title
+
+    def get_data(self):
+        data = self.soup.select("#page-content")[0]
+        data.div.unwrap()
+        data.div.decompose()    # remove the rating module
+        #collapsibles
+        for i in data.select("div.collapsible-block"):
+            subtitle = i.select("a.collapsible-block-link")[0].text
+            content = i.select("div.collapsible-block-content")[0]
+            content["class"] = "col-content"
+            col = self.soup.new_tag("div")
+            col["class"] = "col"
+            content = content.wrap(col)
+            col_title = self.soup.new_tag("p")
+            col_title["class"] = "col-title"
+            col_title.string = subtitle
+            content.div.insert_before(col_title)
+            i.replace_with(content)
+        #quote boxes
+        for i in data.select("blockquote"):
+            i.name = "div"
+            i["class"] = "quote"
+        #remove the image block
+        for i in data.select("div.scp-image-block"):
+            i.decompose()
+        for i in data.select("table"):
+            if i.select("img"):
+                i.decompose()
+         #add title to the page
+        #if page["part"] == "scp":
+        data = "<p class='scp-title'>" + self.title + "</p>" + str(data)
+        #else:
+        #  page["content"] = "<p class='tale-title'>" +
+        #           str(page["title"]) + "</p>"
+        #page["content"] += "".join([str(i) for i in soup.children])
+        return data
+
+    def to_epub(self):
+        epub_page = epub.EpubHtml(self.title, self.filename)
+        #the above should also set the title, but apparently it doesn't,
+        #so setting it by hand below
+        epub_page.title = self.title
+        epub_page.content = self.data
+        return epub_page
 
 
 def get_scp_title(page):
@@ -46,32 +109,30 @@ def make_epub(title, pages):
     #this makes magic happen
     book = epub.EpubBook()
     book.set_title(title)
-    style = epub.EpubItem(uid="stylesheet", file_name="style/stylesheet.css", media_type="text/css", content=stylesheet())
+    style = epub.EpubItem(uid="stylesheet", file_name="style/stylesheet.css",
+                          media_type="text/css", content=stylesheet())
     book.add_item(style)
     #do not for the love of god touch the toc
     toc = []
     section_list = {}
     n = 1    # counts the pages
     for page in pages:
-        filename = "page_" + str(n).zfill(4) + ".xhtml"
+        page.filename = "page_" + str(n).zfill(4) + ".xhtml"
         n += 1
-        epub_page = epub.EpubHtml(page["title"], filename)
-        #the above should also set the title, but apparently it doesn't, so setting it by hand below
-        epub_page.title = page["title"]
-        epub_page.content = page["content"]
+        epub_page = page.to_epub()
         #each page should have the link to css in it, or the css won't work
         epub_page.add_item(style)
         book.add_item(epub_page)
         #building toc
-        #ideally, all the pages belonging to the same section will be added in sequential order
-        if "part" in page:
-            part = page["part"]
-            if not part in toc:
-                toc.append(part)
-                section_list[part] = []
-            section_list[part].append(epub_page)
+        #ideally, pages in the same section will be added in sequential order
+        if page.sect is not None:
+            sect = page.sect
+            if not sect in toc:
+                toc.append(sect)
+                section_list[sect] = []
+            section_list[sect].append(epub_page)
         else:
-            #pages without a section are things like title page, introducion, etc.
+            #pages without a section are things like title page, introducion.
             toc.append(epub_page)
     for item in toc:
         if type(item) == str:
@@ -145,77 +206,44 @@ def stylesheet():
     return stylesheet
 
 
-def prettify(page):
-    soup = BeautifulSoup(page["content"])
-    soup.body.div.unwrap()
-    soup.body.div.decompose()    # remove the rating module
-    #collapsibles
-    for item in soup.body.select("div.collapsible-block"):
-        subtitle = item.select("a.collapsible-block-link")[0].text
-        content = item.select("div.collapsible-block-content")[0]
-        content["class"] = "col-content"
-        col = soup.new_tag("div")
-        col["class"] = "col"
-        content = content.wrap(col)
-        col_title = soup.new_tag("p")
-        col_title["class"] = "col-title"
-        col_title.string = subtitle
-        content.div.insert_before(col_title)
-        item.replace_with(content)
-    #quote boxes
-    for item in soup.body.select("blockquote"):
-        item.name = "div"
-        item["class"] = "quote"
-    #remove the image block
-    for item in soup.body.select("div.scp-image-block"):
-        item.decompose()
-    for item in soup.body.select("table"):
-        if item.select("img"):
-            item.decompose()
-    #add title to the page
-    if page["part"] == "scp":
-        page["content"] = "<p class='scp-title'>" + str(page["title"]) + "</p>"
-    else:
-        page["content"] = "<p class='tale-title'>" + str(page["title"]) + "</p>"
-    page["content"] += "".join([str(i) for i in soup.body.children])
+def make_url_list():
 
-    return page
-
-
-def list_pages():
-    pages = []
     scp_base = "http://www.scp-wiki.net/system:page-tags/tag/scp"
     soup = BeautifulSoup(urlopen(scp_base).read())
-    scp_urls_all = ["http://www.scp-wiki.net" + a["href"] for a in soup.select("div.pages-list div.pages-list-item div.title a")]
-    scp_urls_main = []
-    for url in scp_urls_all:
+    urls_all = ["http://www.scp-wiki.net" + a["href"] for a in soup.select(
+                "div.pages-list div.pages-list-item div.title a")]
+    urls_main = []
+    for url in urls_all:
         if re.match(".*scp-[0-9]*$", url):
-            scp_urls_main.append(url)
-    scp_urls_main = sorted(scp_urls_main, key=natural_key)
-    for url in scp_urls_main:
-        pages.append({"url": url, "part": "scp"})
-    return pages[:98]
+            urls_main.append(url)
+    urls_main = sorted(urls_main, key=natural_key)
+    return urls_main[:4]
 
 
 def natural_key(s):
     re_natural = re.compile('[0-9]+|[^0-9]+')
-    return [(1, int(c)) if c.isdigit() else (0, c.lower()) for c in re_natural.findall(s)] + [s]
+    return [(1, int(c)) if c.isdigit() else (0, c.lower()) for c
+            in re_natural.findall(s)] + [s]
 
 
 def main():
-    pages = []
-    titlepage_text = "<div class='title1'><h1 class='title1-bold'>SCP Foundation</h1><p class='italic'>Ebook edition</p></div>"
-    license_text = """<div class='license'><p>This book contains the collected works of the SCP Foundation,
-    a collaborative fiction writing website. All contents are licensed under the CC-BY-SA 3.0 license.
-    The stories comprising the book are available online at www.scp-wiki.net .</p></div>"""
-    pages.append({"title": "Title Page", "content": titlepage_text})
-    pages.append({"title": "License", "content": license_text})
-    pages.append({"title": "Introduction", "content": "Some introduction text"})
-    for page in list_pages():
-        page = scrape(page)
-        page = prettify(page)
-        pages.append(page)
-    pages.append({"title": "Appendix", "content": "Placeholder; list of article authors, image artists, etc, etc."})
+    pages = [Page(), Page(), Page()]
+    pages[0].title = "Title Page"
+    pages[0].data = """<div class='title1'><h1 class='title1-bold'>
+                    SCP Foundation</h1><div class='italic'>
+                    Ebook edition</div></div>"""
+    pages[1].title = "License"
+    pages[1].data = """<div class='license'><p>This book contains the collected
+                    works of the SCP Foundation, a collaborative fiction
+                    writing website. All contents are licensed under the
+                    CC-BY-SA 3.0 license. The stories comprising the book
+                    are available online at www.scp-wiki.net .</p></div>"""
+    pages[2].title = "Introduction"
+    pages[2].data = "Some introduction text"
+    pages.extend([Page(url) for url in make_url_list()])
+    pages.append(Page())
+    pages[-1].title = "Appendix"
+    pages[-1].data = "Placeholder; list of article authors, image artists, etc"
     book = make_epub("SCP Foundation", pages)
     epub.write_epub("test.epub", book, {})
 
