@@ -14,32 +14,49 @@ class Page():
 
     """placeholder docstring"""
 
+    #containes the soup of all downloaded pages
+    #to prevent unneeded traffic from crosslinking pages
+    cauldron = {}
+
     def __init__(self, url=None):
         self.url = url
         if url is not None:
-            self.soup = self.scrape()
-            self.title = self.get_title()
-            self.data = self.get_data()
+            self.scrape()
+            self.cook()
             self.sect = "scp"
         else:
-            self.soup = ""
-            self.title = ""
-            self.data = ""
+            self.soup = None
+            self.title = None
+            self.data = None
             self.sect = None
 
     def scrape(self):
         '''Scrape the contents of the given url.'''
-        print("downloading " + self.url)
-        soup = BeautifulSoup(urlopen(self.url).read())
-        return soup
+        if not self.url in Page.cauldron:
+            print("downloading " + self.url)
+            soup = BeautifulSoup(urlopen(self.url).read())
+            Page.cauldron[self.url] = soup
+        else:
+            print("found " + self.url + " in the cauldron")
+            soup = Page.cauldron[self.url]
+        self.soup = soup
+        return self
 
-    def get_title(self):
+    def cook(self):
+        '''Cook the soup, retrieve title, data, and tags'''
+        self.cook_title()
+        self.cook_data()
+        self.cook_meta()
+        return self
+
+    def cook_title(self):
         title = self.soup.select("#page-title")[0].text.strip()
         #if page["part"] == "scp":
         #    page["title"] = get_scp_title(page)
-        return title
+        self.title = title
+        return self
 
-    def get_data(self):
+    def cook_data(self):
         data = self.soup.select("#page-content")[0]
         data.div.unwrap()
         data.div.decompose()    # remove the rating module
@@ -73,7 +90,26 @@ class Page():
         #  page["content"] = "<p class='tale-title'>" +
         #           str(page["title"]) + "</p>"
         #page["content"] += "".join([str(i) for i in soup.children])
-        return data
+        self.data = data
+        return self
+
+    def cook_meta(self):
+        #this will in the future also retrieve the author, posting date, etc.
+        tags = [a.string for a in self.soup.select("div.page-tags a")]
+        self.tags = tags
+        return self
+
+    def append_supp(self):
+        for url in self.soup.select("#page-content a"):
+            url = url["href"]
+            if url[0] == "/":
+                url = "http://www.scp-wiki.net" + url
+            supp = Page(url)
+            if "supplement" in supp.tags:
+                self.data = (self.data +
+                             "<hr\>" +
+                             supp.data)
+        return self
 
     def to_epub(self):
         epub_page = epub.EpubHtml(self.title, self.filename)
@@ -217,7 +253,7 @@ def make_url_list():
         if re.match(".*scp-[0-9]*$", url):
             urls_main.append(url)
     urls_main = sorted(urls_main, key=natural_key)
-    return urls_main[:4]
+    return urls_main[20:30]
 
 
 def natural_key(s):
@@ -240,7 +276,10 @@ def main():
                     are available online at www.scp-wiki.net .</p></div>"""
     pages[2].title = "Introduction"
     pages[2].data = "Some introduction text"
-    pages.extend([Page(url) for url in make_url_list()])
+    more_pages = [Page(url) for url in make_url_list()]
+    for page in more_pages:
+        page.append_supp()
+    pages.extend(more_pages)
     pages.append(Page())
     pages[-1].title = "Appendix"
     pages[-1].data = "Placeholder; list of article authors, image artists, etc"
