@@ -58,8 +58,9 @@ class Page():
 
     def cook_data(self):
         data = self.soup.select("#page-content")[0]
-        data.div.unwrap()
-        data.div.decompose()    # remove the rating module
+        #data.div.unwrap()
+        for i in data.select("div.page-rate-widget-box"):
+            i.decompose()    # remove the rating module
         #collapsibles
         for i in data.select("div.collapsible-block"):
             subtitle = i.select("a.collapsible-block-link")[0].text
@@ -100,8 +101,11 @@ class Page():
         return self
 
     def append_supp(self):
+        print("downloading subpages for " + self.url)
         for url in self.soup.select("#page-content a"):
             url = url["href"]
+            if url == "javascript:;":
+                continue
             if url[0] == "/":
                 url = "http://www.scp-wiki.net" + url
             supp = Page(url)
@@ -237,7 +241,10 @@ def stylesheet():
         text-align: center;
         font-size: 120%;
         margin: 2em 0;
-        }'''
+        }
+    p {
+        font-family: "HelveticaNeue-Light", "Helvetica Neue Light", "Helvetica Neue", Helvetica, Arial, "Lucida Grande", sans-serif; 
+    }'''
 
     return stylesheet
 
@@ -253,7 +260,7 @@ def make_url_list():
         if re.match(".*scp-[0-9]*$", url):
             urls_main.append(url)
     urls_main = sorted(urls_main, key=natural_key)
-    return urls_main[20:30]
+    return urls_main[:98]
 
 
 def natural_key(s):
