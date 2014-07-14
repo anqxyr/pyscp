@@ -26,7 +26,7 @@ class Page():
         '''Scrape the contents of the given url.'''
         if not self.url in Page.cauldron:
             print("downloading " + self.url)
-            soup = BeautifulSoup(urlopen(self.url).read())
+            soup = BeautifulSoup(urlopen(self.url))
             Page.cauldron[self.url] = soup
         else:
             print("found " + self.url + " in the cauldron")
@@ -52,7 +52,7 @@ class Page():
                               "http://www.scp-wiki.net/scp-series-2",
                               "http://www.scp-wiki.net/scp-series-3"]
                 for u in index_urls:
-                    s = BeautifulSoup(urlopen(u).read())
+                    s = BeautifulSoup(urlopen(u))
                     entries = s.select("ul li")
                     for e in entries:
                         if re.match(".*>SCP-[0-9]*<.*", str(e)):
@@ -108,12 +108,21 @@ class Page():
 
     def get_children(self):
         for a in self.soup.select("#page-content a"):
+            if not a.has_attr("href"):
+                continue
             url = a["href"]
             #this should be taken care of in cook_data instead
             if url == "javascript:;":
                 continue
             if url[0] == "/":
                 url = "http://www.scp-wiki.net" + url
+            if url[0] == "#":
+                continue
+            #off-site pages should not be included
+            #will also break on absolute links to scp-wiki.wikidot.com
+            #this is to be considered a good thing
+            if not re.match("http://www\.scp-wiki\.net.*", url):
+                continue
             if url in [c.url for c in self.children]:
                 continue
             c = Page(url)
@@ -223,18 +232,34 @@ def stylesheet():
     return stylesheet
 
 
-def make_url_list():
-
-    scp_base = "http://www.scp-wiki.net/system:page-tags/tag/scp"
-    soup = BeautifulSoup(urlopen(scp_base).read())
-    urls_all = ["http://www.scp-wiki.net" + a["href"] for a in soup.select(
-                "div.pages-list div.pages-list-item div.title a")]
-    urls_main = []
-    for url in urls_all:
-        if re.match(".*scp-[0-9]*$", url):
-            urls_main.append(url)
-    urls_main = sorted(urls_main, key=natural_key)
-    return urls_main[:98]
+def collect_pages():
+    skip_base = "http://www.scp-wiki.net/system:page-tags/tag/scp"
+    skip_soup = BeautifulSoup(urlopen(skip_base))
+    skip_urls = ["http://www.scp-wiki.net" + a["href"] for a in
+                 skip_soup.select("""div.pages-list
+                                  div.pages-list-item div.title a""")
+                 if re.match(".*scp-[0-9]*$", a["href"])]
+    skip_urls = sorted(skip_urls, key=natural_key)
+    skips_by_block = [[u for u in skip_urls
+                       if (n * 100 <=
+                           int(re.search("[0-9]{3,4}$", u).group(0))
+                           < (n + 1) * 100)]
+                      for n in range(30)]
+    pages = []
+    skips = Page()
+    skips.title = "SCP Database"
+    skips.data = """<h1 class='title1'>SCP Object Database"""
+    pages.append(skips)
+    for b in skips_by_block[5:6]:
+        block = Page()
+        block.title = "Block " + str(skips_by_block.index(b)).zfill(2)
+        block.data = ""
+        skips.children.append(block)
+        for url in b:
+            p = Page(url)
+            p.get_children()
+            block.children.append(p)
+    return pages
 
 
 def natural_key(s):
@@ -257,10 +282,7 @@ def main():
                     are available online at www.scp-wiki.net .</p></div>"""
     pages[2].title = "Introduction"
     pages[2].data = "Some introduction text"
-    for url in make_url_list():
-        p = Page(url)
-        p.get_children()
-        pages.append(p)
+    pages.extend(collect_pages())
     pages.append(Page())
     pages[-1].title = "Appendix"
     pages[-1].data = "Placeholder; list of article authors, image artists, etc"
