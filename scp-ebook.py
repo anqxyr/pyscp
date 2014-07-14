@@ -154,34 +154,16 @@ def make_epub(title, pages):
     book.add_item(style)
     #do not for the love of god touch the toc
     toc = []
-    section_list = {}
     n = 1    # counts the pages
     for page in pages:
         page.filename = "page_" + str(n).zfill(4) + ".xhtml"
         n += 1
-        epub_page = page.to_epub()
+        epage = page.to_epub()
         #each page should have the link to css in it, or the css won't work
-        epub_page.add_item(style)
-        book.add_item(epub_page)
-        #building toc
-        #ideally, pages in the same section will be added in sequential order
-        if page.sect is not None:
-            sect = page.sect
-            if not sect in toc:
-                toc.append(sect)
-                section_list[sect] = []
-            section_list[sect].append(epub_page)
-        else:
-            #pages without a section are things like title page, introducion.
-            toc.append(epub_page)
-    for item in toc:
-        if type(item) == str:
-            for page in section_list[item]:
-                book.spine.append(page)
-            index = toc.index(item)
-            toc[index] = (epub.Section(item), tuple(section_list[item]))
-        else:
-            book.spine.append(item)
+        epage.add_item(style)
+        book.add_item(epage)
+        toc.append(epage)
+        book.spine.append(epage)
     book.toc = tuple(toc)
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())
@@ -243,7 +225,8 @@ def stylesheet():
         margin: 2em 0;
         }
     p {
-        font-family: "HelveticaNeue-Light", "Helvetica Neue Light", "Helvetica Neue", Helvetica, Arial, "Lucida Grande", sans-serif; 
+        font-family: "HelveticaNeue-Light", "Helvetica Neue Light",
+        "Helvetica Neue", Helvetica, Arial, "Lucida Grande", sans-serif;
     }'''
 
     return stylesheet
