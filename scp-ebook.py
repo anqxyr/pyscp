@@ -4,6 +4,7 @@ from ebooklib import epub
 from urllib.request import urlopen
 from urllib.error import HTTPError
 from bs4 import BeautifulSoup
+from lxml import etree
 import re
 
 
@@ -163,15 +164,50 @@ def make_epub(title, pages):
     book.add_item(style)
     for page in pages:
         add_page(book, page)
-    book.add_item(epub.EpubNcx())
-    #book.add_item(epub.EpubNav())
+    make_toc(book, pages)
     return book
+
+
+def make_toc(book, pages):
+    root = etree.Element("ncx", xmlns="http://www.daisy.org/z3986/2005/ncx/",
+                         version="2005-1")
+    head = etree.SubElement(root, "head")
+    etree.SubElement(head, "meta", content="", name="dtb:uid")
+    etree.SubElement(head, "meta", content="0", name="dtb:depth")
+    etree.SubElement(head, "meta", content="0", name="dtb:totalPageCount")
+    etree.SubElement(head, "meta", content="0", name="dtb:maxPageNumber")
+    doc_title = etree.SubElement(root, "docTitle")
+    doc_title_text = etree.SubElement(doc_title, "text")
+    doc_title_text.text = "SCP Foundation"
+    navmap = etree.SubElement(root, "navMap")
+    for p in pages:
+        add_to_toc(navmap, p)
+    tree = etree.ElementTree(root)
+    toc_xml = etree.tostring(tree, xml_declaration=True, encoding="utf-8",
+                             pretty_print=True).decode()
+    toc = epub.EpubItem(uid="toc", file_name="toc.ncx",
+                        media_type="application/x-dtbncx+xml",
+                        content=toc_xml)
+    book.add_item(toc)
+    return
+
+
+def add_to_toc(navroot, page):
+    navpoint = etree.SubElement(navroot, "navPoint",
+                                id=page.uid,
+                                playOrder=page.uid[-4:].lstrip("0"))
+    navlabel = etree.SubElement(navpoint, "navLabel")
+    etree.SubElement(navlabel, "text").text = page.title
+    etree.SubElement(navpoint, "content", src="Text/" + page.uid + ".xhtml")
+    for c in page.children:
+        add_to_toc(navpoint, c)
+    return
 
 
 def add_page(book, page):
     n = len(book.items) - 1
-    page.filename = "page_" + str(n).zfill(4) + ".xhtml"
-    epage = epub.EpubHtml(page.title, page.filename)
+    page.uid = "page_" + str(n).zfill(4)
+    epage = epub.EpubHtml(page.title, page.uid + ".xhtml")
     #the above should also set the title, but apparently it doesn't,
     #so setting it by hand below
     epage.title = page.title
@@ -264,7 +300,7 @@ def collect_pages():
     skips.title = "SCP Database"
     skips.data = """<h1 class='title1'>SCP Object Database"""
     pages.append(skips)
-    for b in []:  # skips_by_block[5:6]:
+    for b in skips_by_block[1:2]:
         block = Page()
         block.title = "Block " + str(skips_by_block.index(b)).zfill(2)
         block.data = ""
@@ -282,7 +318,7 @@ def collect_pages():
     hub_urls = ["http://www.scp-wiki.net" + a["href"] for a in
                 hub_soup.select("""div.pages-list
                                   div.pages-list-item div.title a""")]
-    for url in hub_urls[:10]:
+    for url in []:  # hub_urls[:10]:
         hub = Page(url)
         if not "tale" in hub.tags:
             continue
