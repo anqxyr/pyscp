@@ -23,12 +23,7 @@ class Page():
         if url is not None:
             self.scrape()
             self.cook()
-            self.sect = "scp"
-        else:
-            self.soup = None
-            self.title = None
-            self.data = None
-            self.sect = None
+        self.children = []
 
     def scrape(self):
         '''Scrape the contents of the given url.'''
@@ -100,19 +95,27 @@ class Page():
         self.tags = tags
         return self
 
-    def append_supp(self):
-        print("downloading subpages for " + self.url)
-        for url in self.soup.select("#page-content a"):
-            url = url["href"]
+    def get_children(self):
+        for a in self.soup.select("#page-content a"):
+            url = a["href"]
+            #this should be taken care of in cook_data instead
             if url == "javascript:;":
                 continue
             if url[0] == "/":
                 url = "http://www.scp-wiki.net" + url
-            supp = Page(url)
-            if "supplement" in supp.tags:
-                self.data = (self.data +
-                             "<hr\>" +
-                             supp.data)
+            if url in [c.url for c in self.children]:
+                continue
+            c = Page(url)
+            if "scp" in self.tags and "supplement" in c.tags:
+                self.children.append(c)
+                c.get_children()
+            if "hub" in self.tags and ("tale" in c.tags or
+                                       "goi-format" in c.tags):
+                self.children.append(c)
+                c.get_children()
+            if "splash" in self.tags and "supplement" in c.tags:
+                self.children.append(c)
+                c.get_children()
         return self
 
     def to_epub(self):
@@ -152,22 +155,23 @@ def make_epub(title, pages):
     style = epub.EpubItem(uid="stylesheet", file_name="style/stylesheet.css",
                           media_type="text/css", content=stylesheet())
     book.add_item(style)
-    #do not for the love of god touch the toc
-    toc = []
-    n = 1    # counts the pages
     for page in pages:
-        page.filename = "page_" + str(n).zfill(4) + ".xhtml"
-        n += 1
-        epage = page.to_epub()
-        #each page should have the link to css in it, or the css won't work
-        epage.add_item(style)
-        book.add_item(epage)
-        toc.append(epage)
-        book.spine.append(epage)
-    book.toc = tuple(toc)
+        add_page(book, page)
     book.add_item(epub.EpubNcx())
-    book.add_item(epub.EpubNav())
+    #book.add_item(epub.EpubNav())
     return book
+
+
+def add_page(book, page):
+    n = len(book.items) - 1
+    page.filename = "page_" + str(n).zfill(4) + ".xhtml"
+    epage = page.to_epub()
+    epage.add_item(book.get_item_with_id("stylesheet"))
+    book.add_item(epage)
+    book.toc.append(epage)
+    book.spine.append(epage)
+    for c in page.children:
+        add_page(book, c)
 
 
 def stylesheet():
@@ -266,10 +270,10 @@ def main():
                     are available online at www.scp-wiki.net .</p></div>"""
     pages[2].title = "Introduction"
     pages[2].data = "Some introduction text"
-    more_pages = [Page(url) for url in make_url_list()]
-    for page in more_pages:
-        page.append_supp()
-    pages.extend(more_pages)
+    for url in make_url_list():
+        p = Page(url)
+        p.get_children()
+        pages.append(p)
     pages.append(Page())
     pages[-1].title = "Appendix"
     pages[-1].data = "Placeholder; list of article authors, image artists, etc"
