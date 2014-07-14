@@ -5,10 +5,6 @@ from urllib.request import urlopen
 from bs4 import BeautifulSoup
 import re
 
-scp_index1 = {"url": "http://www.scp-wiki.net/scp-series"}
-scp_index2 = {"url": "http://www.scp-wiki.net/scp-series-2"}
-scp_index3 = {"url": "http://www.scp-wiki.net/scp-series-3"}
-
 
 class Page():
 
@@ -16,6 +12,7 @@ class Page():
 
     #containes the soup of all downloaded pages
     #to prevent unneeded traffic from crosslinking pages
+    scp_index = {}
     cauldron = {}
 
     def __init__(self, url=None):
@@ -39,15 +36,29 @@ class Page():
 
     def cook(self):
         '''Cook the soup, retrieve title, data, and tags'''
+        self.cook_meta()    # must be cooked first
         self.cook_title()
         self.cook_data()
-        self.cook_meta()
         return self
 
     def cook_title(self):
         title = self.soup.select("#page-title")[0].text.strip()
-        #if page["part"] == "scp":
-        #    page["title"] = get_scp_title(page)
+        # because 001 proposals don't have their own tag,
+        # it's easier to check if the page is a mainlist skip
+        # by regexping its url instead of looking at tags
+        if "scp" in self.tags and re.match(".*scp-[0-9]{3,4}$", self.url):
+            if Page.scp_index == {}:
+                index_urls = ["http://www.scp-wiki.net/scp-series",
+                              "http://www.scp-wiki.net/scp-series-2",
+                              "http://www.scp-wiki.net/scp-series-3"]
+                for u in index_urls:
+                    s = BeautifulSoup(urlopen(u).read())
+                    entries = s.select("ul li")
+                    for e in entries:
+                        if re.match(".*>SCP-[0-9]*<.*", str(e)):
+                            i = e.text.split(" - ")
+                            Page.scp_index[i[0]] = i[1]
+            title = title + ": " + Page.scp_index[title]
         self.title = title
         return self
 
@@ -118,34 +129,6 @@ class Page():
                 c.get_children()
         return self
 
-    def to_epub(self):
-        epub_page = epub.EpubHtml(self.title, self.filename)
-        #the above should also set the title, but apparently it doesn't,
-        #so setting it by hand below
-        epub_page.title = self.title
-        epub_page.content = self.data
-        return epub_page
-
-
-def get_scp_title(page):
-    n = int(page["title"][4:])
-    if n < 1000:
-        index = scp_index1
-    elif n < 2000:
-        index = scp_index2
-    elif n < 3000:
-        index = scp_index3
-    if not "data" in index:
-        index["data"] = []
-        soup = BeautifulSoup(urlopen(index["url"]).read())
-        entries = soup.select("ul li")
-        for e in entries:
-            if re.match(".*>SCP-[0-9]*<.*", str(e)):
-                index["data"].append(e)
-    for i in index["data"]:
-        if page["title"] == i.a.string:
-            return page["title"] + ": " + [s[3:] for s in i.strings][1]
-
 
 def make_epub(title, pages):
 
@@ -165,7 +148,11 @@ def make_epub(title, pages):
 def add_page(book, page):
     n = len(book.items) - 1
     page.filename = "page_" + str(n).zfill(4) + ".xhtml"
-    epage = page.to_epub()
+    epage = epub.EpubHtml(page.title, page.filename)
+    #the above should also set the title, but apparently it doesn't,
+    #so setting it by hand below
+    epage.title = page.title
+    epage.content = page.data
     epage.add_item(book.get_item_with_id("stylesheet"))
     book.add_item(epage)
     book.toc.append(epage)
