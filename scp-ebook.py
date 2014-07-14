@@ -2,6 +2,7 @@
 
 from ebooklib import epub
 from urllib.request import urlopen
+from urllib.error import HTTPError
 from bs4 import BeautifulSoup
 import re
 
@@ -26,7 +27,11 @@ class Page():
         '''Scrape the contents of the given url.'''
         if not self.url in Page.cauldron:
             print("downloading " + self.url)
-            soup = BeautifulSoup(urlopen(self.url))
+            try:
+                soup = BeautifulSoup(urlopen(self.url))
+            except HTTPError:
+                self.soup = None
+                return self
             Page.cauldron[self.url] = soup
         else:
             print("found " + self.url + " in the cauldron")
@@ -36,13 +41,20 @@ class Page():
 
     def cook(self):
         '''Cook the soup, retrieve title, data, and tags'''
+        if not self.soup:
+            self.title = None
+            self.data = None
+            return self
         self.cook_meta()    # must be cooked first
         self.cook_title()
         self.cook_data()
         return self
 
     def cook_title(self):
-        title = self.soup.select("#page-title")[0].text.strip()
+        if self.soup.select("#page-title"):
+            title = self.soup.select("#page-title")[0].text.strip()
+        else:
+            title = ""
         # because 001 proposals don't have their own tag,
         # it's easier to check if the page is a mainlist skip
         # by regexping its url instead of looking at tags
@@ -126,6 +138,8 @@ class Page():
             if url in [c.url for c in self.children]:
                 continue
             c = Page(url)
+            if not c.soup:
+                continue
             if "scp" in self.tags and "supplement" in c.tags:
                 self.children.append(c)
                 c.get_children()
@@ -233,6 +247,7 @@ def stylesheet():
 
 
 def collect_pages():
+    pages = []
     skip_base = "http://www.scp-wiki.net/system:page-tags/tag/scp"
     skip_soup = BeautifulSoup(urlopen(skip_base))
     skip_urls = ["http://www.scp-wiki.net" + a["href"] for a in
@@ -245,12 +260,11 @@ def collect_pages():
                            int(re.search("[0-9]{3,4}$", u).group(0))
                            < (n + 1) * 100)]
                       for n in range(30)]
-    pages = []
     skips = Page()
     skips.title = "SCP Database"
     skips.data = """<h1 class='title1'>SCP Object Database"""
     pages.append(skips)
-    for b in skips_by_block[5:6]:
+    for b in []:  # skips_by_block[5:6]:
         block = Page()
         block.title = "Block " + str(skips_by_block.index(b)).zfill(2)
         block.data = ""
@@ -259,6 +273,21 @@ def collect_pages():
             p = Page(url)
             p.get_children()
             block.children.append(p)
+    tales = Page()
+    tales.title = "Tales"
+    tales.data = ""
+    pages.append(tales)
+    hub_base = "http://www.scp-wiki.net/system:page-tags/tag/hub"
+    hub_soup = BeautifulSoup(urlopen(hub_base))
+    hub_urls = ["http://www.scp-wiki.net" + a["href"] for a in
+                hub_soup.select("""div.pages-list
+                                  div.pages-list-item div.title a""")]
+    for url in hub_urls[:10]:
+        hub = Page(url)
+        if not "tale" in hub.tags:
+            continue
+        tales.children.append(hub)
+        hub.get_children()
     return pages
 
 
