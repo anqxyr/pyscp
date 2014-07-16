@@ -120,6 +120,7 @@ class Page():
         return self
 
     def get_children(self):
+        subpages = []
         for a in self.soup.select("#page-content a"):
             if not a.has_attr("href"):
                 continue
@@ -136,22 +137,44 @@ class Page():
             #this is to be considered a good thing
             if not re.match("http://www\.scp-wiki\.net.*", url):
                 continue
-            if url in [c.url for c in self.children]:
+            if url in [p.url for p in subpages]:
                 continue
-            c = Page(url)
-            if not c.soup:
+            p = Page(url)
+            if not p.soup:
                 continue
-            if "scp" in self.tags and "supplement" in c.tags:
-                self.children.append(c)
-                c.get_children()
-            if "hub" in self.tags and ("tale" in c.tags or
-                                       "goi-format" in c.tags):
-                self.children.append(c)
-                c.get_children()
-            if "splash" in self.tags and "supplement" in c.tags:
-                self.children.append(c)
-                c.get_children()
+            subpages.append(p)
+        for p in subpages:
+            if "scp" in self.tags and "supplement" in p.tags:
+                self.children.append(p)
+                p.get_children()
+            if ("hub" in self.tags and
+                    ("tale" in p.tags or "goi-format" in p.tags)
+                    and not "hub" in p.tags):
+                for a in p.soup.select("#main-content a"):
+                    url = a["href"]
+                    if url[0] == "/":
+                        url = "http://www.scp-wiki.net" + url
+                    if url == self.url:
+                        self.children.append(p)
+                        p.get_children()
+                        break
+            if "splash" in self.tags and "supplement" in p.tags:
+                self.children.append(p)
+                p.get_children()
+        if "hub" in self.tags and self.children == []:
+            for p in subpages:
+                if (("tale" in p.tags or "goi-format" in p.tags)
+                        and not "hub" in p.tags):
+                    self.children.append(p)
+                    p.get_children()
         return self
+
+    def is_contained_in(self, page):
+        if self.url == page.url:
+            return True
+        if True in [self.is_contained_in(c) for c in page.children]:
+            return True
+        return False
 
 
 def make_epub(title, pages):
@@ -198,7 +221,7 @@ def add_to_toc(navroot, page):
                                 playOrder=page.uid[-4:].lstrip("0"))
     navlabel = etree.SubElement(navpoint, "navLabel")
     etree.SubElement(navlabel, "text").text = page.title
-    etree.SubElement(navpoint, "content", src="Text/" + page.uid + ".xhtml")
+    etree.SubElement(navpoint, "content", src=page.uid + ".xhtml")
     for c in page.children:
         add_to_toc(navpoint, c)
     return
@@ -284,6 +307,10 @@ def stylesheet():
 
 def collect_pages():
     pages = []
+    #collecting skips
+    skips = Page()
+    skips.title = "SCP Database"
+    skips.data = """<h1 class='title1'>SCP Object Database"""
     skip_base = "http://www.scp-wiki.net/system:page-tags/tag/scp"
     skip_soup = BeautifulSoup(urlopen(skip_base))
     skip_urls = ["http://www.scp-wiki.net" + a["href"] for a in
@@ -296,11 +323,8 @@ def collect_pages():
                            int(re.search("[0-9]{3,4}$", u).group(0))
                            < (n + 1) * 100)]
                       for n in range(30)]
-    skips = Page()
-    skips.title = "SCP Database"
-    skips.data = """<h1 class='title1'>SCP Object Database"""
     pages.append(skips)
-    for b in skips_by_block[1:2]:
+    for b in []:  # skips_by_block[1:3]:
         block = Page()
         block.title = "Block " + str(skips_by_block.index(b)).zfill(2)
         block.data = ""
@@ -309,21 +333,43 @@ def collect_pages():
             p = Page(url)
             p.get_children()
             block.children.append(p)
-    tales = Page()
-    tales.title = "Tales"
-    tales.data = ""
-    pages.append(tales)
+    #collecting canon and tale series hubs
+    canons = Page()
+    canons.title = "Canons and Series"
+    canons.data = ""
+    pages.append(canons)
     hub_base = "http://www.scp-wiki.net/system:page-tags/tag/hub"
     hub_soup = BeautifulSoup(urlopen(hub_base))
     hub_urls = ["http://www.scp-wiki.net" + a["href"] for a in
                 hub_soup.select("""div.pages-list
                                   div.pages-list-item div.title a""")]
-    for url in []:  # hub_urls[:10]:
+    for url in hub_urls[10:40]:
         hub = Page(url)
-        if not "tale" in hub.tags:
+        if not "tale" in hub.tags and not "goi2014" in hub.tags:
             continue
-        tales.children.append(hub)
+        canons.children.append(hub)
         hub.get_children()
+    for c in canons.children:
+        for d in canons.children:
+            if c != d and c.is_contained_in(d):
+                canons.children.remove(c)
+    #collecting standalone tales
+    tales = Page()
+    tales.title = "Assorted Tales"
+    tales.data = ""
+    pages.append(tales)
+    tale_base = "http://www.scp-wiki.net/system:page-tags/tag/tale"
+    tale_soup = BeautifulSoup(urlopen(tale_base))
+    tale_urls = ["http://www.scp-wiki.net" + a["href"] for a in
+                 tale_soup.select("""div.pages-list
+                                  div.pages-list-item div.title a""")]
+    for url in tale_urls[80:110]:
+        tale = Page(url)
+        if True in [tale.is_contained_in(p) for p in pages]:
+            continue
+        tales.children.append(tale)
+        #tales probably shouldn't have children of their own
+        #tale.get_children()
     return pages
 
 
