@@ -19,37 +19,38 @@ class Page():
 
     def __init__(self, url=None):
         self.url = url
-        if url is not None:
-            self.scrape()
-            self.cook()
         self.children = []
+        if url is not None:
+            if url in Page.cauldron:
+                print("previously downloaded:\t" + url)
+                self.__dict__ = Page.cauldron[url].__dict__
+            else:
+                self.scrape()
+                self.cook()
+                Page.cauldron[url] = self
+        return
 
     def scrape(self):
         '''Scrape the contents of the given url.'''
-        if not self.url in Page.cauldron:
-            print("downloading " + self.url)
-            try:
-                soup = BeautifulSoup(urlopen(self.url))
-            except HTTPError:
-                self.soup = None
-                return self
-            Page.cauldron[self.url] = soup
-        else:
-            print("found " + self.url + " in the cauldron")
-            soup = Page.cauldron[self.url]
+        print("downloading: \t\t" + self.url)
+        try:
+            soup = BeautifulSoup(urlopen(self.url))
+        except HTTPError:
+            self.soup = None
+            return self
         self.soup = soup
-        return self
+        return
 
     def cook(self):
         '''Cook the soup, retrieve title, data, and tags'''
         if not self.soup:
             self.title = None
             self.data = None
-            return self
+            return
         self.cook_meta()    # must be cooked first
         self.cook_title()
         self.cook_data()
-        return self
+        return
 
     def cook_title(self):
         if self.soup.select("#page-title"):
@@ -71,26 +72,29 @@ class Page():
                         if re.match(".*>SCP-[0-9]*<.*", str(e)):
                             i = e.text.split(" - ")
                             Page.scp_index[i[0]] = i[1]
-            title = title + ": " + Page.scp_index[title]
+            title = title + ": " + Page.scp_index["SCP-" + title[4:]]
         self.title = title
         return self
 
     def cook_data(self):
+        if not self.soup.select("#page-content"):
+            self.data = None
+            return self
         data = self.soup.select("#page-content")[0]
-        #data.div.unwrap()
+        data.div.unwrap()       # get rid of the "page-content" div
         for i in data.select("div.page-rate-widget-box"):
-            i.decompose()    # remove the rating module
+            i.decompose()       # remove the rating module
         #collapsibles
         for i in data.select("div.collapsible-block"):
-            subtitle = i.select("a.collapsible-block-link")[0].text
+            link_text = i.select("a.collapsible-block-link")[0].text
             content = i.select("div.collapsible-block-content")[0]
             content["class"] = "col-content"
             col = self.soup.new_tag("div")
             col["class"] = "col"
             content = content.wrap(col)
-            col_title = self.soup.new_tag("p")
+            col_title = self.soup.new_tag("div")
             col_title["class"] = "col-title"
-            col_title.string = subtitle
+            col_title.string = link_text
             content.div.insert_before(col_title)
             i.replace_with(content)
         #quote boxes
@@ -103,7 +107,9 @@ class Page():
         for i in data.select("table"):
             if i.select("img"):
                 i.decompose()
-         #add title to the page
+        for i in data.select("img"):
+            i.decompose()
+        #add title to the page
         #if page["part"] == "scp":
         data = "<p class='scp-title'>" + self.title + "</p>" + str(data)
         #else:
@@ -140,7 +146,7 @@ class Page():
             if url in [p.url for p in subpages]:
                 continue
             p = Page(url)
-            if not p.soup:
+            if not p.soup or not p.data:
                 continue
             subpages.append(p)
         for p in subpages:
@@ -178,7 +184,7 @@ class Page():
 
 
 def make_epub(title, pages):
-
+    print("creating the book")
     #this makes magic happen
     book = epub.EpubBook()
     book.set_title(title)
@@ -192,6 +198,7 @@ def make_epub(title, pages):
 
 
 def make_toc(book, pages):
+    print("building table of contents")
     root = etree.Element("ncx", xmlns="http://www.daisy.org/z3986/2005/ncx/",
                          version="2005-1")
     head = etree.SubElement(root, "head")
@@ -324,7 +331,7 @@ def collect_pages():
                            < (n + 1) * 100)]
                       for n in range(30)]
     pages.append(skips)
-    for b in []:  # skips_by_block[1:3]:
+    for b in skips_by_block[11:12]:
         block = Page()
         block.title = "Block " + str(skips_by_block.index(b)).zfill(2)
         block.data = ""
@@ -343,7 +350,8 @@ def collect_pages():
     hub_urls = ["http://www.scp-wiki.net" + a["href"] for a in
                 hub_soup.select("""div.pages-list
                                   div.pages-list-item div.title a""")]
-    for url in hub_urls[10:40]:
+    for url in hub_urls:
+        break
         hub = Page(url)
         if not "tale" in hub.tags and not "goi2014" in hub.tags:
             continue
@@ -363,7 +371,8 @@ def collect_pages():
     tale_urls = ["http://www.scp-wiki.net" + a["href"] for a in
                  tale_soup.select("""div.pages-list
                                   div.pages-list-item div.title a""")]
-    for url in tale_urls[80:110]:
+    for url in tale_urls:
+        break
         tale = Page(url)
         if True in [tale.is_contained_in(p) for p in pages]:
             continue
@@ -398,6 +407,9 @@ def main():
     pages[-1].title = "Appendix"
     pages[-1].data = "Placeholder; list of article authors, image artists, etc"
     book = make_epub("SCP Foundation", pages)
+    print("writing the book to file")
     epub.write_epub("test.epub", book, {})
+    print("done writing")
+    return
 
 main()
