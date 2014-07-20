@@ -20,6 +20,8 @@ class Page():
     def __init__(self, url=None):
         self.url = url
         self.children = []
+        self.links = []
+        self.parent = None
         if url is not None:
             if url in Page.cauldron:
                 print("previously downloaded:\t" + url)
@@ -30,9 +32,18 @@ class Page():
                 Page.cauldron[url] = self
         return
 
+    def __eq__(self, other):
+        if isinstance(other, self.__class__):
+            return self.__dict__ == other.__dict__
+        else:
+            return False
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
     def scrape(self):
         '''Scrape the contents of the given url.'''
-        print("downloading: \t\t" + self.url)
+        print("downloading: \t\t\t" + self.url)
         try:
             soup = BeautifulSoup(urlopen(self.url))
         except HTTPError:
@@ -81,7 +92,6 @@ class Page():
             self.data = None
             return self
         data = self.soup.select("#page-content")[0]
-        data.div.unwrap()       # get rid of the "page-content" div
         for i in data.select("div.page-rate-widget-box"):
             i.decompose()       # remove the rating module
         #collapsibles
@@ -125,55 +135,89 @@ class Page():
         self.tags = tags
         return self
 
-    def get_children(self):
-        subpages = []
-        for a in self.soup.select("#page-content a"):
+    def get_links(self):
+        if self.links != []:
+            return
+        links = self.soup.select("#page-content a")
+        for a in links:
             if not a.has_attr("href"):
                 continue
             url = a["href"]
             #this should be taken care of in cook_data instead
             if url == "javascript:;":
                 continue
-            if url[0] == "/":
-                url = "http://www.scp-wiki.net" + url
             if url[0] == "#":
                 continue
+            if url[0] == "/":
+                url = "http://www.scp-wiki.net" + url
+            url = url.rstrip("|")
+            #url = url.rstrip("/")
             #off-site pages should not be included
             #will also break on absolute links to scp-wiki.wikidot.com
             #this is to be considered a good thing
             if not re.match("http://www\.scp-wiki\.net.*", url):
                 continue
-            if url in [p.url for p in subpages]:
+            #if a page is linked multiple times, only count it once
+            if url in self.links:
                 continue
+            self.links.append(url)
+        return
+
+    def get_children(self):
+        if not "scp" in self.tags and not "hub" in self.tags:
+            return
+        self.get_links()
+        lpages = []
+        for url in self.links:
             p = Page(url)
-            if not p.soup or not p.data:
-                continue
-            subpages.append(p)
-        for p in subpages:
-            if "scp" in self.tags and "supplement" in p.tags:
-                self.children.append(p)
-                p.get_children()
-            if ("hub" in self.tags and
-                    ("tale" in p.tags or "goi-format" in p.tags)
-                    and not "hub" in p.tags):
-                for a in p.soup.select("#main-content a"):
-                    url = a["href"]
-                    if url[0] == "/":
-                        url = "http://www.scp-wiki.net" + url
-                    if url == self.url:
+            if p.soup and p.data:
+                lpages.append(p)
+        if "scp" in self.tags:
+            for p in lpages:
+                if "supplement" in p.tags or "splash" in p.tags:
+                    if p.parent:
+                        p.get_links()
+                        if not p.parent.url in p.links and self.url in p.links:
+                            p.parent.children.remove(p)
+                            self.children.append(p)
+                            p.parent = self.url
+                    else:
                         self.children.append(p)
-                        p.get_children()
-                        break
-            if "splash" in self.tags and "supplement" in p.tags:
-                self.children.append(p)
-                p.get_children()
-        if "hub" in self.tags and self.children == []:
-            for p in subpages:
-                if (("tale" in p.tags or "goi-format" in p.tags)
-                        and not "hub" in p.tags):
-                    self.children.append(p)
+                        p.parent = self
+                if "splash" in p.tags:
                     p.get_children()
-        return self
+        if "hub" in self.tags:
+            for p in lpages:
+                if p == self.parent:
+                    continue
+                if ("tale" in p.tags or "goi-format" in p.tags
+                        or "goi2014" in p.tags):
+                    p.get_links()
+                    crumb = None
+                    if p.soup.select("#breadcrumbs a"):
+                        crumb = ("http://www.scp-wiki.net" +
+                                 p.soup.select("#breadcrumbs a")[-1]["href"])
+                    if self.url in p.links or (crumb is not None and
+                                               self.url == crumb):
+                        if p.parent:
+                            if p.parent.url in p.links:
+                                continue
+                        self.children.append(p)
+                        p.parent = self
+                        if "hub" in p.tags:
+                            p.get_children()
+            if self.children == []:
+                for p in lpages:
+                    if p == self.parent:
+                        continue
+                    if "tale" in p.tags or "goi-format" in p.tags:
+                        if p.parent:
+                            continue
+                        self.children.append(p)
+                        p.parent = self
+                        if "hub" in p.tags:
+                            p.get_children()
+        return
 
     def is_contained_in(self, page):
         if self.url == page.url:
@@ -318,25 +362,22 @@ def collect_pages():
     skips = Page()
     skips.title = "SCP Database"
     skips.data = """<h1 class='title1'>SCP Object Database"""
-    skip_base = "http://www.scp-wiki.net/system:page-tags/tag/scp"
-    skip_soup = BeautifulSoup(urlopen(skip_base))
-    skip_urls = ["http://www.scp-wiki.net" + a["href"] for a in
-                 skip_soup.select("""div.pages-list
-                                  div.pages-list-item div.title a""")
-                 if re.match(".*scp-[0-9]*$", a["href"])]
-    skip_urls = sorted(skip_urls, key=natural_key)
-    skips_by_block = [[u for u in skip_urls
+    pages.append(skips)
+    skips_urls = urls_by_tag("scp")
+    skips_urls = [i for i in skips_urls if re.match(".*scp-[0-9]*$", i)]
+    skips_urls = sorted(skips_urls, key=natural_key)
+    skips_by_block = [[i for i in skips_urls
                        if (n * 100 <=
-                           int(re.search("[0-9]{3,4}$", u).group(0))
+                           int(re.search("[0-9]{3,4}$", i).group(0))
                            < (n + 1) * 100)]
                       for n in range(30)]
-    pages.append(skips)
-    for b in skips_by_block[11:12]:
+    for b in skips_by_block:
+        break
         block = Page()
         block.title = "Block " + str(skips_by_block.index(b)).zfill(2)
         block.data = ""
         skips.children.append(block)
-        for url in b:
+        for url in b[54:56]:
             p = Page(url)
             p.get_children()
             block.children.append(p)
@@ -345,13 +386,8 @@ def collect_pages():
     canons.title = "Canons and Series"
     canons.data = ""
     pages.append(canons)
-    hub_base = "http://www.scp-wiki.net/system:page-tags/tag/hub"
-    hub_soup = BeautifulSoup(urlopen(hub_base))
-    hub_urls = ["http://www.scp-wiki.net" + a["href"] for a in
-                hub_soup.select("""div.pages-list
-                                  div.pages-list-item div.title a""")]
-    for url in hub_urls:
-        break
+    canons_urls = urls_by_tag("hub")
+    for url in canons_urls:
         hub = Page(url)
         if not "tale" in hub.tags and not "goi2014" in hub.tags:
             continue
@@ -366,13 +402,8 @@ def collect_pages():
     tales.title = "Assorted Tales"
     tales.data = ""
     pages.append(tales)
-    tale_base = "http://www.scp-wiki.net/system:page-tags/tag/tale"
-    tale_soup = BeautifulSoup(urlopen(tale_base))
-    tale_urls = ["http://www.scp-wiki.net" + a["href"] for a in
-                 tale_soup.select("""div.pages-list
-                                  div.pages-list-item div.title a""")]
-    for url in tale_urls:
-        break
+    tales_urls = urls_by_tag("tale")
+    for url in tales_urls:
         tale = Page(url)
         if True in [tale.is_contained_in(p) for p in pages]:
             continue
@@ -380,6 +411,15 @@ def collect_pages():
         #tales probably shouldn't have children of their own
         #tale.get_children()
     return pages
+
+
+def urls_by_tag(tag):
+    base = "http://www.scp-wiki.net/system:page-tags/tag/" + tag
+    soup = BeautifulSoup(urlopen(base))
+    urls = ["http://www.scp-wiki.net" + a["href"] for a in
+            soup.select("""div.pages-list
+                        div.pages-list-item div.title a""")]
+    return urls
 
 
 def natural_key(s):
