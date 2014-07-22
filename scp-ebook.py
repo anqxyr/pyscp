@@ -6,22 +6,25 @@ from urllib.error import HTTPError
 from bs4 import BeautifulSoup
 from lxml import etree
 import re
+import pickle
+import sys
 
 
 class Page():
 
     """placeholder docstring"""
 
+    #titles for scp articles
+    scp_index = {}
     #containes the soup of all downloaded pages
     #to prevent unneeded traffic from crosslinking pages
-    scp_index = {}
     cauldron = {}
 
     def __init__(self, url=None):
         self.url = url
         self.children = []
         self.links = []
-        self.parent = None
+        #self.parent = None
         if url is not None:
             if url in Page.cauldron:
                 print("previously downloaded:\t" + url)
@@ -175,23 +178,22 @@ class Page():
         if "scp" in self.tags:
             for p in lpages:
                 if "supplement" in p.tags or "splash" in p.tags:
-                    if p.parent:
-                        p.get_links()
-                        if not p.parent.url in p.links and self.url in p.links:
-                            p.parent.children.remove(p)
-                            self.children.append(p)
-                            p.parent = self.url
-                    else:
-                        self.children.append(p)
-                        p.parent = self
+                    # if p.parent:
+                    #     p.get_links()
+                    #     if not p.parent.url in p.links and self.url in p.links:
+                    #         p.parent.children.remove(p)
+                    #         self.children.append(p)
+                    #         p.parent = self.url
+                    # else:
+                    self.children.append(p)
+                        #p.parent = self
                 if "splash" in p.tags:
                     p.get_children()
         if "hub" in self.tags:
             for p in lpages:
-                if p == self.parent:
-                    continue
-                if ("tale" in p.tags or "goi-format" in p.tags
-                        or "goi2014" in p.tags):
+                # if p == self.parent:
+                #     continue
+                if "tale" in p.tags or "goi-format" in p.tags:
                     p.get_links()
                     crumb = None
                     if p.soup.select("#breadcrumbs a"):
@@ -199,31 +201,35 @@ class Page():
                                  p.soup.select("#breadcrumbs a")[-1]["href"])
                     if self.url in p.links or (crumb is not None and
                                                self.url == crumb):
-                        if p.parent:
-                            if p.parent.url in p.links:
-                                continue
+                        # if p.parent:
+                        #     if p.parent.url in p.links:
+                        #         continue
                         self.children.append(p)
-                        p.parent = self
+                        #p.parent = self
                         if "hub" in p.tags:
                             p.get_children()
             if self.children == []:
                 for p in lpages:
-                    if p == self.parent:
-                        continue
+                    # if p == self.parent:
+                    #     continue
                     if "tale" in p.tags or "goi-format" in p.tags:
-                        if p.parent:
-                            continue
+                        # if p.parent:
+                        #     continue
                         self.children.append(p)
-                        p.parent = self
+                        #p.parent = self
                         if "hub" in p.tags:
                             p.get_children()
         return
 
     def is_contained_in(self, page):
         if self.url == page.url:
+            if re.match(".*cool-war.*", self.url):
+                print(self.url + " in " + page.url + ": True")
             return True
         if True in [self.is_contained_in(c) for c in page.children]:
             return True
+        if re.match(".*cool-war.*", self.url):
+                print(self.url + " in " + page.url + ": True")
         return False
 
 
@@ -388,15 +394,24 @@ def collect_pages():
     pages.append(canons)
     canons_urls = urls_by_tag("hub")
     for url in canons_urls:
+        if not re.search("acidverse", url) and not re.search("cool-war", url):
+            continue
         hub = Page(url)
         if not "tale" in hub.tags and not "goi2014" in hub.tags:
             continue
         canons.children.append(hub)
         hub.get_children()
-    for c in canons.children:
-        for d in canons.children:
-            if c != d and c.is_contained_in(d):
-                canons.children.remove(c)
+        print("------")
+    print("================================================")
+    def recprint(page, indent):
+        print("\t"*indent + page.title)
+        indent += 1
+        for i in page.children:
+            print("\t"*indent, end="")
+            recprint(i, indent)
+    remove_duplicates(canons.children, [])
+    for i in canons.children:
+        recprint(i, 0)
     #collecting standalone tales
     tales = Page()
     tales.title = "Assorted Tales"
@@ -404,6 +419,7 @@ def collect_pages():
     pages.append(tales)
     tales_urls = urls_by_tag("tale")
     for url in tales_urls:
+        break
         tale = Page(url)
         if True in [tale.is_contained_in(p) for p in pages]:
             continue
@@ -411,6 +427,16 @@ def collect_pages():
         #tales probably shouldn't have children of their own
         #tale.get_children()
     return pages
+
+
+def remove_duplicates(pages, all_pages):
+    for i in pages:
+        if i in all_pages:
+            pages.remove(i)
+        else:
+            all_pages.append(i)
+        remove_duplicates(i.children, all_pages)
+    return
 
 
 def urls_by_tag(tag):
@@ -429,6 +455,7 @@ def natural_key(s):
 
 
 def main():
+    Page.cauldron = pickle.load(open("cauldron", "rb"))
     pages = [Page(), Page(), Page()]
     pages[0].title = "Title Page"
     pages[0].data = """<div class='title1'><h1 class='title1-bold'>
@@ -450,6 +477,10 @@ def main():
     print("writing the book to file")
     epub.write_epub("test.epub", book, {})
     print("done writing")
+    for p in [Page.cauldron[i] for i in Page.cauldron]:
+        p.children = []
+    sys.setrecursionlimit(30000)
+    pickle.dump(Page.cauldron, open("cauldron", "wb"))
     return
 
 main()
