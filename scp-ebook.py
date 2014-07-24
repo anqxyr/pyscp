@@ -20,7 +20,6 @@ class Page():
     def __init__(self, url=None):
         self.url = url
         self.children = []
-        #self.parent = None
         if url is not None:
                 self.scrape()
                 self.cook()
@@ -47,6 +46,8 @@ class Page():
                 soup = BeautifulSoup(urlopen(self.url))
             except HTTPError:
                 self.soup = None
+                with open(path, "w") as F:
+                    F.write("")
                 return
             self.soup = soup
             with open(path, "w") as F:
@@ -183,17 +184,6 @@ class Page():
                         if "hub" in p.tags:
                             p.get_children()
         return
-
-    def is_contained_in(self, page):
-        if self.url == page.url:
-            if re.match(".*cool-war.*", self.url):
-                print(self.url + " in " + page.url + ": True")
-            return True
-        if True in [self.is_contained_in(c) for c in page.children]:
-            return True
-        if re.match(".*cool-war.*", self.url):
-                print(self.url + " in " + page.url + ": True")
-        return False
 
 
 def make_epub(title, pages):
@@ -364,14 +354,24 @@ def collect_pages():
     pages.append(canons)
     canons_urls = urls_by_tag("hub")
     for url in canons_urls[:97]:
+        if not (url == "http://www.scp-wiki.net/acidverse" or
+                url == "http://www.scp-wiki.net/the-cool-war-hub" or
+                canons_urls.index(url) in [14] or
+                canons_urls.index(url) in [94]):
+            continue
         hub = Page(url)
         if not "tale" in hub.tags and not "goi2014" in hub.tags:
             continue
         canons.children.append(hub)
         hub.get_children()
+        if hub.title == "Canon Hub":
+            hub.children = [i for i in hub.children if hub.children.index(i) in [5]]
+            for i in hub.children:
+                print(i.title)
+        if hub.title == "Acidverse":
+            hub.children = hub.children[0:1]
     remove_duplicates(canons)
-    for i in canons.children:
-        print(i.title)
+    #for i in canons.children:
     #    recprint(i, 0)
     #collecting standalone tales
     tales = Page()
@@ -382,28 +382,26 @@ def collect_pages():
     for url in tales_urls:
         break
         tale = Page(url)
-        if True in [tale.is_contained_in(p) for p in pages]:
-            continue
         tales.children.append(tale)
         #tales probably shouldn't have children of their own
         #tale.get_children()
     return pages
 
-flag = 0
 
 def remove_duplicates(page, all_pages=[]):
     #print("---")
-    global flag
     for i in page.children:
-        if flag == 1:
-            print(i.title)
-        if i.title == "The Cool War":
-            print("ping")
+        print(i.title)
         if i in all_pages:
-            print("remove " + i.title + " from " + page.title)
-            if i.title == "The Coldest War":
-                flag = 1
+            print("removing " + i.title + " from " + page.title)
+            print("==========before==========")
+            for k in page.children:
+                print(k.title)
             page.children.remove(i)
+            print("==========after===========")
+            for k in page.children:
+                print(k.title)
+            print("==========================")
         else:
             all_pages.append(i)
             remove_duplicates(i, all_pages)
