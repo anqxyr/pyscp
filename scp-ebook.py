@@ -353,26 +353,13 @@ def collect_pages():
     canons.data = ""
     pages.append(canons)
     canons_urls = urls_by_tag("hub")
-    for url in canons_urls[:97]:
-        if not (url == "http://www.scp-wiki.net/acidverse" or
-                url == "http://www.scp-wiki.net/the-cool-war-hub" or
-                canons_urls.index(url) in [14] or
-                canons_urls.index(url) in [94]):
-            continue
+    for url in canons_urls:
         hub = Page(url)
         if not "tale" in hub.tags and not "goi2014" in hub.tags:
             continue
         canons.children.append(hub)
         hub.get_children()
-        if hub.title == "Canon Hub":
-            hub.children = [i for i in hub.children if hub.children.index(i) in [5]]
-            for i in hub.children:
-                print(i.title)
-        if hub.title == "Acidverse":
-            hub.children = hub.children[0:1]
     remove_duplicates(canons)
-    #for i in canons.children:
-    #    recprint(i, 0)
     #collecting standalone tales
     tales = Page()
     tales.title = "Assorted Tales"
@@ -389,19 +376,9 @@ def collect_pages():
 
 
 def remove_duplicates(page, all_pages=[]):
-    #print("---")
-    for i in page.children:
-        print(i.title)
+    for i in list(page.children):
         if i in all_pages:
-            print("removing " + i.title + " from " + page.title)
-            print("==========before==========")
-            for k in page.children:
-                print(k.title)
             page.children.remove(i)
-            print("==========after===========")
-            for k in page.children:
-                print(k.title)
-            print("==========================")
         else:
             all_pages.append(i)
             remove_duplicates(i, all_pages)
