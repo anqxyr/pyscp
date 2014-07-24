@@ -23,16 +23,10 @@ class Page():
     def __init__(self, url=None):
         self.url = url
         self.children = []
-        self.links = []
         #self.parent = None
         if url is not None:
-            if url in Page.cauldron:
-                print("previously downloaded:\t" + url)
-                self.__dict__ = Page.cauldron[url].__dict__
-            else:
                 self.scrape()
                 self.cook()
-                Page.cauldron[url] = self
         return
 
     def __eq__(self, other):
@@ -46,13 +40,17 @@ class Page():
 
     def scrape(self):
         '''Scrape the contents of the given url.'''
-        print("downloading: \t\t\t" + self.url)
-        try:
-            soup = BeautifulSoup(urlopen(self.url))
-        except HTTPError:
-            self.soup = None
-            return self
-        self.soup = soup
+        if self.url in Page.cauldron:
+            self.soup = Page.cauldron[self.url]
+        else:
+            print("downloading: \t\t\t" + self.url)
+            try:
+                soup = BeautifulSoup(urlopen(self.url))
+            except HTTPError:
+                self.soup = None
+                return
+            self.soup = soup
+            Page.cauldron[self.url] = soup
         return
 
     def cook(self):
@@ -138,85 +136,50 @@ class Page():
         self.tags = tags
         return self
 
-    def get_links(self):
-        if self.links != []:
-            return
-        links = self.soup.select("#page-content a")
-        for a in links:
-            if not a.has_attr("href"):
+    def links(self):
+        links = []
+        for a in self.soup.select("#page-content a"):
+            if not a.has_attr("href") or a["href"][0] != "/":
+                print("bad link:\t" + str(a))
                 continue
-            url = a["href"]
-            #this should be taken care of in cook_data instead
-            if url == "javascript:;":
-                continue
-            if url[0] == "#":
-                continue
-            if url[0] == "/":
-                url = "http://www.scp-wiki.net" + url
+            url = "http://www.scp-wiki.net" + a["href"]
             url = url.rstrip("|")
-            #url = url.rstrip("/")
-            #off-site pages should not be included
-            #will also break on absolute links to scp-wiki.wikidot.com
-            #this is to be considered a good thing
-            if not re.match("http://www\.scp-wiki\.net.*", url):
+            if url in links:
                 continue
-            #if a page is linked multiple times, only count it once
-            if url in self.links:
-                continue
-            self.links.append(url)
-        return
+            links.append(url)
+        return links
 
     def get_children(self):
         if not "scp" in self.tags and not "hub" in self.tags:
             return
-        self.get_links()
         lpages = []
-        for url in self.links:
+        for url in self.links():
             p = Page(url)
             if p.soup and p.data:
                 lpages.append(p)
         if "scp" in self.tags:
             for p in lpages:
                 if "supplement" in p.tags or "splash" in p.tags:
-                    # if p.parent:
-                    #     p.get_links()
-                    #     if not p.parent.url in p.links and self.url in p.links:
-                    #         p.parent.children.remove(p)
-                    #         self.children.append(p)
-                    #         p.parent = self.url
-                    # else:
                     self.children.append(p)
-                        #p.parent = self
                 if "splash" in p.tags:
                     p.get_children()
-        if "hub" in self.tags:
+        if "hub" in self.tags and ("tale" in self.tags or
+                                   "goi2014" in self.tags):
             for p in lpages:
-                # if p == self.parent:
-                #     continue
                 if "tale" in p.tags or "goi-format" in p.tags:
-                    p.get_links()
-                    crumb = None
-                    if p.soup.select("#breadcrumbs a"):
-                        crumb = ("http://www.scp-wiki.net" +
-                                 p.soup.select("#breadcrumbs a")[-1]["href"])
-                    if self.url in p.links or (crumb is not None and
-                                               self.url == crumb):
-                        # if p.parent:
-                        #     if p.parent.url in p.links:
-                        #         continue
+                    crumb = p.soup.select("#breadcrumbs a")
+                    if crumb != []:
+                        crumb = ["http://www.scp-wiki.net" +
+                                 crumb[-1]["href"]]
+                    #checking backlinks
+                    if self.url in p.links() or self.url in crumb:
                         self.children.append(p)
-                        #p.parent = self
                         if "hub" in p.tags:
                             p.get_children()
             if self.children == []:
                 for p in lpages:
-                    # if p == self.parent:
-                    #     continue
                     if "tale" in p.tags or "goi-format" in p.tags:
-                        # if p.parent:
-                        #     continue
                         self.children.append(p)
-                        #p.parent = self
                         if "hub" in p.tags:
                             p.get_children()
         return
@@ -362,6 +325,13 @@ def stylesheet():
     return stylesheet
 
 
+def recprint(page, indent):
+        print("\t" * indent + page.title)
+        indent += 1
+        for i in page.children:
+            recprint(i, indent)
+
+
 def collect_pages():
     pages = []
     #collecting skips
@@ -393,25 +363,16 @@ def collect_pages():
     canons.data = ""
     pages.append(canons)
     canons_urls = urls_by_tag("hub")
-    for url in canons_urls:
-        if not re.search("acidverse", url) and not re.search("cool-war", url):
-            continue
+    for url in canons_urls[:97]:
         hub = Page(url)
         if not "tale" in hub.tags and not "goi2014" in hub.tags:
             continue
         canons.children.append(hub)
         hub.get_children()
-        print("------")
-    print("================================================")
-    def recprint(page, indent):
-        print("\t"*indent + page.title)
-        indent += 1
-        for i in page.children:
-            print("\t"*indent, end="")
-            recprint(i, indent)
-    remove_duplicates(canons.children, [])
+    remove_duplicates(canons)
     for i in canons.children:
-        recprint(i, 0)
+        print(i.title)
+    #    recprint(i, 0)
     #collecting standalone tales
     tales = Page()
     tales.title = "Assorted Tales"
@@ -428,14 +389,24 @@ def collect_pages():
         #tale.get_children()
     return pages
 
+flag = 0
 
-def remove_duplicates(pages, all_pages):
-    for i in pages:
+def remove_duplicates(page, all_pages=[]):
+    #print("---")
+    global flag
+    for i in page.children:
+        if flag == 1:
+            print(i.title)
+        if i.title == "The Cool War":
+            print("ping")
         if i in all_pages:
-            pages.remove(i)
+            print("remove " + i.title + " from " + page.title)
+            if i.title == "The Coldest War":
+                flag = 1
+            page.children.remove(i)
         else:
             all_pages.append(i)
-        remove_duplicates(i.children, all_pages)
+            remove_duplicates(i, all_pages)
     return
 
 
@@ -477,9 +448,7 @@ def main():
     print("writing the book to file")
     epub.write_epub("test.epub", book, {})
     print("done writing")
-    for p in [Page.cauldron[i] for i in Page.cauldron]:
-        p.children = []
-    sys.setrecursionlimit(30000)
+    sys.setrecursionlimit(300000)
     pickle.dump(Page.cauldron, open("cauldron", "wb"))
     return
 
