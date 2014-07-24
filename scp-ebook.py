@@ -6,8 +6,8 @@ from urllib.error import HTTPError
 from bs4 import BeautifulSoup
 from lxml import etree
 import re
-import pickle
-import sys
+import os
+import hashlib
 
 
 class Page():
@@ -16,9 +16,6 @@ class Page():
 
     #titles for scp articles
     scp_index = {}
-    #containes the soup of all downloaded pages
-    #to prevent unneeded traffic from crosslinking pages
-    cauldron = {}
 
     def __init__(self, url=None):
         self.url = url
@@ -40,8 +37,10 @@ class Page():
 
     def scrape(self):
         '''Scrape the contents of the given url.'''
-        if self.url in Page.cauldron:
-            self.soup = Page.cauldron[self.url]
+        path = "data/" + hashlib.sha1(self.url.encode("utf-8")).hexdigest()
+        if os.path.isfile(path):
+            with open(path, "r") as F:
+                self.soup = BeautifulSoup(F.read())
         else:
             print("downloading: \t\t\t" + self.url)
             try:
@@ -50,7 +49,8 @@ class Page():
                 self.soup = None
                 return
             self.soup = soup
-            Page.cauldron[self.url] = soup
+            with open(path, "w") as F:
+                F.write(soup)
         return
 
     def cook(self):
@@ -426,7 +426,6 @@ def natural_key(s):
 
 
 def main():
-    Page.cauldron = pickle.load(open("cauldron", "rb"))
     pages = [Page(), Page(), Page()]
     pages[0].title = "Title Page"
     pages[0].data = """<div class='title1'><h1 class='title1-bold'>
@@ -448,8 +447,6 @@ def main():
     print("writing the book to file")
     epub.write_epub("test.epub", book, {})
     print("done writing")
-    sys.setrecursionlimit(300000)
-    pickle.dump(Page.cauldron, open("cauldron", "wb"))
     return
 
 main()
