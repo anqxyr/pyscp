@@ -7,7 +7,6 @@ from bs4 import BeautifulSoup
 from lxml import etree
 import re
 import os
-import hashlib
 
 
 class Page():
@@ -36,12 +35,13 @@ class Page():
 
     def scrape(self):
         '''Scrape the contents of the given url.'''
-        path = "data/" + hashlib.sha1(self.url.encode("utf-8")).hexdigest()
+        url_end = re.search("/[^/]*$", self.url).group()[1:]
+        path = "data/" + url_end
         if os.path.isfile(path):
             with open(path, "r") as F:
                 self.soup = (F.read())
         else:
-            print("downloading: \t\t\t" + self.url)
+            print("downloading: \t" + self.url)
             try:
                 soup = BeautifulSoup(urlopen(self.url))
             except HTTPError:
@@ -162,7 +162,14 @@ class Page():
         soup = BeautifulSoup(self.soup)
         for a in soup.select("#page-content a"):
             if not a.has_attr("href") or a["href"][0] != "/":
-                print("bad link:\t" + str(a))
+                if a.has_attr("href"):
+                    if (a["href"] != "javascript:;" and a["href"][0] != "#"
+                        and re.search("scp-wiki", a["href"])
+                        and a["href"][-4:] != ".png"
+                        and a["href"][-4:] != ".jpg"
+                            and a["href"][-4:] != ".JPG"):
+                        print("bad link: \t\t" + a["href"] + "\ton page " +
+                              self.url)
                 continue
             url = "http://www.scp-wiki.net" + a["href"]
             url = url.rstrip("|")
@@ -329,7 +336,7 @@ def stylesheet():
         font-size: 120%;
         margin: 2em 0;
         }
-    p {
+    * {
         font-family: "HelveticaNeue-Light", "Helvetica Neue Light",
         "Helvetica Neue", Helvetica, Arial, "Lucida Grande", sans-serif;
     }'''
@@ -375,7 +382,7 @@ def collect_pages():
     canons.data = ""
     pages.append(canons)
     canons_urls = urls_by_tag("hub")
-    for url in canons_urls[7:10]:
+    for url in canons_urls[:20]:
         hub = Page(url)
         if not "tale" in hub.tags and not "goi2014" in hub.tags:
             continue
