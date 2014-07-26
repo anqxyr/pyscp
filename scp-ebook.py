@@ -39,7 +39,7 @@ class Page():
         path = "data/" + hashlib.sha1(self.url.encode("utf-8")).hexdigest()
         if os.path.isfile(path):
             with open(path, "r") as F:
-                self.soup = BeautifulSoup(F.read())
+                self.soup = (F.read())
         else:
             print("downloading: \t\t\t" + self.url)
             try:
@@ -49,9 +49,9 @@ class Page():
                 with open(path, "w") as F:
                     F.write("")
                 return
-            self.soup = soup
+            self.soup = str(soup)
             with open(path, "w") as F:
-                F.write(soup)
+                F.write(str(soup))
         return
 
     def cook(self):
@@ -66,8 +66,9 @@ class Page():
         return
 
     def cook_title(self):
-        if self.soup.select("#page-title"):
-            title = self.soup.select("#page-title")[0].text.strip()
+        soup = BeautifulSoup(self.soup)
+        if soup.select("#page-title"):
+            title = soup.select("#page-title")[0].text.strip()
         else:
             title = ""
         # because 001 proposals don't have their own tag,
@@ -90,21 +91,39 @@ class Page():
         return self
 
     def cook_data(self):
-        if not self.soup.select("#page-content"):
+        soup = BeautifulSoup(self.soup)
+        if not soup.select("#page-content"):
             self.data = None
             return self
-        data = self.soup.select("#page-content")[0]
+        data = soup.select("#page-content")[0]
+        # remove the rating module
         for i in data.select("div.page-rate-widget-box"):
-            i.decompose()       # remove the rating module
-        #collapsibles
+            i.decompose()
+        # tab-views
+        for i in data.select("div.yui-navset"):
+            wraper = soup.new_tag("div")
+            wraper["class"] = "tabview"
+            titles = [a.text for a in i.select("ul.yui-nav em")]
+            tabs = i.select("div.yui-content > div")
+            for k in tabs:
+                k["class"] = "tabview-tab"
+                del(k["id"])
+                del(k["style"])
+                tab_title = soup.new_tag("div")
+                tab_title["class"] = "tab-title"
+                tab_title.string = titles[tabs.index(k)]
+                k.insert(0, tab_title)
+                wraper.append(k)
+            i.replace_with(wraper)
+        # collapsibles
         for i in data.select("div.collapsible-block"):
             link_text = i.select("a.collapsible-block-link")[0].text
             content = i.select("div.collapsible-block-content")[0]
             content["class"] = "col-content"
-            col = self.soup.new_tag("div")
+            col = soup.new_tag("div")
             col["class"] = "col"
             content = content.wrap(col)
-            col_title = self.soup.new_tag("div")
+            col_title = soup.new_tag("div")
             col_title["class"] = "col-title"
             col_title.string = link_text
             content.div.insert_before(col_title)
@@ -133,13 +152,15 @@ class Page():
 
     def cook_meta(self):
         #this will in the future also retrieve the author, posting date, etc.
-        tags = [a.string for a in self.soup.select("div.page-tags a")]
+        soup = BeautifulSoup(self.soup)
+        tags = [a.string for a in soup.select("div.page-tags a")]
         self.tags = tags
         return self
 
     def links(self):
         links = []
-        for a in self.soup.select("#page-content a"):
+        soup = BeautifulSoup(self.soup)
+        for a in soup.select("#page-content a"):
             if not a.has_attr("href") or a["href"][0] != "/":
                 print("bad link:\t" + str(a))
                 continue
@@ -168,7 +189,8 @@ class Page():
                                    "goi2014" in self.tags):
             for p in lpages:
                 if "tale" in p.tags or "goi-format" in p.tags:
-                    crumb = p.soup.select("#breadcrumbs a")
+                    p_soup = BeautifulSoup(p.soup)
+                    crumb = p_soup.select("#breadcrumbs a")
                     if crumb != []:
                         crumb = ["http://www.scp-wiki.net" +
                                  crumb[-1]["href"]]
@@ -343,7 +365,7 @@ def collect_pages():
         block.title = "Block " + str(skips_by_block.index(b)).zfill(2)
         block.data = ""
         skips.children.append(block)
-        for url in b[54:56]:
+        for url in b:
             p = Page(url)
             p.get_children()
             block.children.append(p)
@@ -353,7 +375,7 @@ def collect_pages():
     canons.data = ""
     pages.append(canons)
     canons_urls = urls_by_tag("hub")
-    for url in canons_urls:
+    for url in canons_urls[7:10]:
         hub = Page(url)
         if not "tale" in hub.tags and not "goi2014" in hub.tags:
             continue
