@@ -169,59 +169,58 @@ class Page():
         self.tags = tags
         return self
 
-    def links(self):
-        links = []
-        soup = BeautifulSoup(self.soup)
-        for a in soup.select("#page-content a"):
-            if not a.has_attr("href") or a["href"][0] != "/":
-                if a.has_attr("href"):
-                    if (a["href"] != "javascript:;" and a["href"][0] != "#"
-                        and re.search("scp-wiki", a["href"])
-                            and not re.search("local--files", a["href"])):
-                        print("bad link: \t\t" + a["href"] + "\ton page " +
-                              self.url)
-                continue
-            url = "http://www.scp-wiki.net" + a["href"]
-            url = url.rstrip("|")
-            if url in links:
-                continue
-            links.append(url)
-        return links
-
     def get_children(self):
-        if not "scp" in self.tags and not "hub" in self.tags:
+        def links(self):
+            links = []
+            soup = BeautifulSoup(self.soup)
+            for a in soup.select("#page-content a"):
+                if not a.has_attr("href") or a["href"][0] != "/":
+                    if a.has_attr("href"):
+                        if (a["href"] != "javascript:;" and a["href"][0] != "#"
+                            and re.search("scp-wiki", a["href"])
+                                and not re.search("local--files", a["href"])):
+                            print("bad link: \t\t" + a["href"] + "\ton page " +
+                                  self.url)
+                    continue
+                url = "http://www.scp-wiki.net" + a["href"]
+                url = url.rstrip("|")
+                if url in links:
+                    continue
+                links.append(url)
+            return links
+
+        def add_as_children(with_tags):
+            for p in lpages:
+                if any(i in p.tags for i in with_tags):
+                    self.children.append(p)
+                    p.get_children()
+            return
+
+        if not any(i in self.tags for i in ["scp", "hub", "splash"]):
             return
         lpages = []
-        for url in self.links():
+        for url in links(self):
             p = Page(url)
             if p.soup and p.data:
                 lpages.append(p)
-        if "scp" in self.tags:
-            for p in lpages:
-                if "supplement" in p.tags or "splash" in p.tags:
-                    self.children.append(p)
-                if "splash" in p.tags:
-                    p.get_children()
-        if "hub" in self.tags and ("tale" in self.tags or
-                                   "goi2014" in self.tags):
-            for p in lpages:
-                if "tale" in p.tags or "goi-format" in p.tags:
-                    p_soup = BeautifulSoup(p.soup)
-                    crumb = p_soup.select("#breadcrumbs a")
-                    if crumb != []:
-                        crumb = ["http://www.scp-wiki.net" +
-                                 crumb[-1]["href"]]
-                    #checking backlinks
-                    if self.url in p.links() or self.url in crumb:
-                        self.children.append(p)
-                        if "hub" in p.tags:
-                            p.get_children()
-            if self.children == []:
-                for p in lpages:
-                    if "tale" in p.tags or "goi-format" in p.tags:
-                        self.children.append(p)
-                        if "hub" in p.tags:
-                            p.get_children()
+        if any(i in self.tags for i in ["scp", "splash"]):
+            add_as_children(["supplement", "splash"])
+        if "hub" in self.tags and any(i in self.tags
+                                      for i in ["tale", "goi2014"]):
+            add_as_children(["tale", "goi-format"])
+            children_with_backlinks = []
+            for p in self.children:
+                if self.url in links(p):
+                    children_with_backlinks.append(p)
+                else:
+                    soup = BeautifulSoup(p.soup)
+                    if soup.select("#breadcrumbs a"):
+                        crumb = soup.select("#breadcrumbs a")[-1]
+                        crumb = "http://www.scp-wiki.net" + crumb["href"]
+                        if self.url == crumb:
+                            children_with_backlinks.append(p)
+            if children_with_backlinks != []:
+                self.children = children_with_backlinks
         return
 
 
@@ -377,7 +376,7 @@ def collect_pages():
                            int(re.search("[0-9]{3,4}$", i).group(0))
                            < (n + 1) * 100)]
                       for n in range(30)]
-    for b in skips_by_block[:10]:
+    for b in skips_by_block[:1]:
         block = Page()
         block.title = "Block " + str(skips_by_block.index(b)).zfill(2)
         block.data = ""
@@ -393,7 +392,6 @@ def collect_pages():
     pages.append(canons)
     canons_urls = urls_by_tag("hub")
     for url in canons_urls[:10]:
-        break
         hub = Page(url)
         if not "tale" in hub.tags and not "goi2014" in hub.tags:
             continue
