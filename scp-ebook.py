@@ -99,6 +99,14 @@ class Page():
         # remove the rating module
         for i in data.select("div.page-rate-widget-box"):
             i.decompose()
+        #remove the image block
+        for i in data.select("div.scp-image-block"):
+            i.decompose()
+        for i in data.select("table"):
+            if i.select("img"):
+                i.decompose()
+        for i in data.select("img"):
+            i.decompose()
         # tab-views
         for i in data.select("div.yui-navset"):
             wraper = soup.new_tag("div")
@@ -115,6 +123,13 @@ class Page():
                 k.insert(0, tab_title)
                 wraper.append(k)
             i.replace_with(wraper)
+        # footnotes
+        for i in data.select("sup.footnoteref"):
+            i.string = i.a.string
+        for i in data.select("div.footnote-footer"):
+            i["class"] = "footnote"
+            del(i["id"])
+            i.string = "".join([k for k in i.strings])
         # collapsibles
         for i in data.select("div.collapsible-block"):
             link_text = i.select("a.collapsible-block-link")[0].text
@@ -128,18 +143,15 @@ class Page():
             col_title.string = link_text
             content.div.insert_before(col_title)
             i.replace_with(content)
+        # links
+        for i in data.select("a"):
+            del(i["href"])
+            i.name = "span"
+            i["class"] = "link"
         #quote boxes
         for i in data.select("blockquote"):
             i.name = "div"
             i["class"] = "quote"
-        #remove the image block
-        for i in data.select("div.scp-image-block"):
-            i.decompose()
-        for i in data.select("table"):
-            if i.select("img"):
-                i.decompose()
-        for i in data.select("img"):
-            i.decompose()
         #add title to the page
         #if page["part"] == "scp":
         data = "<p class='scp-title'>" + self.title + "</p>" + str(data)
@@ -165,9 +177,7 @@ class Page():
                 if a.has_attr("href"):
                     if (a["href"] != "javascript:;" and a["href"][0] != "#"
                         and re.search("scp-wiki", a["href"])
-                        and a["href"][-4:] != ".png"
-                        and a["href"][-4:] != ".jpg"
-                            and a["href"][-4:] != ".JPG"):
+                            and not re.search("local--files", a["href"])):
                         print("bad link: \t\t" + a["href"] + "\ton page " +
                               self.url)
                 continue
@@ -288,9 +298,9 @@ def stylesheet():
         text-align: center;
         }
     .title1-bold {
-        font-weight: bold;
         font-size: 200%;
-    }
+        font-weight: bold;
+        }
     .bold {
         font-weight: bold;
         }
@@ -299,47 +309,47 @@ def stylesheet():
         }
     .license {
         font-style: italic;
-        text-align: justify;
-        max-width: 80%;
         margin-left: 10%;
         margin-top: 40%;
+        max-width: 80%;
+        text-align: justify;
         }
     .quote {
-        border: 1px dashed #999;
-        padding: 0 1em;
-        margin: 0.5em 5%;
         background-color: #f4f4f4;
+        border: 1px dashed #999;
+        margin: 0.5em 5%;
+        padding: 0 1em;
         }
     .col {
-        border: 1px solid #444;
-        padding: 0 1em;
-        margin: 0.5em 5%;
         background-color: #ECECEC;
+        border: 1px solid #444;
+        margin: 0.5em 5%;
+        padding: 0 1em;
         }
     .col-title {
         border-bottom: 1px solid #444;
+        font-weight: bold;
         margin: 0 -1em;
         padding: 0.5em 1em;
-        font-weight: bold;
         }
     .col .quote{
         background-color: #E0E0E0;
-    }
+        }
     .scp-title {
-        font-weight: bold;
         font-size: 120%;
+        font-weight: bold;
         margin: 2em 0;
         }
     .tale-title {
-        font-style: italic;
-        text-align: center;
         font-size: 120%;
+        font-style: italic;
         margin: 2em 0;
+        text-align: center;
         }
     * {
         font-family: "HelveticaNeue-Light", "Helvetica Neue Light",
         "Helvetica Neue", Helvetica, Arial, "Lucida Grande", sans-serif;
-    }'''
+        }'''
 
     return stylesheet
 
@@ -352,6 +362,7 @@ def recprint(page, indent):
 
 
 def collect_pages():
+    print("collecting pages")
     pages = []
     #collecting skips
     skips = Page()
@@ -366,8 +377,7 @@ def collect_pages():
                            int(re.search("[0-9]{3,4}$", i).group(0))
                            < (n + 1) * 100)]
                       for n in range(30)]
-    for b in skips_by_block:
-        break
+    for b in skips_by_block[:10]:
         block = Page()
         block.title = "Block " + str(skips_by_block.index(b)).zfill(2)
         block.data = ""
@@ -382,7 +392,8 @@ def collect_pages():
     canons.data = ""
     pages.append(canons)
     canons_urls = urls_by_tag("hub")
-    for url in canons_urls[:20]:
+    for url in canons_urls[:10]:
+        break
         hub = Page(url)
         if not "tale" in hub.tags and not "goi2014" in hub.tags:
             continue
