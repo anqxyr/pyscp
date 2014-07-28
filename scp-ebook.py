@@ -234,6 +234,7 @@ class Epub():
         shutil.rmtree(self.dir)
         os.makedirs(self.dir)
         self.build()
+        self.all_pages = []
 
     def build(self):
         """Create the necessary files and directories."""
@@ -250,6 +251,30 @@ class Epub():
                     "xml\" full-path=\"EPUB/content.opf\"/>\n"
                     "    </rootfiles>\n"
                     "</container>\n")
+
+    def add_page(self, page):
+        if page.title in self.all_pages:
+            print("page is alredy in the book: " + page.title)
+            return
+        self.all_pages.append(page.title)
+        path = (self.dir + "/EPUB/page_" +
+                str(len(self.all_pages)).zfill(4) + ".xhtml")
+        with open(path, "w") as F:
+            F.write("<?xml version='1.0' encoding='utf-8'?>\n"
+                    "<!DOCTYPE html>\n"
+                    "<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub="
+                    "\"http://www.idpf.org/2007/ops\" epub:prefix=\"z3998: ht"
+                    "tp://www.daisy.org/z3998/2012/vocab/structure/#\" lang="
+                    "\"en\" xml:lang=\"en\">\n"
+                    "  <head>\n"
+                    "    <title>" + page.title + "</title>\n"
+                    "    <link href=\"style/stylesheet.css\" rel=\"stylesheet"
+                    "\" type=\"text/css\"/>\n"
+                    "  </head>\n"
+                    "  <body>\n"
+                    + page.data + "\n"
+                    "  </body>\n"
+                    "</html>")
 
 
 def make_epub(title, pages):
@@ -369,6 +394,12 @@ def yield_pages():
 
 def main():
     book = Epub()
+    n = 0
+    for i in yield_pages():
+        n += 1
+        book.add_page(i)
+        if n == 10:
+            exit()
     exit()
     book = make_epub("SCP Foundation", yield_pages())
     print("writing the book to file")
