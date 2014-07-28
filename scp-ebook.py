@@ -360,82 +360,52 @@ def recprint(page, indent):
             recprint(i, indent)
 
 
-def collect_pages():
+def yield_pages():
+    def urls_by_tag(tag):
+        base = "http://www.scp-wiki.net/system:page-tags/tag/" + tag
+        soup = BeautifulSoup(urlopen(base))
+        urls = ["http://www.scp-wiki.net" + a["href"] for a in
+                soup.select("""div.pages-list
+                            div.pages-list-item div.title a""")]
+        return urls
+
+    def natural_key(s):
+        re_natural = re.compile('[0-9]+|[^0-9]+')
+        return [(1, int(c)) if c.isdigit() else (0, c.lower()) for c
+                in re_natural.findall(s)] + [s]
     print("collecting pages")
-    pages = []
-    #collecting skips
-    skips = Page()
-    skips.title = "SCP Database"
-    skips.data = """<h1 class='title1'>SCP Object Database"""
-    pages.append(skips)
-    skips_urls = urls_by_tag("scp")
-    skips_urls = [i for i in skips_urls if re.match(".*scp-[0-9]*$", i)]
-    skips_urls = sorted(skips_urls, key=natural_key)
-    skips_by_block = [[i for i in skips_urls
-                       if (n * 100 <=
-                           int(re.search("[0-9]{3,4}$", i).group(0))
-                           < (n + 1) * 100)]
-                      for n in range(30)]
-    for b in skips_by_block[:1]:
-        block = Page()
-        block.title = "Block " + str(skips_by_block.index(b)).zfill(2)
-        block.data = ""
-        skips.children.append(block)
+    # skips
+    scp_main = [i for i in urls_by_tag("scp") if re.match(".*scp-[0-9]*$", i)]
+    scp_main = sorted(scp_main, key=natural_key)
+    scp_blocks = [[i for i in scp_main if (int(i.split("-")[-1]) // 100 == n)]
+                  for n in range(30)]
+    for b in scp_blocks:
+        b_name = "Chapter " + str(scp_blocks.index(b)).zfill(2)
         for url in b:
             p = Page(url)
-            p.get_children()
-            block.children.append(p)
+            p.chapter = b_name
+            yield p
+
+    def quick_yield(tag, chapter_name):
+        for url in urls_by_tag(tag):
+            p = Page(url)
+            p.chapter = chapter_name
+            yield p
+    for p in quick_yield("joke", "Joke Articles"):
+        yield p
+    for p in quick_yield("explained", "Explained Phenomena"):
+        yield p
     #collecting canon and tale series hubs
-    canons = Page()
-    canons.title = "Canons and Series"
-    canons.data = ""
-    pages.append(canons)
-    canons_urls = urls_by_tag("hub")
-    for url in canons_urls[:10]:
-        hub = Page(url)
-        if not "tale" in hub.tags and not "goi2014" in hub.tags:
+    tale_list = urls_by_tag("tale").extend(urls_by_tag("goi2014"))
+    for url in urls_by_tag("hub"):
+        if not url in tale_list:
             continue
-        canons.children.append(hub)
-        hub.get_children()
-    remove_duplicates(canons)
+        p = Page(url)
+        p.chapter = "Canons and Series"
+        yield p
     #collecting standalone tales
-    tales = Page()
-    tales.title = "Assorted Tales"
-    tales.data = ""
-    pages.append(tales)
-    tales_urls = urls_by_tag("tale")
-    for url in tales_urls:
-        break
-        tale = Page(url)
-        tales.children.append(tale)
-        #tales probably shouldn't have children of their own
-        #tale.get_children()
-    return pages
-
-
-def remove_duplicates(page, all_pages=[]):
-    for i in list(page.children):
-        if i in all_pages:
-            page.children.remove(i)
-        else:
-            all_pages.append(i)
-            remove_duplicates(i, all_pages)
-    return
-
-
-def urls_by_tag(tag):
-    base = "http://www.scp-wiki.net/system:page-tags/tag/" + tag
-    soup = BeautifulSoup(urlopen(base))
-    urls = ["http://www.scp-wiki.net" + a["href"] for a in
-            soup.select("""div.pages-list
-                        div.pages-list-item div.title a""")]
-    return urls
-
-
-def natural_key(s):
-    re_natural = re.compile('[0-9]+|[^0-9]+')
-    return [(1, int(c)) if c.isdigit() else (0, c.lower()) for c
-            in re_natural.findall(s)] + [s]
+    for p in quick_yield("tale", "Assorted Tales"):
+        yield p
 
 
 def main():
@@ -452,7 +422,10 @@ def main():
                     are available online at www.scp-wiki.net .</p></div>"""
     pages[2].title = "Introduction"
     pages[2].data = "Some introduction text"
-    pages.extend(collect_pages())
+    for i in yield_pages():
+        print(i.url + "\t" + i.title)
+    exit()
+    pages.extend(yield_pages())
     pages.append(Page())
     pages[-1].title = "Appendix"
     pages[-1].data = "Placeholder; list of article authors, image artists, etc"
