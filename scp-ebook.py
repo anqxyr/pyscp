@@ -230,7 +230,7 @@ def make_epub(title, pages):
     book = epub.EpubBook()
     book.set_title(title)
     style = epub.EpubItem(uid="stylesheet", file_name="style/stylesheet.css",
-                          media_type="text/css", content=stylesheet())
+                          media_type="text/css", content="")
     book.add_item(style)
     for page in pages:
         add_page(book, page)
@@ -291,75 +291,6 @@ def add_page(book, page):
         add_page(book, c)
 
 
-def stylesheet():
-    stylesheet = '''@namespace h "http://www.w3.org/1999/xhtml";
-    .title1 {
-        text-align: center;
-        }
-    .title1-bold {
-        font-size: 200%;
-        font-weight: bold;
-        }
-    .bold {
-        font-weight: bold;
-        }
-    .italic {
-        font-style: italic;
-        }
-    .license {
-        font-style: italic;
-        margin-left: 10%;
-        margin-top: 40%;
-        max-width: 80%;
-        text-align: justify;
-        }
-    .quote {
-        background-color: #f4f4f4;
-        border: 1px dashed #999;
-        margin: 0.5em 5%;
-        padding: 0 1em;
-        }
-    .col {
-        background-color: #ECECEC;
-        border: 1px solid #444;
-        margin: 0.5em 5%;
-        padding: 0 1em;
-        }
-    .col-title {
-        border-bottom: 1px solid #444;
-        font-weight: bold;
-        margin: 0 -1em;
-        padding: 0.5em 1em;
-        }
-    .col .quote{
-        background-color: #E0E0E0;
-        }
-    .scp-title {
-        font-size: 120%;
-        font-weight: bold;
-        margin: 2em 0;
-        }
-    .tale-title {
-        font-size: 120%;
-        font-style: italic;
-        margin: 2em 0;
-        text-align: center;
-        }
-    * {
-        font-family: "HelveticaNeue-Light", "Helvetica Neue Light",
-        "Helvetica Neue", Helvetica, Arial, "Lucida Grande", sans-serif;
-        }'''
-
-    return stylesheet
-
-
-def recprint(page, indent):
-        print("\t" * indent + page.title)
-        indent += 1
-        for i in page.children:
-            recprint(i, indent)
-
-
 def yield_pages():
     def urls_by_tag(tag):
         base = "http://www.scp-wiki.net/system:page-tags/tag/" + tag
@@ -409,27 +340,7 @@ def yield_pages():
 
 
 def main():
-    pages = [Page(), Page(), Page()]
-    pages[0].title = "Title Page"
-    pages[0].data = """<div class='title1'><h1 class='title1-bold'>
-                    SCP Foundation</h1><div class='italic'>
-                    Ebook edition</div></div>"""
-    pages[1].title = "License"
-    pages[1].data = """<div class='license'><p>This book contains the collected
-                    works of the SCP Foundation, a collaborative fiction
-                    writing website. All contents are licensed under the
-                    CC-BY-SA 3.0 license. The stories comprising the book
-                    are available online at www.scp-wiki.net .</p></div>"""
-    pages[2].title = "Introduction"
-    pages[2].data = "Some introduction text"
-    for i in yield_pages():
-        print(i.url + "\t" + i.title)
-    exit()
-    pages.extend(yield_pages())
-    pages.append(Page())
-    pages[-1].title = "Appendix"
-    pages[-1].data = "Placeholder; list of article authors, image artists, etc"
-    book = make_epub("SCP Foundation", pages)
+    book = make_epub("SCP Foundation", yield_pages())
     print("writing the book to file")
     epub.write_epub("test.epub", book, {})
     print("done writing")
