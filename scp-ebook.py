@@ -7,6 +7,7 @@ from bs4 import BeautifulSoup
 from lxml import etree
 import re
 import os
+import shutil
 
 
 class Page():
@@ -224,6 +225,33 @@ class Page():
         return
 
 
+class Epub():
+
+    """Create a epub using generators and temp files for optimal memory use."""
+
+    def __init__(self):
+        self.dir = os.getcwd() + "/epub"  # change to a proper temp dir later
+        shutil.rmtree(self.dir)
+        os.makedirs(self.dir)
+        self.build()
+
+    def build(self):
+        """Create the necessary files and directories."""
+        os.mkdir(self.dir + "/EPUB")
+        os.mkdir(self.dir + "/META-INF")
+        with open(self.dir + "/mimetype", "w") as F:
+            F.write("application/epub+zip")
+        with open(self.dir + "/META-INF/container.xml", "w") as F:
+            F.write("<?xml version='1.0' encoding='utf-8'?>\n"
+                    "<container xmlns=\"urn:oasis:names:tc:opendocument:xmlns:"
+                    "container\" version=\"1.0\">\n"
+                    "    <rootfiles>\n"
+                    "        <rootfile media-type=\"application/oebps-package+"
+                    "xml\" full-path=\"EPUB/content.opf\"/>\n"
+                    "    </rootfiles>\n"
+                    "</container>\n")
+
+
 def make_epub(title, pages):
     print("creating the book")
     #this makes magic happen
@@ -340,6 +368,8 @@ def yield_pages():
 
 
 def main():
+    book = Epub()
+    exit()
     book = make_epub("SCP Foundation", yield_pages())
     print("writing the book to file")
     epub.write_epub("test.epub", book, {})
