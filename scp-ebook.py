@@ -7,7 +7,6 @@ from bs4 import BeautifulSoup
 from lxml import etree
 import re
 import os
-import shutil
 
 
 class Page():
@@ -229,119 +228,64 @@ class Epub():
 
     """Create a epub using generators and temp files for optimal memory use."""
 
-    def __init__(self):
-        self.dir = os.getcwd() + "/epub"  # change to a proper temp dir later
-        shutil.rmtree(self.dir)
-        os.makedirs(self.dir)
-        self.build()
-        self.all_pages = []
+    def __init__(self, title, stylesheet):
+        book = epub.EpubBook()
+        book.set_title(title)
+        style = epub.EpubItem(uid="stylesheet",
+                              file_name="style/stylesheet.css",
+                              media_type="text/css", content=stylesheet)
+        book.add_item(style)
+        self.book = book
+        self.style = style
+        #pre-building toc
+        root = etree.Element("ncx",
+                             xmlns="http://www.daisy.org/z3986/2005/ncx/",
+                             version="2005-1")
+        head = etree.SubElement(root, "head")
+        etree.SubElement(head, "meta", content="", name="dtb:uid")
+        etree.SubElement(head, "meta", content="0", name="dtb:depth")
+        etree.SubElement(head, "meta", content="0", name="dtb:totalPageCount")
+        etree.SubElement(head, "meta", content="0", name="dtb:maxPageNumber")
+        doc_title = etree.SubElement(root, "docTitle")
+        doc_title_text = etree.SubElement(doc_title, "text")
+        doc_title_text.text = "SCP Foundation"
+        etree.SubElement(root, "navMap")
+        self.toc = root
 
-    def build(self):
-        """Create the necessary files and directories."""
-        os.mkdir(self.dir + "/EPUB")
-        os.mkdir(self.dir + "/META-INF")
-        with open(self.dir + "/mimetype", "w") as F:
-            F.write("application/epub+zip")
-        with open(self.dir + "/META-INF/container.xml", "w") as F:
-            F.write("<?xml version='1.0' encoding='utf-8'?>\n"
-                    "<container xmlns=\"urn:oasis:names:tc:opendocument:xmlns:"
-                    "container\" version=\"1.0\">\n"
-                    "    <rootfiles>\n"
-                    "        <rootfile media-type=\"application/oebps-package+"
-                    "xml\" full-path=\"EPUB/content.opf\"/>\n"
-                    "    </rootfiles>\n"
-                    "</container>\n")
+    def add_page(self, page, node=None):
+        n = len(self.book.items) - 1
+        uid = "page_" + str(n).zfill(4)
+        epub_page = epub.EpubHtml(page.title, uid + ".xhtml")
+        epub_page.title = page.title
+        epub_page.content = page.data
+        epub_page.add_item(self.style)
+        self.book.add_item(epub_page)
+        self.book.spine.append(epub_page)
 
-    def add_page(self, page):
-        if page.title in self.all_pages:
-            print("page is alredy in the book: " + page.title)
-            return
-        self.all_pages.append(page.title)
-        path = (self.dir + "/EPUB/page_" +
-                str(len(self.all_pages)).zfill(4) + ".xhtml")
-        with open(path, "w") as F:
-            F.write("<?xml version='1.0' encoding='utf-8'?>\n"
-                    "<!DOCTYPE html>\n"
-                    "<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub="
-                    "\"http://www.idpf.org/2007/ops\" epub:prefix=\"z3998: ht"
-                    "tp://www.daisy.org/z3998/2012/vocab/structure/#\" lang="
-                    "\"en\" xml:lang=\"en\">\n"
-                    "  <head>\n"
-                    "    <title>" + page.title + "</title>\n"
-                    "    <link href=\"style/stylesheet.css\" rel=\"stylesheet"
-                    "\" type=\"text/css\"/>\n"
-                    "  </head>\n"
-                    "  <body>\n"
-                    + page.data + "\n"
-                    "  </body>\n"
-                    "</html>")
+        def add_to_toc(node, page, uid):
+            if not node:
+                node = self.toc.find("navMap")
+            navpoint = etree.SubElement(node, "navPoint",
+                                        id=uid,
+                                        playOrder=uid[-4:].lstrip("0"))
+            navlabel = etree.SubElement(navpoint, "navLabel")
+            etree.SubElement(navlabel, "text").text = page.title
+            etree.SubElement(navpoint, "content", src=uid + ".xhtml")
+            return navpoint
+        new_node = add_to_toc(node, page, uid)
+        page.get_children()
+        for i in page.children:
+            self.add_page(i, new_node)
 
-
-def make_epub(title, pages):
-    print("creating the book")
-    #this makes magic happen
-    book = epub.EpubBook()
-    book.set_title(title)
-    style = epub.EpubItem(uid="stylesheet", file_name="style/stylesheet.css",
-                          media_type="text/css", content="")
-    book.add_item(style)
-    for page in pages:
-        add_page(book, page)
-    make_toc(book, pages)
-    return book
-
-
-def make_toc(book, pages):
-    print("building table of contents")
-    root = etree.Element("ncx", xmlns="http://www.daisy.org/z3986/2005/ncx/",
-                         version="2005-1")
-    head = etree.SubElement(root, "head")
-    etree.SubElement(head, "meta", content="", name="dtb:uid")
-    etree.SubElement(head, "meta", content="0", name="dtb:depth")
-    etree.SubElement(head, "meta", content="0", name="dtb:totalPageCount")
-    etree.SubElement(head, "meta", content="0", name="dtb:maxPageNumber")
-    doc_title = etree.SubElement(root, "docTitle")
-    doc_title_text = etree.SubElement(doc_title, "text")
-    doc_title_text.text = "SCP Foundation"
-    navmap = etree.SubElement(root, "navMap")
-    for p in pages:
-        add_to_toc(navmap, p)
-    tree = etree.ElementTree(root)
-    toc_xml = etree.tostring(tree, xml_declaration=True, encoding="utf-8",
-                             pretty_print=True).decode()
-    toc = epub.EpubItem(uid="toc", file_name="toc.ncx",
-                        media_type="application/x-dtbncx+xml",
-                        content=toc_xml)
-    book.add_item(toc)
-    return
-
-
-def add_to_toc(navroot, page):
-    navpoint = etree.SubElement(navroot, "navPoint",
-                                id=page.uid,
-                                playOrder=page.uid[-4:].lstrip("0"))
-    navlabel = etree.SubElement(navpoint, "navLabel")
-    etree.SubElement(navlabel, "text").text = page.title
-    etree.SubElement(navpoint, "content", src=page.uid + ".xhtml")
-    for c in page.children:
-        add_to_toc(navpoint, c)
-    return
-
-
-def add_page(book, page):
-    n = len(book.items) - 1
-    page.uid = "page_" + str(n).zfill(4)
-    epage = epub.EpubHtml(page.title, page.uid + ".xhtml")
-    #the above should also set the title, but apparently it doesn't,
-    #so setting it by hand below
-    epage.title = page.title
-    epage.content = page.data
-    epage.add_item(book.get_item_with_id("stylesheet"))
-    book.add_item(epage)
-    book.toc.append(epage)
-    book.spine.append(epage)
-    for c in page.children:
-        add_page(book, c)
+    def save(self, file):
+        tree = etree.ElementTree(self.toc)
+        toc_xml = etree.tostring(tree, xml_declaration=True, encoding="utf-8",
+                                 pretty_print=True).decode()
+        toc = epub.EpubItem(uid="toc", file_name="toc.ncx",
+                            media_type="application/x-dtbncx+xml",
+                            content=toc_xml)
+        self.book.add_item(toc)
+        epub.write_epub(file, self.book, {})
 
 
 def yield_pages():
@@ -357,13 +301,13 @@ def yield_pages():
         re_natural = re.compile('[0-9]+|[^0-9]+')
         return [(1, int(c)) if c.isdigit() else (0, c.lower()) for c
                 in re_natural.findall(s)] + [s]
-    print("collecting pages")
     # skips
     scp_main = [i for i in urls_by_tag("scp") if re.match(".*scp-[0-9]*$", i)]
     scp_main = sorted(scp_main, key=natural_key)
     scp_blocks = [[i for i in scp_main if (int(i.split("-")[-1]) // 100 == n)]
                   for n in range(30)]
     for b in scp_blocks:
+        break
         b_name = "Chapter " + str(scp_blocks.index(b)).zfill(2)
         for url in b:
             p = Page(url)
@@ -375,36 +319,33 @@ def yield_pages():
             p = Page(url)
             p.chapter = chapter_name
             yield p
-    for p in quick_yield("joke", "Joke Articles"):
-        yield p
-    for p in quick_yield("explained", "Explained Phenomena"):
-        yield p
+    # for p in quick_yield("joke", "Joke Articles"):
+    #     yield p
+    # for p in quick_yield("explained", "Explained Phenomena"):
+    #     yield p
     #collecting canon and tale series hubs
-    tale_list = urls_by_tag("tale").extend(urls_by_tag("goi2014"))
+    tale_list = urls_by_tag("tale")
+    tale_list.extend(urls_by_tag("goi2014"))
+    k = 0
     for url in urls_by_tag("hub"):
+        k += 1
+        if k == 10:
+            break
         if not url in tale_list:
             continue
         p = Page(url)
         p.chapter = "Canons and Series"
         yield p
     #collecting standalone tales
-    for p in quick_yield("tale", "Assorted Tales"):
-        yield p
+    # for p in quick_yield("tale", "Assorted Tales"):
+    #     yield p
 
 
 def main():
-    book = Epub()
-    n = 0
+    book = Epub("SCP Foundation", "")
     for i in yield_pages():
-        n += 1
+        print(i.title)
         book.add_page(i)
-        if n == 10:
-            exit()
-    exit()
-    book = make_epub("SCP Foundation", yield_pages())
-    print("writing the book to file")
-    epub.write_epub("test.epub", book, {})
-    print("done writing")
-    return
+    book.save("test.epub")
 
 main()
