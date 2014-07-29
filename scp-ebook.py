@@ -18,7 +18,6 @@ class Page():
 
     def __init__(self, url=None):
         self.url = url
-        self.children = []
         if url is not None:
                 self.scrape()
                 self.cook()
@@ -169,7 +168,7 @@ class Page():
         self.tags = tags
         return self
 
-    def get_children(self):
+    def yield_children(self):
         def links(self):
             links = []
             soup = BeautifulSoup(self.soup)
@@ -189,13 +188,6 @@ class Page():
                 links.append(url)
             return links
 
-        def add_as_children(with_tags):
-            for p in lpages:
-                if any(i in p.tags for i in with_tags):
-                    self.children.append(p)
-                    p.get_children()
-            return
-
         if not any(i in self.tags for i in ["scp", "hub", "splash"]):
             return
         lpages = []
@@ -204,24 +196,33 @@ class Page():
             if p.soup and p.data:
                 lpages.append(p)
         if any(i in self.tags for i in ["scp", "splash"]):
-            add_as_children(["supplement", "splash"])
+            mpages = [i for i in lpages if
+                      any(k in i.tags for k in ["supplement", "splash"])]
+            for p in mpages:
+                    yield p
         if "hub" in self.tags and any(i in self.tags
                                       for i in ["tale", "goi2014"]):
-            add_as_children(["tale", "goi-format"])
-            children_with_backlinks = []
-            for p in self.children:
-                if self.url in links(p):
-                    children_with_backlinks.append(p)
-                else:
-                    soup = BeautifulSoup(p.soup)
-                    if soup.select("#breadcrumbs a"):
-                        crumb = soup.select("#breadcrumbs a")[-1]
-                        crumb = "http://www.scp-wiki.net" + crumb["href"]
-                        if self.url == crumb:
-                            children_with_backlinks.append(p)
-            if children_with_backlinks != []:
-                self.children = children_with_backlinks
-        return
+            mpages = [i for i in lpages if
+                      any(k in i.tags for k in ["tale", "goi-format"])]
+
+            def backlinks(page, child):
+                if page.url in links(child):
+                    return True
+                soup = BeautifulSoup(child.soup)
+                if soup.select("#breadcrumbs a"):
+                    crumb = soup.select("#breadcrumbs a")[-1]
+                    crumb = "http://www.scp-wiki.net" + crumb["href"]
+                    if self.url == crumb:
+                        return True
+                return False
+            if any(backlinks(self, p) for p in mpages):
+                for p in mpages:
+                    if backlinks(self, p):
+                        yield p
+            else:
+                for p in mpages:
+                    if any(i in p.tags for i in ["tale"]):
+                        yield p
 
 
 class Epub():
@@ -253,6 +254,7 @@ class Epub():
         self.toc = root
 
     def add_page(self, page, node=None):
+        print(page.title)
         n = len(self.book.items) - 1
         uid = "page_" + str(n).zfill(4)
         epub_page = epub.EpubHtml(page.title, uid + ".xhtml")
@@ -263,7 +265,7 @@ class Epub():
         self.book.spine.append(epub_page)
 
         def add_to_toc(node, page, uid):
-            if not node:
+            if node is None:
                 node = self.toc.find("navMap")
             navpoint = etree.SubElement(node, "navPoint",
                                         id=uid,
@@ -273,8 +275,7 @@ class Epub():
             etree.SubElement(navpoint, "content", src=uid + ".xhtml")
             return navpoint
         new_node = add_to_toc(node, page, uid)
-        page.get_children()
-        for i in page.children:
+        for i in page.yield_children():
             self.add_page(i, new_node)
 
     def save(self, file):
@@ -289,6 +290,9 @@ class Epub():
 
 
 def yield_pages():
+    yield Page("http://www.scp-wiki.net/acidverse")
+    return
+
     def urls_by_tag(tag):
         base = "http://www.scp-wiki.net/system:page-tags/tag/" + tag
         soup = BeautifulSoup(urlopen(base))
@@ -344,7 +348,6 @@ def yield_pages():
 def main():
     book = Epub("SCP Foundation", "")
     for i in yield_pages():
-        print(i.title)
         book.add_page(i)
     book.save("test.epub")
 
