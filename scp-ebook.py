@@ -35,6 +35,9 @@ class Page():
     def scrape(self):
         '''Scrape the contents of the given url.'''
         url_end = re.search("/[^/]*$", self.url).group()[1:]
+        if url_end == "":
+            self.soup = None
+            return
         path = "data/" + url_end
         if os.path.isfile(path):
             with open(path, "r") as F:
@@ -51,7 +54,6 @@ class Page():
             self.soup = str(soup)
             with open(path, "w") as F:
                 F.write(str(soup))
-        return
 
     def cook(self):
         '''Cook the soup, retrieve title, data, and tags'''
@@ -290,9 +292,6 @@ class Epub():
 
 
 def yield_pages():
-    yield Page("http://www.scp-wiki.net/acidverse")
-    return
-
     def urls_by_tag(tag):
         base = "http://www.scp-wiki.net/system:page-tags/tag/" + tag
         soup = BeautifulSoup(urlopen(base))
@@ -311,7 +310,6 @@ def yield_pages():
     scp_blocks = [[i for i in scp_main if (int(i.split("-")[-1]) // 100 == n)]
                   for n in range(30)]
     for b in scp_blocks:
-        break
         b_name = "Chapter " + str(scp_blocks.index(b)).zfill(2)
         for url in b:
             p = Page(url)
@@ -323,26 +321,22 @@ def yield_pages():
             p = Page(url)
             p.chapter = chapter_name
             yield p
-    # for p in quick_yield("joke", "Joke Articles"):
-    #     yield p
-    # for p in quick_yield("explained", "Explained Phenomena"):
-    #     yield p
+    for p in quick_yield("joke", "Joke Articles"):
+        yield p
+    for p in quick_yield("explained", "Explained Phenomena"):
+        yield p
     #collecting canon and tale series hubs
     tale_list = urls_by_tag("tale")
     tale_list.extend(urls_by_tag("goi2014"))
-    k = 0
     for url in urls_by_tag("hub"):
-        k += 1
-        if k == 10:
-            break
         if not url in tale_list:
             continue
         p = Page(url)
         p.chapter = "Canons and Series"
         yield p
     #collecting standalone tales
-    # for p in quick_yield("tale", "Assorted Tales"):
-    #     yield p
+    for p in quick_yield("tale", "Assorted Tales"):
+        yield p
 
 
 def main():
