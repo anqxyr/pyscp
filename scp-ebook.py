@@ -18,6 +18,7 @@ class Page():
 
     def __init__(self, url=None):
         self.url = url
+        self.tags = []
         if url is not None:
                 self.scrape()
                 self.cook()
@@ -229,7 +230,7 @@ class Page():
 
 class Epub():
 
-    """Create a epub using generators and temp files for optimal memory use."""
+    """"""
 
     def __init__(self, title, stylesheet):
         book = epub.EpubBook()
@@ -257,7 +258,7 @@ class Epub():
 
     def add_page(self, page, node=None):
         print(page.title)
-        n = len(self.book.items) - 1
+        n = len(self.book.items)
         uid = "page_" + str(n).zfill(4)
         epub_page = epub.EpubHtml(page.title, uid + ".xhtml")
         epub_page.title = page.title
@@ -309,8 +310,8 @@ def yield_pages():
     scp_main = sorted(scp_main, key=natural_key)
     scp_blocks = [[i for i in scp_main if (int(i.split("-")[-1]) // 100 == n)]
                   for n in range(30)]
-    for b in scp_blocks:
-        b_name = "Chapter " + str(scp_blocks.index(b)).zfill(2)
+    for b in scp_blocks[:2]:
+        b_name = "SCP Database/Chapter " + str(scp_blocks.index(b) + 1)
         for url in b:
             p = Page(url)
             p.chapter = b_name
@@ -321,19 +322,20 @@ def yield_pages():
             p = Page(url)
             p.chapter = chapter_name
             yield p
-    for p in quick_yield("joke", "Joke Articles"):
+    for p in quick_yield("joke", "SCP Database/Joke Articles"):
         yield p
-    for p in quick_yield("explained", "Explained Phenomena"):
+    for p in quick_yield("explained", "SCP Database/Explained Phenomena"):
         yield p
     #collecting canon and tale series hubs
     tale_list = urls_by_tag("tale")
     tale_list.extend(urls_by_tag("goi2014"))
-    for url in urls_by_tag("hub"):
+    for url in urls_by_tag("hub")[:2]:
         if not url in tale_list:
             continue
         p = Page(url)
         p.chapter = "Canons and Series"
         yield p
+    return
     #collecting standalone tales
     for p in quick_yield("tale", "Assorted Tales"):
         yield p
@@ -342,7 +344,22 @@ def yield_pages():
 def main():
     book = Epub("SCP Foundation", "")
     for i in yield_pages():
-        book.add_page(i)
+        xhpages = [x for x in book.book.get_items()
+                   if isinstance(x, epub.EpubHtml)]
+        c_up = None
+
+        def node_with_text(text):
+            for k in book.toc.iter("navPoint"):
+                if text == k.find("navLabel").find("text").text:
+                    return k
+        for c in i.chapter.split("/"):
+            if not c in [k.title for k in xhpages]:
+                p = Page()
+                p.title = c
+                p.data = ""
+                book.add_page(p, node_with_text(c_up))
+            c_up = c
+        book.add_page(i, node_with_text(c_up))
     book.save("test.epub")
 
 main()
