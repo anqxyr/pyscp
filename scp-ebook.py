@@ -310,34 +310,33 @@ def yield_pages():
     scp_main = sorted(scp_main, key=natural_key)
     scp_blocks = [[i for i in scp_main if (int(i.split("-")[-1]) // 100 == n)]
                   for n in range(30)]
-    for b in scp_blocks[:2]:
+    for b in scp_blocks:
         b_name = "SCP Database/Chapter " + str(scp_blocks.index(b) + 1)
         for url in b:
             p = Page(url)
             p.chapter = b_name
             yield p
 
-    def quick_yield(tag, chapter_name):
-        for url in urls_by_tag(tag):
+    def quick_yield(tags, chapter_name):
+        L = [urls_by_tag(i) for i in tags if type(i) == str]
+        for i in [i for i in tags if type(i) == list]:
+            a = [x for k in i for x in urls_by_tag(k)]
+            L.append(a)
+        for url in [i for i in L[0] if all(i in t for t in L)]:
             p = Page(url)
             p.chapter = chapter_name
             yield p
-    for p in quick_yield("joke", "SCP Database/Joke Articles"):
+    for p in quick_yield(["joke", "scp"], "SCP Database/Joke Articles"):
         yield p
-    for p in quick_yield("explained", "SCP Database/Explained Phenomena"):
+    for p in quick_yield(["explained", "scp"],
+                         "SCP Database/Explained Phenomena"):
         yield p
     #collecting canon and tale series hubs
-    tale_list = urls_by_tag("tale")
-    tale_list.extend(urls_by_tag("goi2014"))
-    for url in urls_by_tag("hub")[:2]:
-        if not url in tale_list:
-            continue
-        p = Page(url)
-        p.chapter = "Canons and Series"
+    for p in quick_yield(["hub", ["tale", "goi2014"]], "Canons and Series"):
         yield p
     return
     #collecting standalone tales
-    for p in quick_yield("tale", "Assorted Tales"):
+    for p in quick_yield(["tale"], "Assorted Tales"):
         yield p
 
 
