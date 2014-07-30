@@ -310,13 +310,13 @@ def yield_pages():
     scp_main = sorted(scp_main, key=natural_key)
     scp_blocks = [[i for i in scp_main if (int(i.split("-")[-1]) // 100 == n)]
                   for n in range(30)]
-    for b in scp_blocks:
+    for b in scp_blocks[3:4]:
         b_name = "SCP Database/Chapter " + str(scp_blocks.index(b) + 1)
         for url in b:
             p = Page(url)
             p.chapter = b_name
             yield p
-
+    return
     def quick_yield(tags, chapter_name):
         L = [urls_by_tag(i) for i in tags if type(i) == str]
         for i in [i for i in tags if type(i) == list]:
@@ -341,7 +341,24 @@ def yield_pages():
 
 
 def main():
-    book = Epub("SCP Foundation", "")
+    with open("stylesheet.css", "r") as F:
+        style = F.read()
+    book = Epub("SCP Foundation", style)
+    pages_intro = []
+    pages_outro = []
+    for f in [f for f in sorted(os.listdir(os.getcwd() + "/pages"))
+                 if os.path.isfile(os.path.join(os.getcwd() + "/pages", f))]:
+                    p = Page()
+                    p.title = f[3:-6]
+                    with open(os.path.join(os.getcwd() + "/pages", f)) as F:
+                        p.data = F.read()
+                        print(p.data)
+                    if f[0] == "0":
+                        pages_intro.append(p)
+                    else:
+                        pages_outro.append(p)
+    for p in pages_intro:
+        book.add_page(p)
     for i in yield_pages():
         xhpages = [x for x in book.book.get_items()
                    if isinstance(x, epub.EpubHtml)]
@@ -359,6 +376,8 @@ def main():
                 book.add_page(p, node_with_text(c_up))
             c_up = c
         book.add_page(i, node_with_text(c_up))
+    for p in pages_outro:
+        book.add_page(p)
     book.save("test.epub")
 
 main()
