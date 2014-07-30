@@ -205,8 +205,8 @@ class Page():
                     yield p
         if "hub" in self.tags and any(i in self.tags
                                       for i in ["tale", "goi2014"]):
-            mpages = [i for i in lpages if
-                      any(k in i.tags for k in ["tale", "goi-format"])]
+            mpages = [i for i in lpages if any(k in i.tags for k in
+                      ["tale", "goi-format", "goi2014"])]
 
             def backlinks(page, child):
                 if page.url in links(child):
@@ -224,7 +224,6 @@ class Page():
                         yield p
             else:
                 for p in mpages:
-                    if any(i in p.tags for i in ["tale"]):
                         yield p
 
 
@@ -257,7 +256,10 @@ class Epub():
         self.toc = root
 
     def add_page(self, page, node=None):
-        print(page.title)
+        if any(x.title == page.title for x in self.book.get_items()
+               if isinstance(x, epub.EpubHtml)):
+            return
+        #print(page.title)
         n = len(self.book.items)
         uid = "page_" + str(n).zfill(4)
         epub_page = epub.EpubHtml(page.title, uid + ".xhtml")
@@ -310,13 +312,14 @@ def yield_pages():
     scp_main = sorted(scp_main, key=natural_key)
     scp_blocks = [[i for i in scp_main if (int(i.split("-")[-1]) // 100 == n)]
                   for n in range(30)]
-    for b in scp_blocks[3:4]:
+    for b in scp_blocks:
         b_name = "SCP Database/Chapter " + str(scp_blocks.index(b) + 1)
         for url in b:
             p = Page(url)
             p.chapter = b_name
             yield p
-    return
+    #return
+
     def quick_yield(tags, chapter_name):
         L = [urls_by_tag(i) for i in tags if type(i) == str]
         for i in [i for i in tags if type(i) == list]:
@@ -334,7 +337,6 @@ def yield_pages():
     #collecting canon and tale series hubs
     for p in quick_yield(["hub", ["tale", "goi2014"]], "Canons and Series"):
         yield p
-    return
     #collecting standalone tales
     for p in quick_yield(["tale"], "Assorted Tales"):
         yield p
@@ -347,16 +349,15 @@ def main():
     pages_intro = []
     pages_outro = []
     for f in [f for f in sorted(os.listdir(os.getcwd() + "/pages"))
-                 if os.path.isfile(os.path.join(os.getcwd() + "/pages", f))]:
-                    p = Page()
-                    p.title = f[3:-6]
-                    with open(os.path.join(os.getcwd() + "/pages", f)) as F:
-                        p.data = F.read()
-                        print(p.data)
-                    if f[0] == "0":
-                        pages_intro.append(p)
-                    else:
-                        pages_outro.append(p)
+              if os.path.isfile(os.path.join(os.getcwd() + "/pages", f))]:
+                p = Page()
+                p.title = f[3:-6]
+                with open(os.path.join(os.getcwd() + "/pages", f)) as F:
+                    p.data = F.read()
+                if f[0] == "0":
+                    pages_intro.append(p)
+                else:
+                    pages_outro.append(p)
     for p in pages_intro:
         book.add_page(p)
     for i in yield_pages():
@@ -370,11 +371,13 @@ def main():
                     return k
         for c in i.chapter.split("/"):
             if not c in [k.title for k in xhpages]:
+                print(c)
                 p = Page()
                 p.title = c
                 p.data = ""
                 book.add_page(p, node_with_text(c_up))
             c_up = c
+        print(i.title)
         book.add_page(i, node_with_text(c_up))
     for p in pages_outro:
         book.add_page(p)
