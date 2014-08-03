@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 
-from ebooklib import epub
 from urllib.request import urlopen
 from urllib.error import HTTPError
 from bs4 import BeautifulSoup
-from lxml import etree
+from lxml import etree, html
 import re
 import os
+import shutil
+import copy
 
 
 class Page():
@@ -231,15 +232,18 @@ class Epub():
 
     """"""
 
-    def __init__(self, title, stylesheet):
-        book = epub.EpubBook()
-        book.set_title(title)
-        style = epub.EpubItem(uid="stylesheet",
-                              file_name="style/stylesheet.css",
-                              media_type="text/css", content=stylesheet)
-        book.add_item(style)
-        self.book = book
-        self.style = style
+    def __init__(self, title):
+        self.title = title
+        #change to a proper temp dir later on
+        self.dir = os.getcwd() + "/ebook/"
+        if os.path.exists(self.dir):
+            shutil.rmtree(self.dir)
+        os.mkdir(self.dir)
+        os.mkdir(self.dir + "META-INF/")
+        os.mkdir(self.dir + "EPUB/")
+        os.mkdir(self.dir + "EPUB/pages/")
+        self.template = etree.parse(os.getcwd() + "/page_template.xhtml")
+        self.allpages = []
         #pre-building toc
         root = etree.Element("ncx",
                              xmlns="http://www.daisy.org/z3986/2005/ncx/",
@@ -251,23 +255,24 @@ class Epub():
         etree.SubElement(head, "meta", content="0", name="dtb:maxPageNumber")
         doc_title = etree.SubElement(root, "docTitle")
         doc_title_text = etree.SubElement(doc_title, "text")
-        doc_title_text.text = "SCP Foundation"
+        doc_title_text.text = title
         etree.SubElement(root, "navMap")
         self.toc = root
 
     def add_page(self, page, node=None):
-        if any(x.title == page.title for x in self.book.get_items()
-               if isinstance(x, epub.EpubHtml)):
-            return
         #print(page.title)
-        n = len(self.book.items)
+        n = len(os.listdir(self.dir + "EPUB/pages/"))
         uid = "page_" + str(n).zfill(4)
-        epub_page = epub.EpubHtml(page.title, uid + ".xhtml")
-        epub_page.title = page.title
-        epub_page.content = page.data
-        epub_page.add_item(self.style)
-        self.book.add_item(epub_page)
-        self.book.spine.append(epub_page)
+        epub_page = copy.deepcopy(self.template)
+        root = epub_page.getroot()
+        for i in root.iter():
+            if i.tag.endswith("title"):
+                i.text = page.title
+            if i.tag.endswith("body"):
+                body = html.fromstring(page.data)
+                i.append(body)
+        epub_page.write(self.dir + "EPUB/pages/" + uid + ".xhtml")
+        self.allpages.append(page.title)
 
         def add_to_toc(node, page, uid):
             if node is None:
@@ -287,12 +292,9 @@ class Epub():
         tree = etree.ElementTree(self.toc)
         toc_xml = etree.tostring(tree, xml_declaration=True, encoding="utf-8",
                                  pretty_print=True).decode()
-        toc = epub.EpubItem(uid="toc", file_name="toc.ncx",
-                            media_type="application/x-dtbncx+xml",
-                            content=toc_xml)
-        self.book.add_item(toc)
-        epub.write_epub(file, self.book, {})
 
+    def add_cover(self, file):
+        pass
 
 def yield_pages():
     def urls_by_tag(tag):
@@ -312,13 +314,13 @@ def yield_pages():
     scp_main = sorted(scp_main, key=natural_key)
     scp_blocks = [[i for i in scp_main if (int(i.split("-")[-1]) // 100 == n)]
                   for n in range(30)]
-    for b in scp_blocks:
+    for b in scp_blocks[:1]:
         b_name = "SCP Database/Chapter " + str(scp_blocks.index(b) + 1)
         for url in b:
             p = Page(url)
             p.chapter = b_name
             yield p
-    #return
+    return
 
     def quick_yield(tags, chapter_name):
         L = [urls_by_tag(i) for i in tags if type(i) == str]
@@ -345,7 +347,7 @@ def yield_pages():
 def main():
     with open("stylesheet.css", "r") as F:
         style = F.read()
-    book = Epub("SCP Foundation", style)
+    book = Epub("SCP Foundation")
     pages_intro = []
     pages_outro = []
     for f in [f for f in sorted(os.listdir(os.getcwd() + "/pages"))
@@ -361,8 +363,6 @@ def main():
     for p in pages_intro:
         book.add_page(p)
     for i in yield_pages():
-        xhpages = [x for x in book.book.get_items()
-                   if isinstance(x, epub.EpubHtml)]
         c_up = None
 
         def node_with_text(text):
@@ -370,11 +370,11 @@ def main():
                 if text == k.find("navLabel").find("text").text:
                     return k
         for c in i.chapter.split("/"):
-            if not c in [k.title for k in xhpages]:
+            if not c in book.allpages:
                 print(c)
                 p = Page()
                 p.title = c
-                p.data = ""
+                p.data = "<div></div>"
                 book.add_page(p, node_with_text(c_up))
             c_up = c
         print(i.title)
