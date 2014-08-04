@@ -254,7 +254,7 @@ class Epub():
 
     def add_page(self, page, node=None):
         #print(page.title)
-        if page.title in self.allpages:
+        if page.title in self.allpages.values():
             return
         n = len(self.allpages)
         uid = "page_" + str(n).zfill(4)
@@ -266,20 +266,19 @@ class Epub():
                 body = html.fromstring(page.data)
                 i.append(body)
         epub_page.write(self.dir + uid + ".xhtml")
-        self.allpages[page.title] = uid
+        self.allpages[uid] = page.title
 
-        def add_to_toc(node, page):
+        def add_to_toc(node, page, uid):
             if node is None:
                 node = self.toc.getroot().find("{http://www.daisy.org/z3986/"
                                                "2005/ncx/}navMap")
-            uid = self.allpages[page.title]
             navpoint = etree.SubElement(node, "navPoint", id=uid,
                                         playOrder=str(len(self.allpages)))
             navlabel = etree.SubElement(navpoint, "navLabel")
             etree.SubElement(navlabel, "text").text = page.title
             etree.SubElement(navpoint, "content", src=uid + ".xhtml")
             return navpoint
-        new_node = add_to_toc(node, page)
+        new_node = add_to_toc(node, page, uid)
         for i in page.yield_children():
             self.add_page(i, new_node)
 
@@ -296,16 +295,17 @@ class Epub():
             elif i.tag.endswith("title"):
                 i.text = self.title
             elif i.tag.endswith("manifest"):
-                for k in self.allpages:
+                for k in sorted(self.allpages):
                     etree.SubElement(i, "item",
-                                     href=self.allpages[k] + ".xhtml", id=k,
+                                     href=k + ".xhtml", id=self.allpages[k],
                                      **{"media-type":
                                         "application/xhtml+xml"})
             elif i.tag.endswith("spine"):
-                for k in self.allpages:
-                    etree.SubElement(i, "itemref", idref=k)
+                for k in sorted(self.allpages):
+                    etree.SubElement(i, "itemref", idref=self.allpages[k])
         spine.write(self.dir + "content.opf", xml_declaration=True,
                     encoding="utf-8", pretty_print=True)
+        #other necessary files
         container = self.templates["container"]
         os.mkdir(self.dir + "META-INF/")
         container.write(self.dir + "META-INF/container.xml",
@@ -391,7 +391,7 @@ def main():
                 if text == k.find("navLabel").find("text").text:
                     return k
         for c in i.chapter.split("/"):
-            if not c in book.allpages:
+            if not c in book.allpages.values():
                 print(c)
                 p = Page()
                 p.title = c
