@@ -240,45 +240,39 @@ class Epub():
         if os.path.exists(self.dir):
             shutil.rmtree(self.dir)
         os.mkdir(self.dir)
-        os.mkdir(self.dir + "META-INF/")
-        os.mkdir(self.dir + "EPUB/")
-        os.mkdir(self.dir + "EPUB/pages/")
-        self.template = etree.parse(os.getcwd() + "/page_template.xhtml")
-        self.allpages = []
+        self.templates = {}
+        for i in os.listdir("templates"):
+            self.templates[i.split(".")[0]] = etree.parse(os.getcwd() +
+                                                          "/templates/" + i)
+        self.allpages = {}
         #pre-building toc
-        root = etree.Element("ncx",
-                             xmlns="http://www.daisy.org/z3986/2005/ncx/",
-                             version="2005-1")
-        head = etree.SubElement(root, "head")
-        etree.SubElement(head, "meta", content="", name="dtb:uid")
-        etree.SubElement(head, "meta", content="0", name="dtb:depth")
-        etree.SubElement(head, "meta", content="0", name="dtb:totalPageCount")
-        etree.SubElement(head, "meta", content="0", name="dtb:maxPageNumber")
-        doc_title = etree.SubElement(root, "docTitle")
-        doc_title_text = etree.SubElement(doc_title, "text")
-        doc_title_text.text = title
-        etree.SubElement(root, "navMap")
-        self.toc = root
+        toc = self.templates["toc"]
+        for i in toc.getroot().iter():
+            if i.tag.endswith("text"):
+                i.text = title
+        self.toc = toc
 
     def add_page(self, page, node=None):
         #print(page.title)
+        if page.title in self.allpages:
+            return
         n = len(self.allpages)
         uid = "page_" + str(n).zfill(4)
-        epub_page = copy.deepcopy(self.template)
-        root = epub_page.getroot()
-        for i in root.iter():
+        epub_page = copy.deepcopy(self.templates["page"])
+        for i in epub_page.getroot().iter():
             if i.tag.endswith("title"):
                 i.text = page.title
-            if i.tag.endswith("body"):
+            elif i.tag.endswith("body"):
                 body = html.fromstring(page.data)
                 i.append(body)
-        epub_page.write(self.dir + "EPUB/pages/" + uid + ".xhtml")
-        self.allpages.append([page.title, uid])
+        epub_page.write(self.dir + uid + ".xhtml")
+        self.allpages[page.title] = uid
 
         def add_to_toc(node, page):
             if node is None:
-                node = self.toc.find("navMap")
-            uid = "page_" + str(len(self.allpages)).zfill(4)
+                node = self.toc.getroot().find("{http://www.daisy.org/z3986/"
+                                               "2005/ncx/}navMap")
+            uid = self.allpages[page.title]
             navpoint = etree.SubElement(node, "navPoint", id=uid,
                                         playOrder=str(len(self.allpages)))
             navlabel = etree.SubElement(navpoint, "navLabel")
@@ -290,43 +284,39 @@ class Epub():
             self.add_page(i, new_node)
 
     def save(self, file):
-        toc_tree = etree.ElementTree(self.toc)
-        toc_tree.write(self.dir + "EPUB/toc.ncx", xml_declaration=True,
+        self.toc.write(self.dir + "toc.ncx", xml_declaration=True,
                        encoding="utf-8", pretty_print=True)
         #building the spine
-        content = etree.Element("package", version="3.0",
-                                xmlns="http://www.idpf.org/2007/opf",
-                                prefix="rendition: http://www.ipdf.org/"
-                                "vocab/rendition/#",
-                                **{"unique-identifier": "id"})
-        nsmap = {"dc": "http://purl.org/dc/elements/1.1/",
-                 "opf": "http://www.idpf.org/2007/opf"}
-        metadata = etree.SubElement(content, "metadata", nsmap=nsmap)
-        etree.SubElement(metadata, "meta", property="dcterms:modified"
-                         ).text = time.strftime("%Y-%m-%dT%H:%M:%SZ")
-        etree.SubElement(metadata, "{http://purl.org/dc/elements/1.1/}title"
-                         ).text = self.title
-        manifest = etree.SubElement(content, "manifest")
-        etree.SubElement(manifest, "item", href="style/stylesheet.css",
-                         id="stylesheet", **{"media-type": "text/css"})
-        for i in self.allpages:
-            etree.SubElement(manifest, "item", href=i[1] + ".xhtml", id=i[0],
-                             **{"media-type": "application/xhtml+xml"})
-        etree.SubElement(manifest, "item", href="toc.ncx", id="toc",
-                         **{"media-type": "application/x-dtbncx+xml"})
-        spine = etree.SubElement(content, "spine", toc="ncx")
-        for i in self.allpages:
-            etree.SubElement(spine, "itemref", idref=i[0])
-        con_tree = etree.ElementTree(content)
-        con_tree.write(self.dir + "EPUB/content.opf", xml_declaration=True,
-                       encoding="utf-8", pretty_print=True)
-
-    def add_cover(self, file):
-        pass
+        spine = self.templates["content"]
+        for i in spine.getroot().iter():
+            if i.tag.endswith("meta"):
+                i.text = time.strftime("%Y-%m-%dT%H:%M:%SZ")
+            elif i.tag.endswith("title"):
+                i.text = self.title
+            elif i.tag.endswith("manifest"):
+                for k in self.allpages:
+                    etree.SubElement(i, "item",
+                                     href=self.allpages[k] + ".xhtml", id=k,
+                                     **{"media-type":
+                                        "application/xhtml+xml"})
+            elif i.tag.endswith("spine"):
+                for k in self.allpages:
+                    etree.SubElement(i, "itemref", idref=k)
+        spine.write(self.dir + "content.opf", xml_declaration=True,
+                    encoding="utf-8", pretty_print=True)
+        container = self.templates["container"]
+        os.mkdir(self.dir + "META-INF/")
+        container.write(self.dir + "META-INF/container.xml",
+                        xml_declaration=True, encoding="utf-8",
+                        pretty_print=True)
+        with open(self.dir + "mimetype", "w") as F:
+            F.write("application/epub+zip")
+        shutil.copy("stylesheet.css", self.dir)
+        shutil.make_archive("test.epub", "zip", self.dir)
+        shutil.move("test.epub.zip", "test.epub")
 
 
 def yield_pages():
-    return
     def urls_by_tag(tag):
         base = "http://www.scp-wiki.net/system:page-tags/tag/" + tag
         soup = BeautifulSoup(urlopen(base))
@@ -398,7 +388,7 @@ def main():
                 if text == k.find("navLabel").find("text").text:
                     return k
         for c in i.chapter.split("/"):
-            if not c in [i[0] for i in book.allpages]:
+            if not c in book.allpages:
                 print(c)
                 p = Page()
                 p.title = c
