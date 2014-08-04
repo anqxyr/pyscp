@@ -8,6 +8,7 @@ import re
 import os
 import shutil
 import copy
+import time
 
 
 class Page():
@@ -261,7 +262,7 @@ class Epub():
 
     def add_page(self, page, node=None):
         #print(page.title)
-        n = len(os.listdir(self.dir + "EPUB/pages/"))
+        n = len(self.allpages)
         uid = "page_" + str(n).zfill(4)
         epub_page = copy.deepcopy(self.template)
         root = epub_page.getroot()
@@ -272,31 +273,60 @@ class Epub():
                 body = html.fromstring(page.data)
                 i.append(body)
         epub_page.write(self.dir + "EPUB/pages/" + uid + ".xhtml")
-        self.allpages.append(page.title)
+        self.allpages.append([page.title, uid])
 
-        def add_to_toc(node, page, uid):
+        def add_to_toc(node, page):
             if node is None:
                 node = self.toc.find("navMap")
-            navpoint = etree.SubElement(node, "navPoint",
-                                        id=uid,
-                                        playOrder=uid[-4:].lstrip("0"))
+            uid = "page_" + str(len(self.allpages)).zfill(4)
+            navpoint = etree.SubElement(node, "navPoint", id=uid,
+                                        playOrder=str(len(self.allpages)))
             navlabel = etree.SubElement(navpoint, "navLabel")
             etree.SubElement(navlabel, "text").text = page.title
             etree.SubElement(navpoint, "content", src=uid + ".xhtml")
             return navpoint
-        new_node = add_to_toc(node, page, uid)
+        new_node = add_to_toc(node, page)
         for i in page.yield_children():
             self.add_page(i, new_node)
 
     def save(self, file):
-        tree = etree.ElementTree(self.toc)
-        toc_xml = etree.tostring(tree, xml_declaration=True, encoding="utf-8",
-                                 pretty_print=True).decode()
+        toc_tree = etree.ElementTree(self.toc)
+        toc_tree.write(self.dir + "EPUB/toc.ncx", xml_declaration=True,
+                       encoding="utf-8", pretty_print=True)
+        #building the spine
+        content = etree.Element("package", version="3.0",
+                                xmlns="http://www.idpf.org/2007/opf",
+                                prefix="rendition: http://www.ipdf.org/"
+                                "vocab/rendition/#",
+                                **{"unique-identifier": "id"})
+        nsmap = {"dc": "http://purl.org/dc/elements/1.1/",
+                 "opf": "http://www.idpf.org/2007/opf"}
+        metadata = etree.SubElement(content, "metadata", nsmap=nsmap)
+        etree.SubElement(metadata, "meta", property="dcterms:modified"
+                         ).text = time.strftime("%Y-%m-%dT%H:%M:%SZ")
+        etree.SubElement(metadata, "{http://purl.org/dc/elements/1.1/}title"
+                         ).text = self.title
+        manifest = etree.SubElement(content, "manifest")
+        etree.SubElement(manifest, "item", href="style/stylesheet.css",
+                         id="stylesheet", **{"media-type": "text/css"})
+        for i in self.allpages:
+            etree.SubElement(manifest, "item", href=i[1] + ".xhtml", id=i[0],
+                             **{"media-type": "application/xhtml+xml"})
+        etree.SubElement(manifest, "item", href="toc.ncx", id="toc",
+                         **{"media-type": "application/x-dtbncx+xml"})
+        spine = etree.SubElement(content, "spine", toc="ncx")
+        for i in self.allpages:
+            etree.SubElement(spine, "itemref", idref=i[0])
+        con_tree = etree.ElementTree(content)
+        con_tree.write(self.dir + "EPUB/content.opf", xml_declaration=True,
+                       encoding="utf-8", pretty_print=True)
 
     def add_cover(self, file):
         pass
 
+
 def yield_pages():
+    return
     def urls_by_tag(tag):
         base = "http://www.scp-wiki.net/system:page-tags/tag/" + tag
         soup = BeautifulSoup(urlopen(base))
@@ -345,8 +375,6 @@ def yield_pages():
 
 
 def main():
-    with open("stylesheet.css", "r") as F:
-        style = F.read()
     book = Epub("SCP Foundation")
     pages_intro = []
     pages_outro = []
@@ -370,7 +398,7 @@ def main():
                 if text == k.find("navLabel").find("text").text:
                     return k
         for c in i.chapter.split("/"):
-            if not c in book.allpages:
+            if not c in [i[0] for i in book.allpages]:
                 print(c)
                 p = Page()
                 p.title = c
