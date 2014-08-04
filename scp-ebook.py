@@ -290,7 +290,9 @@ class Epub():
         spine = self.templates["content"]
         for i in spine.getroot().iter():
             if i.tag.endswith("meta"):
-                i.text = time.strftime("%Y-%m-%dT%H:%M:%SZ")
+                if ("property" in i.attrib and
+                        i.attrib["property"] == "dcterms:modified"):
+                    i.text = time.strftime("%Y-%m-%dT%H:%M:%SZ")
             elif i.tag.endswith("title"):
                 i.text = self.title
             elif i.tag.endswith("manifest"):
@@ -312,6 +314,7 @@ class Epub():
         with open(self.dir + "mimetype", "w") as F:
             F.write("application/epub+zip")
         shutil.copy("stylesheet.css", self.dir)
+        shutil.copy("cover.png", self.dir)
         shutil.make_archive("test.epub", "zip", self.dir)
         shutil.move("test.epub.zip", "test.epub")
 
