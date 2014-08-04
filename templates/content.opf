@@ -1,13 +1,1 @@
-<?xml version='1.0' encoding='UTF-8'?>
-<package prefix="rendition: http://www.ipdf.org/vocab/rendition/#" unique-identifier="id" version="3.0" xmlns="http://www.idpf.org/2007/opf">
-  <metadata xmlns:opf="http://www.idpf.org/2007/opf" xmlns:dc="http://purl.org/dc/elements/1.1/">
-    <meta property="dcterms:modified"></meta>
-    <dc:title></dc:title>
-  </metadata>
-  <manifest>
-    <item href="stylesheet.css" id="stylesheet" media-type="text/css"/>
-    <item href="toc.ncx" id="toc" media-type="application/x-dtbncx+xml"/>
-  </manifest>
-  <spine toc="ncx">
-  </spine>
-</package>
+<?xml version='1.0' encoding='UTF-8'?><package prefix="rendition: http://www.ipdf.org/vocab/rendition/#" unique-identifier="id" version="3.0" xmlns="http://www.idpf.org/2007/opf"><metadata xmlns:opf="http://www.idpf.org/2007/opf" xmlns:dc="http://purl.org/dc/elements/1.1/"><meta property="dcterms:modified"></meta><dc:title></dc:title></metadata><manifest><item href="stylesheet.css" id="stylesheet" media-type="text/css"/><item href="toc.ncx" id="toc" media-type="application/x-dtbncx+xml"/></manifest><spine toc="ncx"></spine></package>
