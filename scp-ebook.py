@@ -22,18 +22,8 @@ class Page():
         self.url = url
         self.tags = []
         if url is not None:
-                self.scrape()
-                self.cook()
-        return
-
-    def __eq__(self, other):
-        if isinstance(other, self.__class__):
-            return self.__dict__ == other.__dict__
-        else:
-            return False
-
-    def __ne__(self, other):
-        return not self.__eq__(other)
+            self.scrape()
+            self.cook()
 
     def scrape(self):
         '''Scrape the contents of the given url.'''
@@ -64,13 +54,11 @@ class Page():
             self.title = None
             self.data = None
             return
-        self.cook_meta()    # must be cooked first
-        self.cook_title()
-        self.cook_data()
-        return
-
-    def cook_title(self):
         soup = BeautifulSoup(self.soup)
+        # meta
+        tags = [a.string for a in soup.select("div.page-tags a")]
+        self.tags = tags
+        # title
         if soup.select("#page-title"):
             title = soup.select("#page-title")[0].text.strip()
         else:
@@ -84,7 +72,7 @@ class Page():
                               "http://www.scp-wiki.net/scp-series-2",
                               "http://www.scp-wiki.net/scp-series-3"]
                 for u in index_urls:
-                    s = BeautifulSoup(urlopen(u))
+                    s = BeautifulSoup(Page(u).soup)
                     entries = s.select("ul li")
                     for e in entries:
                         if re.match(".*>SCP-[0-9]*<.*", str(e)):
@@ -92,37 +80,24 @@ class Page():
                             Page.scp_index[i[0]] = i[1]
             title = title + ": " + Page.scp_index["SCP-" + title[4:]]
         self.title = title
-        return self
-
-    def cook_data(self):
-        soup = BeautifulSoup(self.soup)
+        # body
         if not soup.select("#page-content"):
             self.data = None
-            return self
+            return
         data = soup.select("#page-content")[0]
-        # remove the rating module
-        for i in data.select("div.page-rate-widget-box"):
-            i.decompose()
-        #remove the image block
-        for i in data.select("div.scp-image-block"):
-            i.decompose()
+        garbage = ["div.page-rate-widget-box", "div.scp-image-block", "img"]
+        [k.decompose() for e in garbage for k in data.select(e)]
         for i in data.select("table"):
             if i.select("img"):
                 i.decompose()
-        for i in data.select("img"):
-            i.decompose()
         # tab-views
         for i in data.select("div.yui-navset"):
-            wraper = soup.new_tag("div")
-            wraper["class"] = "tabview"
+            wraper = soup.new_tag("div", **{"class": "tabview"})
             titles = [a.text for a in i.select("ul.yui-nav em")]
             tabs = i.select("div.yui-content > div")
             for k in tabs:
-                k["class"] = "tabview-tab"
-                del(k["id"])
-                del(k["style"])
-                tab_title = soup.new_tag("div")
-                tab_title["class"] = "tab-title"
+                k.attrs = {"class": "tabview-tab"}
+                tab_title = soup.new_tag("div", **{"class": "tab-title"})
                 tab_title.string = titles[tabs.index(k)]
                 k.insert(0, tab_title)
                 wraper.append(k)
@@ -138,12 +113,10 @@ class Page():
         for i in data.select("div.collapsible-block"):
             link_text = i.select("a.collapsible-block-link")[0].text
             content = i.select("div.collapsible-block-content")[0]
-            content["class"] = "col-content"
-            col = soup.new_tag("div")
-            col["class"] = "col"
+            content["class"] = "collaps-content"
+            col = soup.new_tag("div", **{"class": "collapsible"})
             content = content.wrap(col)
-            col_title = soup.new_tag("div")
-            col_title["class"] = "col-title"
+            col_title = soup.new_tag("div", **{"class": "collaps-title"})
             col_title.string = link_text
             content.div.insert_before(col_title)
             i.replace_with(content)
@@ -157,21 +130,11 @@ class Page():
             i.name = "div"
             i["class"] = "quote"
         #add title to the page
-        #if page["part"] == "scp":
-        data = "<p class='scp-title'>" + self.title + "</p>" + str(data)
-        #else:
-        #  page["content"] = "<p class='tale-title'>" +
-        #           str(page["title"]) + "</p>"
-        #page["content"] += "".join([str(i) for i in soup.children])
+        if "scp" in self.tags:
+            data = "<p class='scp-title'>" + self.title + "</p>" + str(data)
+        else:
+            data = "<p class='tale-title'>" + self.title + "</p>" + str(data)
         self.data = data
-        return self
-
-    def cook_meta(self):
-        #this will in the future also retrieve the author, posting date, etc.
-        soup = BeautifulSoup(self.soup)
-        tags = [a.string for a in soup.select("div.page-tags a")]
-        self.tags = tags
-        return self
 
     def yield_children(self):
         def links(self):
@@ -179,6 +142,8 @@ class Page():
             soup = BeautifulSoup(self.soup)
             for a in soup.select("#page-content a"):
                 if not a.has_attr("href") or a["href"][0] != "/":
+                    # this whole section up to 'continue' is for
+                    # debug purposes only, can be deleted in the final version
                     if a.has_attr("href"):
                         if (a["href"] != "javascript:;" and a["href"][0] != "#"
                             and re.search("scp-wiki", a["href"])
@@ -321,8 +286,8 @@ class Epub():
 
 def yield_pages():
     def urls_by_tag(tag):
-        base = "http://www.scp-wiki.net/system:page-tags/tag/" + tag
-        soup = BeautifulSoup(urlopen(base))
+        p = Page("http://www.scp-wiki.net/system:page-tags/tag/" + tag)
+        soup = BeautifulSoup(p.soup)
         urls = ["http://www.scp-wiki.net" + a["href"] for a in
                 soup.select("""div.pages-list
                             div.pages-list-item div.title a""")]
@@ -337,7 +302,7 @@ def yield_pages():
     scp_main = sorted(scp_main, key=natural_key)
     scp_blocks = [[i for i in scp_main if (int(i.split("-")[-1]) // 100 == n)]
                   for n in range(30)]
-    for b in scp_blocks[:1]:
+    for b in scp_blocks[16:17]:
         b_name = "SCP Database/Chapter " + str(scp_blocks.index(b) + 1)
         for url in b:
             p = Page(url)
@@ -398,7 +363,7 @@ def main():
                 p.data = "<div></div>"
                 book.add_page(p, node_with_text(c_up))
             c_up = c
-        print(i.title)
+        #print(i.title)
         book.add_page(i, node_with_text(c_up))
     for p in pages_outro:
         book.add_page(p)
