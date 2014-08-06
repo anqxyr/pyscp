@@ -56,8 +56,7 @@ class Page():
             return
         soup = BeautifulSoup(self.soup)
         # meta
-        tags = [a.string for a in soup.select("div.page-tags a")]
-        self.tags = tags
+        self.tags = [a.string for a in soup.select("div.page-tags a")]
         # title
         if soup.select("#page-title"):
             title = soup.select("#page-title")[0].text.strip()
@@ -85,11 +84,10 @@ class Page():
             self.data = None
             return
         data = soup.select("#page-content")[0]
+        [i.decompose() for i in data.select("table") if i.select("img")]
         garbage = ["div.page-rate-widget-box", "div.scp-image-block", "img"]
         [k.decompose() for e in garbage for k in data.select(e)]
-        for i in data.select("table"):
-            if i.select("img"):
-                i.decompose()
+        # tables
         # tab-views
         for i in data.select("div.yui-navset"):
             wraper = soup.new_tag("div", **{"class": "tabview"})
@@ -148,8 +146,8 @@ class Page():
                         if (a["href"] != "javascript:;" and a["href"][0] != "#"
                             and re.search("scp-wiki", a["href"])
                                 and not re.search("local--files", a["href"])):
-                            print("bad link: \t\t" + a["href"] + "\ton page " +
-                                  self.url)
+                            print("bad link on page " + self.url + "\t(" +
+                                  a["href"] + ")")
                     continue
                 url = "http://www.scp-wiki.net" + a["href"]
                 url = url.rstrip("|")
@@ -168,8 +166,7 @@ class Page():
         if any(i in self.tags for i in ["scp", "splash"]):
             mpages = [i for i in lpages if
                       any(k in i.tags for k in ["supplement", "splash"])]
-            for p in mpages:
-                    yield p
+            yield from mpages
         if "hub" in self.tags and any(i in self.tags
                                       for i in ["tale", "goi2014"]):
             mpages = [i for i in lpages if any(k in i.tags for k in
@@ -186,12 +183,9 @@ class Page():
                         return True
                 return False
             if any(backlinks(self, p) for p in mpages):
-                for p in mpages:
-                    if backlinks(self, p):
-                        yield p
+                yield from [p for p in mpages if backlinks(self, p)]
             else:
-                for p in mpages:
-                        yield p
+                yield from mpages
 
 
 class Epub():
@@ -244,8 +238,7 @@ class Epub():
             etree.SubElement(navpoint, "content", src=uid + ".xhtml")
             return navpoint
         new_node = add_to_toc(node, page, uid)
-        for i in page.yield_children():
-            self.add_page(i, new_node)
+        [self.add_page(i, new_node) for i in page.yield_children()]
 
     def save(self, file):
         self.toc.write(self.dir + "toc.ncx", xml_declaration=True,
@@ -302,13 +295,12 @@ def yield_pages():
     scp_main = sorted(scp_main, key=natural_key)
     scp_blocks = [[i for i in scp_main if (int(i.split("-")[-1]) // 100 == n)]
                   for n in range(30)]
-    for b in scp_blocks[16:17]:
+    for b in scp_blocks:
         b_name = "SCP Database/Chapter " + str(scp_blocks.index(b) + 1)
         for url in b:
             p = Page(url)
             p.chapter = b_name
             yield p
-    return
 
     def quick_yield(tags, chapter_name):
         L = [urls_by_tag(i) for i in tags if type(i) == str]
@@ -319,17 +311,11 @@ def yield_pages():
             p = Page(url)
             p.chapter = chapter_name
             yield p
-    for p in quick_yield(["joke", "scp"], "SCP Database/Joke Articles"):
-        yield p
-    for p in quick_yield(["explained", "scp"],
-                         "SCP Database/Explained Phenomena"):
-        yield p
-    #collecting canon and tale series hubs
-    for p in quick_yield(["hub", ["tale", "goi2014"]], "Canons and Series"):
-        yield p
-    #collecting standalone tales
-    for p in quick_yield(["tale"], "Assorted Tales"):
-        yield p
+    yield from quick_yield(["joke", "scp"], "SCP Database/Joke Articles")
+    yield from quick_yield(["explained", "scp"],
+                           "SCP Database/Explained Phenomena")
+    yield from quick_yield(["hub", ["tale", "goi2014"]], "Canons and Series")
+    yield from quick_yield(["tale"], "Assorted Tales")
 
 
 def main():
@@ -346,8 +332,7 @@ def main():
                     pages_intro.append(p)
                 else:
                     pages_outro.append(p)
-    for p in pages_intro:
-        book.add_page(p)
+    [book.add_page(p) for p in pages_intro]
     for i in yield_pages():
         c_up = None
 
@@ -365,8 +350,7 @@ def main():
             c_up = c
         #print(i.title)
         book.add_page(i, node_with_text(c_up))
-    for p in pages_outro:
-        book.add_page(p)
+    [book.add_page(p) for p in pages_outro]
     book.save("test.epub")
 
 main()
