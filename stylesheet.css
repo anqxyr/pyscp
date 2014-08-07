@@ -52,22 +52,28 @@
         text-align: center;
         }
     table {
-                border-bottom: 1px solid #999;
-                border-collapse: separate;
-                border-right: 1px solid #999;
-                border-spacing: 0;
+        border-bottom: 1px solid #999;
+        border-collapse: separate;
+        border-right: 1px solid #999;
+        border-spacing: 0;
         }
     table th {
-                background-color: #e0e0e0;
+        background-color: #e0e0e0;
         }
     table th, table td {
-                border-left: 1px solid #999;
-                border-top: 1px solid #999;
-                max-width: 1600px;
-                overflow: hidden;
-                padding: 10px;
-                page-break-inside: avoid;
+        border-left: 1px solid #999;
+        border-top: 1px solid #999;
+        max-width: 1600px;
+        overflow: hidden;
+        padding: 10px;
+        page-break-inside: avoid;
         }
+    .intro {
+        font-size: 130%;
+    }
+    .sign {
+        text-align: center;
+    }
     * {
         font-family: "HelveticaNeue-Light", "Helvetica Neue Light",
         "Helvetica Neue", Helvetica, Arial, "Lucida Grande", sans-serif;
