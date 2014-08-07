@@ -9,6 +9,7 @@ import os
 import shutil
 import copy
 import time
+import requests
 
 
 class Page():
@@ -27,26 +28,41 @@ class Page():
 
     def scrape(self):
         '''Scrape the contents of the given url.'''
-        url_end = re.search("/[^/]*$", self.url).group()[1:]
-        if url_end == "":
-            self.soup = None
-            return
-        path = "data/" + url_end
-        if os.path.isfile(path):
-            with open(path, "r") as F:
-                self.soup = (F.read())
-        else:
+        def cached(path, scrape_func):
+            if os.path.isfile(path):
+                with open(path, "r") as F:
+                    return F.read()
+            else:
+                data = scrape_func()
+                with open(path, "w") as F:
+                    F.write(data)
+                return data
+        def scrape_page_body():
             print("downloading: \t" + self.url)
             try:
                 soup = BeautifulSoup(urlopen(self.url))
             except HTTPError:
-                self.soup = None
-                with open(path, "w") as F:
-                    F.write("")
-                return
-            self.soup = str(soup)
-            with open(path, "w") as F:
-                F.write(str(soup))
+                return None
+            return str(soup)
+        def scrape_history():
+            print("d-ing history: \t" + self.url)
+            pageid = re.search("pageId = ([^;]*);", self.soup).group(1)
+            headers = {"Content-Type": "application/x-www-form-urlencoded;",
+                       "Cookie": "wikidot_token7=123456;"}
+            payload = ("page=1&perpage=1000&page_id=" + pageid +
+                       "&moduleName=history%2FPageRevisionListModule"
+                       "&wikidot_token7=123456")
+            data = requests.post("http://www.scp-wiki.net/ajax-module-"
+                                         "connector.php", data=payload,
+                                         headers=headers).json()["body"]
+            return data
+        cfile = re.search("/[^/]*$", self.url).group()[1:]
+        if cfile == "":
+            self.soup = None
+            return
+        self.soup = cached("data/" + cfile, scrape_page_body)
+        self.history = cached("data/history/" + cfile, scrape_history)
+
 
     def cook(self):
         '''Cook the soup, retrieve title, data, and tags'''
@@ -57,6 +73,8 @@ class Page():
         soup = BeautifulSoup(self.soup)
         # meta
         self.tags = [a.string for a in soup.select("div.page-tags a")]
+        self.author = BeautifulSoup(self.history
+                                    ).select("tr")[-1].select("td")[-3].text
         # title
         if soup.select("#page-title"):
             title = soup.select("#page-title")[0].text.strip()
@@ -129,7 +147,7 @@ class Page():
             i["class"] = "quote"
         #add title to the page
         if "scp" in self.tags:
-            data = "<p class='scp-title'>" + self.title + "</p>" + str(data)
+            data = "<p class='scp-title'>" + self.title + " (" + self.author + ")</p>" + str(data)
         else:
             data = "<p class='tale-title'>" + self.title + "</p>" + str(data)
         self.data = data
@@ -295,7 +313,7 @@ def yield_pages():
     scp_main = sorted(scp_main, key=natural_key)
     scp_blocks = [[i for i in scp_main if (int(i.split("-")[-1]) // 100 == n)]
                   for n in range(30)]
-    for b in scp_blocks:
+    for b in scp_blocks[:1]:
         b_name = "SCP Database/Chapter " + str(scp_blocks.index(b) + 1)
         for url in b:
             p = Page(url)
@@ -311,11 +329,11 @@ def yield_pages():
             p = Page(url)
             p.chapter = chapter_name
             yield p
-    yield from quick_yield(["joke", "scp"], "SCP Database/Joke Articles")
-    yield from quick_yield(["explained", "scp"],
-                           "SCP Database/Explained Phenomena")
-    yield from quick_yield(["hub", ["tale", "goi2014"]], "Canons and Series")
-    yield from quick_yield(["tale"], "Assorted Tales")
+    # yield from quick_yield(["joke", "scp"], "SCP Database/Joke Articles")
+    # yield from quick_yield(["explained", "scp"],
+    #                        "SCP Database/Explained Phenomena")
+    # yield from quick_yield(["hub", ["tale", "goi2014"]], "Canons and Series")
+    # yield from quick_yield(["tale"], "Assorted Tales")
 
 
 def main():
