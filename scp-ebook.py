@@ -22,6 +22,7 @@ class Page():
     def __init__(self, url=None):
         self.url = url
         self.tags = []
+        self.author = None
         if url is not None:
             self.scrape()
             self.cook()
@@ -37,6 +38,7 @@ class Page():
                 with open(path, "w") as F:
                     F.write(data)
                 return data
+
         def scrape_page_body():
             print("downloading: \t" + self.url)
             try:
@@ -44,6 +46,7 @@ class Page():
             except HTTPError:
                 return None
             return str(soup)
+
         def scrape_history():
             print("d-ing history: \t" + self.url)
             pageid = re.search("pageId = ([^;]*);", self.soup).group(1)
@@ -53,8 +56,8 @@ class Page():
                        "&moduleName=history%2FPageRevisionListModule"
                        "&wikidot_token7=123456")
             data = requests.post("http://www.scp-wiki.net/ajax-module-"
-                                         "connector.php", data=payload,
-                                         headers=headers).json()["body"]
+                                 "connector.php", data=payload,
+                                 headers=headers).json()["body"]
             return data
         cfile = re.search("/[^/]*$", self.url).group()[1:]
         if cfile == "":
@@ -62,7 +65,6 @@ class Page():
             return
         self.soup = cached("data/" + cfile, scrape_page_body)
         self.history = cached("data/history/" + cfile, scrape_history)
-
 
     def cook(self):
         '''Cook the soup, retrieve title, data, and tags'''
@@ -147,12 +149,12 @@ class Page():
             i["class"] = "quote"
         #add title to the page
         if "scp" in self.tags:
-            data = "<p class='scp-title'>" + self.title + " (" + self.author + ")</p>" + str(data)
+            data = "<p class='scp-title'>" + self.title + "</p>" + str(data)
         else:
             data = "<p class='tale-title'>" + self.title + "</p>" + str(data)
         self.data = data
 
-    def yield_children(self):
+    def list_children(self):
         def links(self):
             links = []
             soup = BeautifulSoup(self.soup)
@@ -175,7 +177,7 @@ class Page():
             return links
 
         if not any(i in self.tags for i in ["scp", "hub", "splash"]):
-            return
+            return []
         lpages = []
         for url in links(self):
             p = Page(url)
@@ -184,7 +186,7 @@ class Page():
         if any(i in self.tags for i in ["scp", "splash"]):
             mpages = [i for i in lpages if
                       any(k in i.tags for k in ["supplement", "splash"])]
-            yield from mpages
+            return mpages
         if "hub" in self.tags and any(i in self.tags
                                       for i in ["tale", "goi2014"]):
             mpages = [i for i in lpages if any(k in i.tags for k in
@@ -201,9 +203,9 @@ class Page():
                         return True
                 return False
             if any(backlinks(self, p) for p in mpages):
-                yield from [p for p in mpages if backlinks(self, p)]
+                return [p for p in mpages if backlinks(self, p)]
             else:
-                yield from mpages
+                return mpages
 
 
 class Epub():
@@ -221,7 +223,7 @@ class Epub():
         for i in os.listdir("templates"):
             self.templates[i.split(".")[0]] = etree.parse(os.getcwd() +
                                                           "/templates/" + i)
-        self.allpages = {}
+        self.allpages = []
         #pre-building toc
         toc = self.templates["toc"]
         for i in toc.getroot().iter():
@@ -231,7 +233,7 @@ class Epub():
 
     def add_page(self, page, node=None):
         #print(page.title)
-        if page.title in self.allpages.values():
+        if page.title in [i["title"] for i in self.allpages]:
             return
         n = len(self.allpages)
         uid = "page_" + str(n).zfill(4)
@@ -243,7 +245,8 @@ class Epub():
                 body = html.fromstring(page.data)
                 i.append(body)
         epub_page.write(self.dir + uid + ".xhtml")
-        self.allpages[uid] = page.title
+        self.allpages.append({"title": page.title, "id": uid,
+                              "author": page.author, "url": page.url})
 
         def add_to_toc(node, page, uid):
             if node is None:
@@ -256,13 +259,14 @@ class Epub():
             etree.SubElement(navpoint, "content", src=uid + ".xhtml")
             return navpoint
         new_node = add_to_toc(node, page, uid)
-        [self.add_page(i, new_node) for i in page.yield_children()]
+        [self.add_page(i, new_node) for i in page.list_children()]
 
     def save(self, file):
         self.toc.write(self.dir + "toc.ncx", xml_declaration=True,
                        encoding="utf-8", pretty_print=True)
         #building the spine
         spine = self.templates["content"]
+        self.allpages.sort(key=lambda k: k["id"])
         for i in spine.getroot().iter():
             if i.tag.endswith("meta"):
                 if ("property" in i.attrib and
@@ -271,14 +275,14 @@ class Epub():
             elif i.tag.endswith("title"):
                 i.text = self.title
             elif i.tag.endswith("manifest"):
-                for k in sorted(self.allpages):
+                for k in self.allpages:
                     etree.SubElement(i, "item",
-                                     href=k + ".xhtml", id=self.allpages[k],
+                                     href=k["id"] + ".xhtml", id=k["title"],
                                      **{"media-type":
                                         "application/xhtml+xml"})
             elif i.tag.endswith("spine"):
-                for k in sorted(self.allpages):
-                    etree.SubElement(i, "itemref", idref=self.allpages[k])
+                for k in self.allpages:
+                    etree.SubElement(i, "itemref", idref=k["title"])
         spine.write(self.dir + "content.opf", xml_declaration=True,
                     encoding="utf-8", pretty_print=True)
         #other necessary files
@@ -319,6 +323,7 @@ def yield_pages():
             p = Page(url)
             p.chapter = b_name
             yield p
+    return
 
     def quick_yield(tags, chapter_name):
         L = [urls_by_tag(i) for i in tags if type(i) == str]
@@ -329,11 +334,11 @@ def yield_pages():
             p = Page(url)
             p.chapter = chapter_name
             yield p
-    # yield from quick_yield(["joke", "scp"], "SCP Database/Joke Articles")
-    # yield from quick_yield(["explained", "scp"],
-    #                        "SCP Database/Explained Phenomena")
-    # yield from quick_yield(["hub", ["tale", "goi2014"]], "Canons and Series")
-    # yield from quick_yield(["tale"], "Assorted Tales")
+    #yield from quick_yield(["joke", "scp"], "SCP Database/Joke Articles")
+    #yield from quick_yield(["explained", "scp"],
+    #                       "SCP Database/Explained Phenomena")
+    yield from quick_yield(["hub", ["tale", "goi2014"]], "Canons and Series")
+    #yield from quick_yield(["tale"], "Assorted Tales")
 
 
 def main():
@@ -359,7 +364,7 @@ def main():
                 if text == k.find("navLabel").find("text").text:
                     return k
         for c in i.chapter.split("/"):
-            if not c in book.allpages.values():
+            if not c in [i["title"] for i in book.allpages]:
                 print(c)
                 p = Page()
                 p.title = c
@@ -368,7 +373,16 @@ def main():
             c_up = c
         #print(i.title)
         book.add_page(i, node_with_text(c_up))
-    [book.add_page(p) for p in pages_outro]
+    #[book.add_page(p) for p in pages_outro]
+    attrib = Page()
+    attrib.title = "Acknowledgments and Attributions"
+    attrib.data = ""
+    for i in sorted(book.allpages, key=lambda k: k["id"]):
+        if i["author"] is not None:
+            attrib.data += "<p><strong>" + i["title"] + "</strong> (" +\
+                           i["url"] + ") was written by <strong>" +\
+                           i["author"] + "</strong>."
+    book.add_page(attrib)
     book.save("test.epub")
 
 main()
