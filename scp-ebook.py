@@ -35,8 +35,9 @@ class Page():
                     return F.read()
             else:
                 data = scrape_func()
-                with open(path, "w") as F:
-                    F.write(data)
+                if data is not None:
+                    with open(path, "w") as F:
+                        F.write(data)
                 return data
 
         def scrape_page_body():
@@ -49,16 +50,24 @@ class Page():
 
         def scrape_history():
             print("d-ing history: \t" + self.url)
-            pageid = re.search("pageId = ([^;]*);", self.soup).group(1)
+            pageid = re.search("pageId = ([^;]*);", self.soup)
+            if pageid is not None:
+                pageid = pageid.group(1)
+            else:
+                return None
             headers = {"Content-Type": "application/x-www-form-urlencoded;",
                        "Cookie": "wikidot_token7=123456;"}
             payload = ("page=1&perpage=1000&page_id=" + pageid +
                        "&moduleName=history%2FPageRevisionListModule"
                        "&wikidot_token7=123456")
-            data = requests.post("http://www.scp-wiki.net/ajax-module-"
-                                 "connector.php", data=payload,
-                                 headers=headers).json()["body"]
-            return data
+            try:
+                data = requests.post("http://www.scp-wiki.net/ajax-module-"
+                                     "connector.php", data=payload,
+                                     headers=headers).json()["body"]
+                return data
+            except Exception as e:
+                print(str(e))
+                return None
         cfile = re.search("/[^/]*$", self.url).group()[1:]
         if cfile == "":
             self.soup = None
@@ -75,8 +84,9 @@ class Page():
         soup = BeautifulSoup(self.soup)
         # meta
         self.tags = [a.string for a in soup.select("div.page-tags a")]
-        self.author = BeautifulSoup(self.history
-                                    ).select("tr")[-1].select("td")[-3].text
+        if self.history is not None:
+            self.author = BeautifulSoup(self.history)\
+                          .select("tr")[-1].select("td")[-3].text
         # title
         if soup.select("#page-title"):
             title = soup.select("#page-title")[0].text.strip()
@@ -168,6 +178,8 @@ class Page():
                                 and not re.search("local--files", a["href"])):
                             print("bad link on page " + self.url + "\t(" +
                                   a["href"] + ")")
+                    continue
+                if a["href"][-4:] in [".png", ".jpg", ".gif"]:
                     continue
                 url = "http://www.scp-wiki.net" + a["href"]
                 url = url.rstrip("|")
@@ -317,7 +329,7 @@ def yield_pages():
     scp_main = sorted(scp_main, key=natural_key)
     scp_blocks = [[i for i in scp_main if (int(i.split("-")[-1]) // 100 == n)]
                   for n in range(30)]
-    for b in scp_blocks[:1]:
+    for b in scp_blocks[2:]:
         b_name = "SCP Database/Chapter " + str(scp_blocks.index(b) + 1)
         for url in b:
             p = Page(url)
