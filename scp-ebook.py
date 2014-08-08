@@ -39,7 +39,6 @@ class Page():
                     with open(path, "w") as F:
                         F.write(data)
                 return data
-
         def scrape_page_body():
             print("downloading: \t" + self.url)
             try:
@@ -47,7 +46,6 @@ class Page():
             except HTTPError:
                 return None
             return str(soup)
-
         def scrape_history():
             print("d-ing history: \t" + self.url)
             pageid = re.search("pageId = ([^;]*);", self.soup)
@@ -66,7 +64,7 @@ class Page():
                                      headers=headers).json()["body"]
                 return data
             except Exception as e:
-                print(str(e))
+                print("ERROR:" + str(e))
                 return None
         cfile = re.search("/[^/]*$", self.url).group()[1:]
         if cfile == "":
@@ -187,7 +185,6 @@ class Page():
                     continue
                 links.append(url)
             return links
-
         if not any(i in self.tags for i in ["scp", "hub", "splash"]):
             return []
         lpages = []
@@ -273,7 +270,7 @@ class Epub():
         new_node = add_to_toc(node, page, uid)
         [self.add_page(i, new_node) for i in page.list_children()]
 
-    def save(self, file):
+    def save(self, filename):
         self.toc.write(self.dir + "toc.ncx", xml_declaration=True,
                        encoding="utf-8", pretty_print=True)
         #building the spine
@@ -307,8 +304,8 @@ class Epub():
             F.write("application/epub+zip")
         shutil.copy("stylesheet.css", self.dir)
         shutil.copy("cover.png", self.dir)
-        shutil.make_archive("test.epub", "zip", self.dir)
-        shutil.move("test.epub.zip", "test.epub")
+        shutil.make_archive(filename, "zip", self.dir)
+        shutil.move(filename + ".zip", filename + ".epub")
 
 
 def yield_pages():
@@ -319,7 +316,6 @@ def yield_pages():
                 soup.select("""div.pages-list
                             div.pages-list-item div.title a""")]
         return urls
-
     def natural_key(s):
         re_natural = re.compile('[0-9]+|[^0-9]+')
         return [(1, int(c)) if c.isdigit() else (0, c.lower()) for c
@@ -329,14 +325,12 @@ def yield_pages():
     scp_main = sorted(scp_main, key=natural_key)
     scp_blocks = [[i for i in scp_main if (int(i.split("-")[-1]) // 100 == n)]
                   for n in range(30)]
-    for b in scp_blocks[2:]:
+    for b in scp_blocks:
         b_name = "SCP Database/Chapter " + str(scp_blocks.index(b) + 1)
         for url in b:
             p = Page(url)
             p.chapter = b_name
             yield p
-    return
-
     def quick_yield(tags, chapter_name):
         L = [urls_by_tag(i) for i in tags if type(i) == str]
         for i in [i for i in tags if type(i) == list]:
@@ -346,55 +340,63 @@ def yield_pages():
             p = Page(url)
             p.chapter = chapter_name
             yield p
-    #yield from quick_yield(["joke", "scp"], "SCP Database/Joke Articles")
-    #yield from quick_yield(["explained", "scp"],
-    #                       "SCP Database/Explained Phenomena")
+    yield from quick_yield(["joke", "scp"], "SCP Database/Joke Articles")
+    yield from quick_yield(["explained", "scp"],
+                          "SCP Database/Explained Phenomena")
     yield from quick_yield(["hub", ["tale", "goi2014"]], "Canons and Series")
-    #yield from quick_yield(["tale"], "Assorted Tales")
+    yield from quick_yield(["tale"], "Assorted Tales")
 
 
 def main():
-    book = Epub("SCP Foundation")
-    pages_intro = []
-    pages_outro = []
-    for f in [f for f in sorted(os.listdir(os.getcwd() + "/pages"))
-              if os.path.isfile(os.path.join(os.getcwd() + "/pages", f))]:
-                p = Page()
-                p.title = f[3:-6]
-                with open(os.path.join(os.getcwd() + "/pages", f)) as F:
-                    p.data = F.read()
-                if f[0] == "0":
-                    pages_intro.append(p)
-                else:
-                    pages_outro.append(p)
-    [book.add_page(p) for p in pages_intro]
+    def add_static_pages(book):
+        static_pages =[ ]
+        for xf in [i for i in sorted(os.listdir(os.getcwd() + "/pages"))]:
+            p = Page()
+            p.title = xf[3:-6]
+            with open(os.path.join(os.getcwd() + "/pages", xf)) as F:
+                p.data = F.read()
+            static_pages.append(p)
+        [book.add_page(p) for p in static_pages]
+    def add_attributions(book):
+        attrib = Page()
+        attrib.title = "Acknowledgments and Attributions"
+        attrib.data = "<div class='attrib'>"
+        for i in sorted(book.allpages, key=lambda k: k["id"]):
+            if i["author"] is not None:
+                attrib.data += "<p><strong>" + i["title"] + "</strong> (" +\
+                               i["url"] + ") was written by <strong>" +\
+                               i["author"] + "</strong>."
+        attrib.data += "</div>"
+        book.add_page(attrib)
+    def goes_in_book(page):
+        #placeholder code for a single book
+        return "SCP Foundation: Tome 1.01"
+    def node_with_text(text):
+        for k in book.toc.iter("navPoint"):
+            if text == k.find("navLabel").find("text").text:
+                return k
+    book = Epub("SCP Foundation: Tome 1.01")
+    add_static_pages(book)
     for i in yield_pages():
+        # the overrides
+        if i.url == "http://www.scp-wiki.net/scp-1047-j":
+            continue
+        if book.title != goes_in_book(i):
+            add_attributions(book)
+            book.save(book.title)
+            book = Epub(goes_in_book(i))
+            add_static_pages(book)
         c_up = None
-
-        def node_with_text(text):
-            for k in book.toc.iter("navPoint"):
-                if text == k.find("navLabel").find("text").text:
-                    return k
         for c in i.chapter.split("/"):
             if not c in [i["title"] for i in book.allpages]:
                 print(c)
                 p = Page()
                 p.title = c
-                p.data = "<div></div>"
+                p.data = "<div class='title2'>" + c + "</div>"
                 book.add_page(p, node_with_text(c_up))
             c_up = c
-        #print(i.title)
         book.add_page(i, node_with_text(c_up))
-    #[book.add_page(p) for p in pages_outro]
-    attrib = Page()
-    attrib.title = "Acknowledgments and Attributions"
-    attrib.data = ""
-    for i in sorted(book.allpages, key=lambda k: k["id"]):
-        if i["author"] is not None:
-            attrib.data += "<p><strong>" + i["title"] + "</strong> (" +\
-                           i["url"] + ") was written by <strong>" +\
-                           i["author"] + "</strong>."
-    book.add_page(attrib)
-    book.save("test.epub")
+    add_attributions(book)
+    book.save(book.title)
 
 main()
