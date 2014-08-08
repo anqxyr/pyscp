@@ -10,6 +10,7 @@ import shutil
 import copy
 import time
 import requests
+import tempfile
 
 
 class Page():
@@ -39,14 +40,18 @@ class Page():
                     with open(path, "w") as F:
                         F.write(data)
                 return data
+
         def scrape_page_body():
             print("downloading: \t" + self.url)
             try:
                 soup = BeautifulSoup(urlopen(self.url))
-            except HTTPError:
+            except Exception as e:
+                print("ERROR: " + str(e))
                 return None
             return str(soup)
         def scrape_history():
+            if self.soup is None:
+                return None
             print("d-ing history: \t" + self.url)
             pageid = re.search("pageId = ([^;]*);", self.soup)
             if pageid is not None:
@@ -64,7 +69,7 @@ class Page():
                                      headers=headers).json()["body"]
                 return data
             except Exception as e:
-                print("ERROR:" + str(e))
+                print("ERROR: " + str(e))
                 return None
         cfile = re.search("/[^/]*$", self.url).group()[1:]
         if cfile == "":
@@ -224,10 +229,7 @@ class Epub():
     def __init__(self, title):
         self.title = title
         #change to a proper temp dir later on
-        self.dir = os.getcwd() + "/ebook/"
-        if os.path.exists(self.dir):
-            shutil.rmtree(self.dir)
-        os.mkdir(self.dir)
+        self.dir = tempfile.TemporaryDirectory()
         self.templates = {}
         for i in os.listdir("templates"):
             self.templates[i.split(".")[0]] = etree.parse(os.getcwd() +
@@ -240,10 +242,10 @@ class Epub():
                 i.text = title
         self.toc = toc
 
-    def add_page(self, page, node=None):
-        #print(page.title)
-        if page.title in [i["title"] for i in self.allpages]:
+    def add_page(self, page, node=None, ancestry=[]):
+        if page.title in ancestry:
             return
+        #print(page.title)
         n = len(self.allpages)
         uid = "page_" + str(n).zfill(4)
         epub_page = copy.deepcopy(self.templates["page"])
@@ -253,7 +255,7 @@ class Epub():
             elif i.tag.endswith("body"):
                 body = html.fromstring(page.data)
                 i.append(body)
-        epub_page.write(self.dir + uid + ".xhtml")
+        epub_page.write(self.dir.name + "/" + uid + ".xhtml")
         self.allpages.append({"title": page.title, "id": uid,
                               "author": page.author, "url": page.url})
 
@@ -268,10 +270,11 @@ class Epub():
             etree.SubElement(navpoint, "content", src=uid + ".xhtml")
             return navpoint
         new_node = add_to_toc(node, page, uid)
-        [self.add_page(i, new_node) for i in page.list_children()]
+        ancestry.append(page.title)
+        [self.add_page(i, new_node, ancestry) for i in page.list_children()]
 
     def save(self, filename):
-        self.toc.write(self.dir + "toc.ncx", xml_declaration=True,
+        self.toc.write(self.dir.name + "/toc.ncx", xml_declaration=True,
                        encoding="utf-8", pretty_print=True)
         #building the spine
         spine = self.templates["content"]
@@ -292,19 +295,19 @@ class Epub():
             elif i.tag.endswith("spine"):
                 for k in self.allpages:
                     etree.SubElement(i, "itemref", idref=k["title"])
-        spine.write(self.dir + "content.opf", xml_declaration=True,
+        spine.write(self.dir.name + "/content.opf", xml_declaration=True,
                     encoding="utf-8", pretty_print=True)
         #other necessary files
         container = self.templates["container"]
-        os.mkdir(self.dir + "META-INF/")
-        container.write(self.dir + "META-INF/container.xml",
+        os.mkdir(self.dir.name + "/META-INF/")
+        container.write(self.dir.name + "/META-INF/container.xml",
                         xml_declaration=True, encoding="utf-8",
                         pretty_print=True)
-        with open(self.dir + "mimetype", "w") as F:
+        with open(self.dir.name + "/mimetype", "w") as F:
             F.write("application/epub+zip")
-        shutil.copy("stylesheet.css", self.dir)
-        shutil.copy("cover.png", self.dir)
-        shutil.make_archive(filename, "zip", self.dir)
+        shutil.copy("stylesheet.css", self.dir.name)
+        shutil.copy("cover.png", self.dir.name)
+        shutil.make_archive(filename, "zip", self.dir.name)
         shutil.move(filename + ".zip", filename + ".epub")
 
 
@@ -368,24 +371,41 @@ def main():
                                i["author"] + "</strong>."
         attrib.data += "</div>"
         book.add_page(attrib)
-    def goes_in_book(page):
-        #placeholder code for a single book
-        return "SCP Foundation: Tome 1.01"
-    def node_with_text(text):
+    def goes_in_book(previous_book, page):
+        def increment_title(old_title):
+            n = old_title[-2:]
+            n = str(int(n) + 1).zfill(2)
+            return old_title[:-2] + n
+        if ("scp" in page.tags and
+            page.chapter.split("/")[-1] in previous_book.chapters):
+                return previous_book.title
+        elif (page.chapter == "Canons and Series" and
+              previous_book.title[-4:-3] == "1"):
+                return "SCP Foundation: Tome 2.01"
+        elif (page.chapter == "Assorted Tales" and
+              previous_book.title[-4:-3] == "2"):
+                return "SCP Foundation: Tome 3.01"   
+        elif len(previous_book.allpages) < 500:
+                return previous_book.title
+        else:
+                return increment_title(previous_book.title)
+    def node_with_text(book, text):
         for k in book.toc.iter("navPoint"):
             if text == k.find("navLabel").find("text").text:
                 return k
     book = Epub("SCP Foundation: Tome 1.01")
     add_static_pages(book)
+    book.chapters = []
     for i in yield_pages():
         # the overrides
         if i.url == "http://www.scp-wiki.net/scp-1047-j":
             continue
-        if book.title != goes_in_book(i):
+        if book.title != goes_in_book(book, i):
             add_attributions(book)
             book.save(book.title)
-            book = Epub(goes_in_book(i))
+            book = Epub(goes_in_book(book, i))
             add_static_pages(book)
+            book.chapters = []
         c_up = None
         for c in i.chapter.split("/"):
             if not c in [i["title"] for i in book.allpages]:
@@ -393,9 +413,10 @@ def main():
                 p = Page()
                 p.title = c
                 p.data = "<div class='title2'>" + c + "</div>"
-                book.add_page(p, node_with_text(c_up))
+                book.add_page(p, node_with_text(book, c_up))
+                book.chapters.append(c)
             c_up = c
-        book.add_page(i, node_with_text(c_up))
+        book.add_page(i, node_with_text(book, c_up))
     add_attributions(book)
     book.save(book.title)
 
