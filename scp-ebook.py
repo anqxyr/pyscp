@@ -249,7 +249,7 @@ class Epub():
         self.toc = toc
 
     def add_page(self, page, node=None):
-        if page.title in Epub.allpages_global and page.url is not None:
+        if page.url in Epub.allpages_global:
             return
         #print(page.title)
         n = len(self.allpages)
@@ -264,7 +264,7 @@ class Epub():
         epub_page.write(self.dir.name + "/" + uid + ".xhtml")
         self.allpages.append({"title": page.title, "id": uid,
                               "author": page.author, "url": page.url})
-        Epub.allpages_global.append(page.title)
+        if page.url is not None: Epub.allpages_global.append(page.url)
 
         def add_to_toc(node, page, uid):
             if node is None:
@@ -334,12 +334,13 @@ def yield_pages():
     scp_main = sorted(scp_main, key=natural_key)
     scp_blocks = [[i for i in scp_main if (int(i.split("-")[-1]) // 100 == n)]
                   for n in range(30)]
-    for b in scp_blocks:
+    for b in scp_blocks[29:]:
         b_name = "SCP Database/Chapter " + str(scp_blocks.index(b) + 1)
         for url in b:
             p = Page(url)
             p.chapter = b_name
             yield p
+    return
     def quick_yield(tags, chapter_name):
         L = [urls_by_tag(i) for i in tags if type(i) == str]
         for i in [i for i in tags if type(i) == list]:
@@ -421,8 +422,11 @@ def main():
     book.chapters = []
     for i in yield_pages():
         # the overrides
-        if i.url == "http://www.scp-wiki.net/scp-1047-j":
-            continue
+        if i.url == "http://www.scp-wiki.net/scp-1047-j": continue
+        if i.url == "http://www.scp-wiki.net/scp-2998":
+            i.list_children = lambda: [Page(i.url + "-" + str(n))
+                                       for n in range(2,11)]
+        # end of overrides
         if book.title != goes_in_book(book, i):
             add_attributions(book, author_overrides)
             book.save(book.title)
