@@ -25,6 +25,23 @@ class Page():
         if url is not None:
             self.scrape()
             self.cook()
+        self.override()
+
+    def override(self):
+        if self.url == "http://www.scp-wiki.net/scp-1047-j": self.data = None
+        elif self.url == "http://www.scp-wiki.net/scp-2998":
+            self.list_children = lambda: [Page(i.url + "-" + str(n))
+                                          for n in range(2,11)]
+        elif self.title == "Wills And Ways":
+            x = [k for k in self.list_children() if k.title !=
+                 "Marshall, Carter and Dark Hub "]
+            self.list_children = lambda: x
+        elif self.title == "Serpent's Hand Hub":
+            x = [k for k in self.list_children() if k.title !=
+                 "Black Queen Hub"]
+            self.list_children = lambda: x
+        elif self.url == "Chicago Spirit Hub":
+            self.list_children = lambda: []
 
     def scrape(self):
         '''Scrape the contents of the given url.'''
@@ -38,7 +55,6 @@ class Page():
                     with open(path, "w") as F:
                         F.write(data)
                 return data
-
         def scrape_page_body():
             print("downloading: \t" + self.url)
             try:
@@ -65,12 +81,12 @@ class Page():
                 data = requests.post("http://www.scp-wiki.net/ajax-module-"
                                      "connector.php", data=payload,
                                      headers=headers).json()["body"]
-                return data
             except Exception as e:
                 print("ERROR: " + str(e))
                 return None
+            return data
         cfile = re.search("/[^/]*$", self.url).group()[1:]
-        if cfile == "":
+        if cfile == "": 
             self.soup = None
             return
         self.soup = cached("data/" + cfile, scrape_page_body)
@@ -171,27 +187,26 @@ class Page():
             data = "<p class='tale-title'>" + self.title + "</p>" + str(data)
         self.data = data
 
+
     def list_children(self):
         def links(self):
             links = []
             soup = BeautifulSoup(self.soup)
             for a in soup.select("#page-content a"):
-                if not a.has_attr("href") or a["href"][0] != "/":
+                if not a.has_attr("href") or a["href"][0] != "/": continue
                     # this whole section up to 'continue' is for
                     # debug purposes only, can be deleted in the final version
-                    if a.has_attr("href"):
-                        if (a["href"] != "javascript:;" and a["href"][0] != "#"
-                            and re.search("scp-wiki", a["href"])
-                                and not re.search("local--files", a["href"])):
-                            print("bad link on page " + self.url + "\t(" +
-                                  a["href"] + ")")
-                    continue
-                if a["href"][-4:] in [".png", ".jpg", ".gif"]:
-                    continue
+                    # if a.has_attr("href"):
+                    #     if (a["href"] != "javascript:;" and a["href"][0] != "#"
+                    #         and re.search("scp-wiki", a["href"])
+                    #             and not re.search("local--files", a["href"])):
+                    #         print("bad link on page " + self.url + "\t(" +
+                    #               a["href"] + ")")
+                    # continue
+                if a["href"][-4:] in [".png", ".jpg", ".gif"]: continue
                 url = "http://www.scp-wiki.net" + a["href"]
                 url = url.rstrip("|")
-                if url in links:
-                    continue
+                if url in links: continue
                 links.append(url)
             return links
         if not any(i in self.tags for i in ["scp", "hub", "splash"]):
@@ -335,12 +350,13 @@ def yield_pages():
     scp_blocks = [[i for i in scp_main if (int(i.split("-")[-1]) // 100 == n)]
                   for n in range(30)]
     for b in scp_blocks[29:]:
+        break
         b_name = "SCP Database/Chapter " + str(scp_blocks.index(b) + 1)
         for url in b:
             p = Page(url)
             p.chapter = b_name
             yield p
-    return
+    
     def quick_yield(tags, chapter_name):
         L = [urls_by_tag(i) for i in tags if type(i) == str]
         for i in [i for i in tags if type(i) == list]:
@@ -350,11 +366,17 @@ def yield_pages():
             p = Page(url)
             p.chapter = chapter_name
             yield p
-    yield from quick_yield(["joke", "scp"], "SCP Database/Joke Articles")
-    yield from quick_yield(["explained", "scp"],
-                          "SCP Database/Explained Phenomena")
-    yield from quick_yield(["hub", ["tale", "goi2014"]], "Canons and Series")
-    yield from quick_yield(["tale"], "Assorted Tales")
+    #yield from quick_yield(["joke", "scp"], "SCP Database/Joke Articles")
+    #yield from quick_yield(["explained", "scp"],
+    #                      "SCP Database/Explained Phenomena")
+    hubhubs = ["http://www.scp-wiki.net/canon-hub",
+               "http://www.scp-wiki.net/goi-contest-2014",
+               "http://www.scp-wiki.net/acidverse"]
+    nested_hubs = [i.url for k in hubhubs for i in Page(k).list_children()]
+    for i in quick_yield(["hub", ["tale", "goi2014"]], "Canons and Series"):
+        if i.url not in nested_hubs:
+            yield i
+    #yield from quick_yield(["tale"], "Assorted Tales")
 
 
 def main():
@@ -421,12 +443,6 @@ def main():
     add_static_pages(book)
     book.chapters = []
     for i in yield_pages():
-        # the overrides
-        if i.url == "http://www.scp-wiki.net/scp-1047-j": continue
-        if i.url == "http://www.scp-wiki.net/scp-2998":
-            i.list_children = lambda: [Page(i.url + "-" + str(n))
-                                       for n in range(2,11)]
-        # end of overrides
         if book.title != goes_in_book(book, i):
             add_attributions(book, author_overrides)
             book.save(book.title)
