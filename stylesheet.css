@@ -3,9 +3,14 @@
         text-align: center;
         }
     .title1-bold {
-        font-size: 200%;
+        font-size: 250%;
         font-weight: bold;
         }
+    .title2 {
+        font-size: 150%;
+        font-weight: bold;
+        text-align: center;
+    }
     .bold {
         font-weight: bold;
         }
@@ -20,14 +25,13 @@
         text-align: justify;
         }
     .quote {
-        background-color: #f4f4f4;
-        border: 1px dashed #999;
+        background-color: #fafafa;
+        border: 1px dashed #bbb;
         margin: 0.5em 5%;
         padding: 0 1em;
         }
     .collapsible {
-        background-color: #ECECEC;
-        border: 1px solid #444;
+        background-color: #fafafa;
         margin: 0.5em 5%;
         padding: 0 1em;
         }
@@ -70,9 +74,13 @@
         }
     .intro {
         font-size: 130%;
+        margin: 5em 5%;
     }
     .sign {
         text-align: center;
+    }
+    .attrib {
+        font-size: 80%;
     }
     * {
         font-family: "HelveticaNeue-Light", "Helvetica Neue Light",
