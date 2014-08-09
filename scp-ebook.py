@@ -226,6 +226,8 @@ class Epub():
 
     """"""
 
+    allpages_global = []
+
     def __init__(self, title):
         self.title = title
         #change to a proper temp dir later on
@@ -242,8 +244,8 @@ class Epub():
                 i.text = title
         self.toc = toc
 
-    def add_page(self, page, node=None, ancestry=[]):
-        if page.title in ancestry:
+    def add_page(self, page, node=None):
+        if page.title in Epub.allpages_global and page.url is not None:
             return
         #print(page.title)
         n = len(self.allpages)
@@ -258,6 +260,7 @@ class Epub():
         epub_page.write(self.dir.name + "/" + uid + ".xhtml")
         self.allpages.append({"title": page.title, "id": uid,
                               "author": page.author, "url": page.url})
+        Epub.allpages_global.append(page.title)
 
         def add_to_toc(node, page, uid):
             if node is None:
@@ -270,8 +273,7 @@ class Epub():
             etree.SubElement(navpoint, "content", src=uid + ".xhtml")
             return navpoint
         new_node = add_to_toc(node, page, uid)
-        ancestry.append(page.title)
-        [self.add_page(i, new_node, ancestry) for i in page.list_children()]
+        [self.add_page(i, new_node) for i in page.list_children()]
 
     def save(self, filename):
         self.toc.write(self.dir.name + "/toc.ncx", xml_declaration=True,
@@ -360,15 +362,27 @@ def main():
                 p.data = F.read()
             static_pages.append(p)
         [book.add_page(p) for p in static_pages]
-    def add_attributions(book):
+    def add_attributions(book, overrides):
         attrib = Page()
         attrib.title = "Acknowledgments and Attributions"
         attrib.data = "<div class='attrib'>"
         for i in sorted(book.allpages, key=lambda k: k["id"]):
-            if i["author"] is not None:
+            tail = i["url"].split("/")[-1]
+            rewrite_author = None
+            if tail in overrides:
+                if overrides[tail][:10] == ":override:":
+                    i["author"] = overrides[tail][10:]
+                else:
+                    rewrite_author = overrides[tail]
+            if i["author"] not in [None, "(account deleted)"]:
                 attrib.data += "<p><strong>" + i["title"] + "</strong> (" +\
                                i["url"] + ") was written by <strong>" +\
-                               i["author"] + "</strong>."
+                               i["author"] + "</strong>"
+                if rewrite_author is not None:
+                    attrib.data += " and rewritten by <strong>" +\
+                                   rewrite_author + "</strong>.</p>"
+                else:
+                    attrib.data += ".</p>"
         attrib.data += "</div>"
         book.add_page(attrib)
     def goes_in_book(previous_book, page):
@@ -393,6 +407,9 @@ def main():
         for k in book.toc.iter("navPoint"):
             if text == k.find("navLabel").find("text").text:
                 return k
+    author_overrides = Page("http://05command.wikidot.com/alexandra-rewrite")
+    author_overrides = {i.select("td")[0].text: i.select("td")[1].text for i in
+                        BeautifulSoup(author_overrides.soup).select("tr")}
     book = Epub("SCP Foundation: Tome 1.01")
     add_static_pages(book)
     book.chapters = []
@@ -401,7 +418,7 @@ def main():
         if i.url == "http://www.scp-wiki.net/scp-1047-j":
             continue
         if book.title != goes_in_book(book, i):
-            add_attributions(book)
+            add_attributions(book, author_overrides)
             book.save(book.title)
             book = Epub(goes_in_book(book, i))
             add_static_pages(book)
@@ -417,7 +434,7 @@ def main():
                 book.chapters.append(c)
             c_up = c
         book.add_page(i, node_with_text(book, c_up))
-    add_attributions(book)
+    add_attributions(book, author_overrides)
     book.save(book.title)
 
 main()
