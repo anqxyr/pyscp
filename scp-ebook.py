@@ -142,6 +142,12 @@ class Page():
         for i in data.select("div.collapsible-block"):
             link_text = i.select("a.collapsible-block-link")[0].text
             content = i.select("div.collapsible-block-content")[0]
+            if content.text == "":
+                content =  i.select("div.collapsible-block-unfolded")[0]
+                del(content["style"])
+                content.select("div.collapsible-block-content")[0].decompose()
+                content.select("div.collapsible-block-unfolded-link"
+                               )[0].decompose()
             content["class"] = "collaps-content"
             col = soup.new_tag("div", **{"class": "collapsible"})
             content = content.wrap(col)
