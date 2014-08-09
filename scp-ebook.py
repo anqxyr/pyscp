@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 
-from urllib.request import urlopen
-from urllib.error import HTTPError
 from bs4 import BeautifulSoup
 from lxml import etree, html
 import re
@@ -44,7 +42,7 @@ class Page():
         def scrape_page_body():
             print("downloading: \t" + self.url)
             try:
-                soup = BeautifulSoup(urlopen(self.url))
+                soup = BeautifulSoup(requests.get(self.url).text)
             except Exception as e:
                 print("ERROR: " + str(e))
                 return None
@@ -315,8 +313,8 @@ class Epub():
 
 def yield_pages():
     def urls_by_tag(tag):
-        p = Page("http://www.scp-wiki.net/system:page-tags/tag/" + tag)
-        soup = BeautifulSoup(p.soup)
+        soup = BeautifulSoup(requests.get("http://www.scp-wiki.net/system:"
+                             "page-tags/tag/" + tag).text)
         urls = ["http://www.scp-wiki.net" + a["href"] for a in
                 soup.select("""div.pages-list
                             div.pages-list-item div.title a""")]
@@ -367,22 +365,24 @@ def main():
         attrib.title = "Acknowledgments and Attributions"
         attrib.data = "<div class='attrib'>"
         for i in sorted(book.allpages, key=lambda k: k["id"]):
-            tail = i["url"].split("/")[-1]
-            rewrite_author = None
-            if tail in overrides:
-                if overrides[tail][:10] == ":override:":
-                    i["author"] = overrides[tail][10:]
-                else:
-                    rewrite_author = overrides[tail]
-            if i["author"] not in [None, "(account deleted)"]:
-                attrib.data += "<p><strong>" + i["title"] + "</strong> (" +\
-                               i["url"] + ") was written by <strong>" +\
-                               i["author"] + "</strong>"
-                if rewrite_author is not None:
-                    attrib.data += " and rewritten by <strong>" +\
-                                   rewrite_author + "</strong>.</p>"
+            def add_one(attrib, title, url, author, r=None):
+                attrib.data += "<p><b>" + title + "</b> (" + url +\
+                               ") was written by <b>" + author + "</b>"
+                if r is not None:
+                    attrib.data += " and rewritten by <b>" + r + "</b>.</p>"
                 else:
                     attrib.data += ".</p>"
+            if i["url"] is None:
+                continue
+            tail = i["url"].split("/")[-1]
+            if tail in overrides:
+                if overrides[tail][:10] == ":override:":
+                    add_one(attrib, i["title"], i["url"], overrides[tail][10:])
+                else:
+                    add_one(attrib, i["title"], i["url"], i["author"],
+                            overrides[tail])
+            elif i["author"] not in [None, "(account deleted)"]:
+                add_one(attrib, i["title"], i["url"], i["author"])
         attrib.data += "</div>"
         book.add_page(attrib)
     def goes_in_book(previous_book, page):
@@ -407,9 +407,9 @@ def main():
         for k in book.toc.iter("navPoint"):
             if text == k.find("navLabel").find("text").text:
                 return k
-    author_overrides = Page("http://05command.wikidot.com/alexandra-rewrite")
     author_overrides = {i.select("td")[0].text: i.select("td")[1].text for i in
-                        BeautifulSoup(author_overrides.soup).select("tr")}
+                        BeautifulSoup(requests.get("http://05command.wikidot."
+                        "com/alexandra-rewrite").text).select("tr")}
     book = Epub("SCP Foundation: Tome 1.01")
     add_static_pages(book)
     book.chapters = []
