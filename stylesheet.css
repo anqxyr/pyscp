@@ -82,7 +82,11 @@
     .attrib {
         font-size: 80%;
     }
+    .link {
+        font-family: monospace;
+        font-weight: bold;
+        text-decoration: underline;
+    }
     * {
-        font-family: "HelveticaNeue-Light", "Helvetica Neue Light",
-        "Helvetica Neue", Helvetica, Arial, "Lucida Grande", sans-serif;
-        }
+        font-family: "HelveticaNeue-Light", "Helvetica Neue Light", "Helvetica Neue", Helvetica, Arial, "Lucida Grande", sans-serif;
+    }

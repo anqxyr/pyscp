@@ -16,8 +16,7 @@ class Page():
     """placeholder docstring"""
 
     #titles for scp articles
-    image_whitelist = {"http://scp-wiki.wdfiles.com/local--files/scp-406/10665"
-                       "29_0ca423c3.jpg": "http://www.geograph.org.uk/profile/22761"}
+    image_whitelist = {}
     scp_index = {}
 
     def __init__(self, url=None):
@@ -33,8 +32,10 @@ class Page():
     def override(self):
         if self.url == "http://www.scp-wiki.net/scp-1047-j": self.data = None
         elif self.url == "http://www.scp-wiki.net/scp-2998":
-            self.list_children = lambda: [Page(i.url + "-" + str(n))
-                                          for n in range(2,11)]
+            x = [Page(self.url + "-" + str(n)) for n in range(2,11)]
+            for i in x:
+                i.title = "SCP-2998-" + i.url.split("-")[-1]
+            self.list_children = lambda: x
         elif self.title == "Wills And Ways":
             x = [k for k in self.list_children() if k.title !=
                  "Marshall, Carter and Dark Hub "]
@@ -89,9 +90,9 @@ class Page():
                 return None
             return data
         cfile = re.search("/[^/]*$", self.url).group()[1:]
-        if cfile == "": 
-            self.soup = None
-            return
+        if cfile == "": self.soup = None; return
+        if not os.path.exists("data/"): os.mkdir("data/")
+        if not os.path.exists("data/history"): os.mkdir("data/history")
         self.soup = cached("data/" + cfile, scrape_page_body)
         self.history = cached("data/history/" + cfile, scrape_history)
 
@@ -137,10 +138,13 @@ class Page():
         garbage = ["div.page-rate-widget-box", "div.scp-image-block"]
         [k.decompose() for e in garbage for k in data.select(e)]
         for i in data.select("img"):
+            if i.name == None: continue
+            if not i.has_attr("src"): continue
             if i["src"] not in Page.image_whitelist:
                 for k in i.parents:
                     if k.name == "table": k.decompose(); break
-                    if "class" in k and k["class"] == "scp-image-block":
+                    if k.has_attr("class") and k["class"] == "scp-image-block":
+                            print("yay")
                             k.decompose()
                             break
                 i.decompose()
@@ -186,7 +190,7 @@ class Page():
             i.replace_with(content)
         # links
         for i in data.select("a"):
-            del(i["href"])
+            #del(i["href"])
             i.name = "span"
             i["class"] = "link"
         #quote boxes
@@ -198,6 +202,8 @@ class Page():
             data = "<p class='scp-title'>" + self.title + "</p>" + str(data)
         else:
             data = "<p class='tale-title'>" + self.title + "</p>" + str(data)
+        data += "<div class='tags' style='display: none'><hr/><p>" +\
+                "</p><p>".join(self.tags) + "</p></div>"
         self.data = data
 
 
@@ -278,8 +284,8 @@ class Epub():
         self.images = {}
 
     def add_page(self, page, node=None):
-        if page.url in Epub.allpages_global:
-            return
+        if page.url in Epub.allpages_global: return
+        if page.data is None: return
         #print(page.title)
         n = len(self.allpages)
         uid = "page_" + str(n).zfill(4)
@@ -375,13 +381,13 @@ def yield_pages():
     scp_main = sorted(scp_main, key=natural_key)
     scp_blocks = [[i for i in scp_main if (int(i.split("-")[-1]) // 100 == n)]
                   for n in range(30)]
-    for b in scp_blocks[4:5]:
-        b_name = "SCP Database/Chapter " + str(scp_blocks.index(b) + 1)
+    for b in scp_blocks:
+        b_name = "SCP Database/Articles " + b[0].split("-")[-1] + "-" +\
+                 b[-1].split("-")[-1]
         for url in b:
             p = Page(url)
             p.chapter = b_name
             yield p
-    return
     
     def quick_yield(tags, chapter_name):
         L = [urls_by_tag(i) for i in tags if type(i) == str]
@@ -392,9 +398,9 @@ def yield_pages():
             p = Page(url)
             p.chapter = chapter_name
             yield p
-    #yield from quick_yield(["joke", "scp"], "SCP Database/Joke Articles")
-    #yield from quick_yield(["explained", "scp"],
-    #                      "SCP Database/Explained Phenomena")
+    yield from quick_yield(["joke", "scp"], "SCP Database/Joke Articles")
+    yield from quick_yield(["explained", "scp"],
+                         "SCP Database/Explained Phenomena")
     hubhubs = ["http://www.scp-wiki.net/canon-hub",
                "http://www.scp-wiki.net/goi-contest-2014",
                "http://www.scp-wiki.net/acidverse"]
@@ -402,7 +408,7 @@ def yield_pages():
     for i in quick_yield(["hub", ["tale", "goi2014"]], "Canons and Series"):
         if i.url not in nested_hubs:
             yield i
-    #yield from quick_yield(["tale"], "Assorted Tales")
+    yield from quick_yield(["tale"], "Assorted Tales")
 
 
 def main():
