@@ -338,6 +338,7 @@ class Epub():
         for i in self.images:
             path = "_".join([i.split("/")[-2], i.split("/")[-1]])
             if not os.path.isfile("data/images/" + path):
+                print("downloading image: " + i)
                 with open("data/images/" + path, "wb") as F:
                     shutil.copyfileobj(requests.get(i, stream=True).raw, F)
             shutil.copy("data/images/" + path, self.dir.name + "/images/")
@@ -405,6 +406,13 @@ def yield_pages():
 
 
 def main():
+    def retrieve_image_whitelist():
+        whitelist_url = "http://scpsandbox2.wikidot.com/ebook-image-whitelist"
+        soup = bs4(requests.get(whitelist_url).text)
+        results = {}
+        for i in soup.select("tr")[1:]:
+            results[i.select("td")[0].text] = i.select("td")[1].text
+        return results
     def add_static_pages(book):
         static_pages =[ ]
         for xf in [i for i in sorted(os.listdir(os.getcwd() + "/pages"))]:
@@ -468,6 +476,7 @@ def main():
         for k in book.toc.iter("navPoint"):
             if text == k.find("navLabel").find("text").text:
                 return k
+    Page.image_whitelist = retrieve_image_whitelist()
     author_overrides = {i.select("td")[0].text: i.select("td")[1].text for i in
                         bs4(requests.get("http://05command.wikidot."
                         "com/alexandra-rewrite").text).select("tr")}
