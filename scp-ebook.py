@@ -377,17 +377,24 @@ def yield_pages():
         return [(1, int(c)) if c.isdigit() else (0, c.lower()) for c
                 in re_natural.findall(s)] + [s]
     # skips
+    url_001 = "http://www.scp-wiki.net/proposals-for-scp-001"
+    for i in bs4(requests.get(url_001).text).select("#page-content")[0].select("a"):
+        url = "http://www.scp-wiki.net/" + i["href"]
+        p = Page(url)
+        p.chapter = "SCP Database/001 Proposals"
+        yield p
     scp_main = [i for i in urls_by_tag("scp") if re.match(".*scp-[0-9]*$", i)]
     scp_main = sorted(scp_main, key=natural_key)
     scp_blocks = [[i for i in scp_main if (int(i.split("-")[-1]) // 100 == n)]
                   for n in range(30)]
-    for b in scp_blocks:
+    for b in scp_blocks[:5]:
         b_name = "SCP Database/Articles " + b[0].split("-")[-1] + "-" +\
                  b[-1].split("-")[-1]
         for url in b:
             p = Page(url)
             p.chapter = b_name
             yield p
+    return
     
     def quick_yield(tags, chapter_name):
         L = [urls_by_tag(i) for i in tags if type(i) == str]
