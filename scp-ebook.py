@@ -275,7 +275,7 @@ class Epub():
             if i.tag.endswith("text"):
                 i.text = title
         self.toc = toc
-        self.images = []
+        self.images = {}
 
     def add_page(self, page, node=None):
         if page.url in Epub.allpages_global:
@@ -293,7 +293,7 @@ class Epub():
         epub_page.write(self.dir.name + "/" + uid + ".xhtml")
         for i in bs4(page.soup if hasattr(page, "soup") else "").select("img"):
             if i["src"] in Page.image_whitelist:
-                self.images.append(i["src"])
+                self.images[i["src"]] = page.title
         self.allpages.append({"title": page.title, "id": uid,
                               "author": page.author, "url": page.url})
         if page.url is not None: Epub.allpages_global.append(page.url)
@@ -437,6 +437,13 @@ def main():
                             overrides[tail])
             elif i["author"] not in [None, "(account deleted)"]:
                 add_one(attrib, i["title"], i["url"], i["author"])
+        for i in book.images:
+            if Page.image_whitelist[i] != "PUBLIC DOMAIN":
+                attrib.data += ("<p>The image " + i.split("/")[-2] + "_" + 
+                               i.split("/")[-1] + ", which appears on the page"
+                               " <b>" + book.images[i] + "</b>, is a CC image"
+                               " available at <u>" + Page.image_whitelist[i] +
+                               "</u>.</p>")
         attrib.data += "</div>"
         book.add_page(attrib)
     def goes_in_book(previous_book, page):
