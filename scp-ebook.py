@@ -398,14 +398,13 @@ def yield_pages():
     scp_main = sorted(scp_main, key=natural_key)
     scp_blocks = [[i for i in scp_main if (int(i.split("-")[-1]) // 100 == n)]
                   for n in range(30)]
-    for b in scp_blocks[29:]:
+    for b in scp_blocks:
         b_name = "SCP Database/Articles {}-{}".format(b[0].split("-")[-1],
                                                       b[-1].split("-")[-1])
         for url in b:
             p = Page(url)
             p.chapter = b_name
             yield p
-    return
 
     def quick_yield(tags, chapter_name):
         L = [urls_by_tag(i) for i in tags if type(i) == str]
@@ -416,9 +415,9 @@ def yield_pages():
             p = Page(url)
             p.chapter = chapter_name
             yield p
-    # yield from quick_yield(["joke", "scp"], "SCP Database/Joke Articles")
-    # yield from quick_yield(["explained", "scp"],
-    #                        "SCP Database/Explained Phenomena")
+    yield from quick_yield(["joke", "scp"], "SCP Database/Joke Articles")
+    yield from quick_yield(["explained", "scp"],
+                           "SCP Database/Explained Phenomena")
     hubhubs = ["http://www.scp-wiki.net/canon-hub",
                "http://www.scp-wiki.net/goi-contest-2014",
                "http://www.scp-wiki.net/acidverse"]
@@ -426,7 +425,7 @@ def yield_pages():
     for i in quick_yield(["hub", ["tale", "goi2014"]], "Canons and Series"):
         if i.url not in nested_hubs:
             yield i
-    #yield from quick_yield(["tale"], "Assorted Tales")
+    yield from quick_yield(["tale"], "Assorted Tales")
 
 
 def main():
