@@ -18,13 +18,15 @@ class Page():
     image_whitelist = {}
     #contains the titles of the SCP articles, e.g. "SCP-1511: Mobile Paradise"
     scp_index = {}
-    datadir = "/home/anqxyr/.scp-data/"
+    datadir = os.path.expanduser("~/.scp-data/")
 
     def __init__(self, url=None):
         self.url = url
         self.tags = []
+        self.images = []
         self.author = None
         self.title = None
+        self.soup = ""
         if url is not None:
             self.scrape()
             self.cook()
@@ -34,7 +36,7 @@ class Page():
         if self.url == "http://www.scp-wiki.net/scp-1047-j":
             self.data = None
         elif self.url == "http://www.scp-wiki.net/scp-2998":
-            x = [Page("{0}-{1}".format(self.url, n)) for n in range(2, 11)]
+            x = [Page("{}-{}".format(self.url, n)) for n in range(2, 11)]
             for i in x:
                 i.title = "SCP-2998-" + i.url.split("-")[-1]
             self.list_children = lambda: x
@@ -103,7 +105,7 @@ class Page():
         if not os.path.exists(Page.datadir + "history/"):
             os.mkdir(Page.datadir + "history/")
         self.soup = cached(Page.datadir + cached_file, scrape_page_body)
-        self.history = cached("{0}history/{1}".format(Page.datadir,
+        self.history = cached("{}history/{}".format(Page.datadir,
                               cached_file), scrape_history)
 
     def cook(self):
@@ -147,24 +149,21 @@ class Page():
         data = soup.select("#page-content")[0]
         garbage = ["div.page-rate-widget-box", "div.scp-image-block"]
         [k.decompose() for e in garbage for k in data.select(e)]
+        #images
         for i in data.select("img"):
-            if i.name is None:
-                continue
-            if not i.has_attr("src"):
+            if i.name is None or not i.has_attr("src"):
                 continue
             if i["src"] not in Page.image_whitelist:
                 for k in i.parents:
-                    if k.name == "table":
+                    if k.name == "table" or (k.has_attr("class") and k["class"]
+                                             == "scp-image-block"):
                         k.decompose()
                         break
-                    if k.has_attr("class") and k["class"] == "scp-image-block":
-                            print("yay")
-                            k.decompose()
-                            break
                 i.decompose()
             else:
-                i["src"] = "images/" + "_".join([i["src"].split("/")[-2],
-                                                i["src"].split("/")[-1]])
+                self.images.append(i["src"])
+                image_url = i["src"].split("/")
+                i["src"] = "images/{}_{}".format(image_url[-2], image_url[-1])
         # tables
         # tab-views
         for i in data.select("div.yui-navset"):
@@ -291,33 +290,31 @@ class Epub():
         self.images = {}
 
     def add_page(self, page, node=None):
+        #each page can only appear once in the book
         if page.url in Epub.allpages_global or page.data is None:
             return
-        n = len(self.allpages)
-        uid = "page_" + str(n).zfill(4)
         epub_page = copy.deepcopy(self.templates["page"])
-        for i in epub_page.getroot().iter():
-            if i.tag.endswith("title"):
-                i.text = page.title
-            elif i.tag.endswith("body"):
-                body = html.fromstring(page.data)
-                i.append(body)
-        epub_page.write(self.dir.name + "/" + uid + ".xhtml")
-        for i in BeautifulSoup(page.soup if hasattr(page, "soup")
-                               else "").select("img"):
-            if i["src"] in Page.image_whitelist:
-                self.images[i["src"]] = page.title
-        self.allpages.append({"title": page.title, "id": uid,
-                              "author": page.author, "url": page.url})
+        #XPath expressions are pre-generated with etree.getpath
+        #I have no clue how they work
+        epub_page.xpath("/*/*[1]/*[1]")[0].text = page.title
+        epub_page.xpath("/*/*[2]")[0].append(html.fromstring(page.data))
+        #write the page on disk
+        uid = "page_{:0>4}".format(len(self.allpages))
+        epub_page.write("{}/{}.xhtml".format(self.dir.name, uid))
+        #add the images in the page to the list of images used in the book
+        for i in page.images:
+            self.images[i] = page.title
+        #add the page to the list of all pages in the book
+        self.allpages.append({"title": page.title, "id": uid, "author":
+                              page.author, "url": page.url})
         if page.url is not None:
             Epub.allpages_global.append(page.url)
 
         def add_to_toc(node, page, uid):
             if node is None:
-                node = self.toc.getroot().find("{http://www.daisy.org/z3986/"
-                                               "2005/ncx/}navMap")
-            navpoint = etree.SubElement(node, "navPoint", id=uid,
-                                        playOrder=str(len(self.allpages)))
+                node = self.toc.xpath("/*/*[3]")[0]
+            navpoint = etree.SubElement(node, "navPoint", id=uid, playOrder=
+                                        str(len(self.allpages)))
             navlabel = etree.SubElement(navpoint, "navLabel")
             etree.SubElement(navlabel, "text").text = page.title
             etree.SubElement(navpoint, "content", src=uid + ".xhtml")
@@ -431,15 +428,15 @@ def yield_pages():
 
 
 def main():
-    def retrieve_image_whitelist():
-        whitelist_url = "http://scpsandbox2.wikidot.com/ebook-image-whitelist"
-        soup = BeautifulSoup(requests.get(whitelist_url).text)
+    def retrieve_table(url):
+        soup = BeautifulSoup(requests.get(url).text)
         results = {}
         for i in soup.select("tr")[1:]:
             results[i.select("td")[0].text] = i.select("td")[1].text
         return results
 
-    def add_static_pages(book):
+    def make_new_book(title):
+        book = Epub(title)
         static_pages = []
         for xf in [i for i in sorted(os.listdir(os.getcwd() + "/pages"))]:
             p = Page()
@@ -447,7 +444,9 @@ def main():
             with open(os.path.join(os.getcwd() + "/pages", xf)) as F:
                 p.data = F.read()
             static_pages.append(p)
-        [book.add_page(p) for p in static_pages]
+        map(book.add_page, static_pages)
+        book.chapters = []
+        return book
 
     def add_attributions(book, overrides):
         attrib = Page()
@@ -502,35 +501,33 @@ def main():
                 return increment_title(previous_book.title)
 
     def node_with_text(book, text):
-        for k in book.toc.iter("navPoint"):
-            if text == k.find("navLabel").find("text").text:
-                return k
-    Page.image_whitelist = retrieve_image_whitelist()
-    author_overrides = {i.select("td")[0].text: i.select("td")[1].text for i in
-                        BeautifulSoup(requests.get("http://05command.wikidot."
-                                                   "com/alexandra-rewrite")
-                                      .text).select("tr")}
-    book = Epub("SCP Foundation: Tome 1.01")
-    add_static_pages(book)
-    book.chapters = []
+        if text is None:
+            return None
+        return book.toc.xpath('.//navPoint[child::navLabel[child::text[text()='
+                              '"{}"]]]'.format(text))[0]
+    Page.image_whitelist = retrieve_table(
+        "http://scpsandbox2.wikidot.com/ebook-image-whitelist")
+    author_overrides = retrieve_table(
+        "http://05command.wikidot.com/alexandra-rewrite")
+    book = make_new_book("SCP Foundation: Tome 1.01")
+
     for i in yield_pages():
-        if book.title != goes_in_book(book, i):
+        book_name = goes_in_book(book, i)
+        if book.title != book_name:
             add_attributions(book, author_overrides)
             book.save(book.title)
-            book = Epub(goes_in_book(book, i))
-            add_static_pages(book)
-            book.chapters = []
-        c_up = None
+            book = make_new_book(book_name)
+        previous_chapter = None
         for c in i.chapter.split("/"):
             if not c in [i["title"] for i in book.allpages]:
                 print(c)
                 p = Page()
                 p.title = c
                 p.data = "<div class='title2'>" + c + "</div>"
-                book.add_page(p, node_with_text(book, c_up))
+                book.add_page(p, node_with_text(book, previous_chapter))
                 book.chapters.append(c)
-            c_up = c
-        book.add_page(i, node_with_text(book, c_up))
+            previous_chapter = c
+        book.add_page(i, node_with_text(book, previous_chapter))
     add_attributions(book, author_overrides)
     book.save(book.title)
 
