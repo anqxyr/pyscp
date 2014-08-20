@@ -282,11 +282,8 @@ class Epub():
                 "{}/templates/{}".format(os.getcwd(), i))
         self.allpages = []
         #pre-building toc
-        toc = self.templates["toc"]
-        for i in toc.getroot().iter():
-            if i.tag.endswith("text"):
-                i.text = title
-        self.toc = toc
+        self.toc = self.templates["toc"]
+        self.toc.xpath("/*/*[2]/*")[0].text = title
         self.images = {}
 
     def add_page(self, page, node=None):
@@ -329,22 +326,16 @@ class Epub():
         #building the spine
         spine = self.templates["content"]
         self.allpages.sort(key=lambda k: k["id"])
-        for i in spine.getroot().iter():
-            if i.tag.endswith("meta"):
-                if ("property" in i.attrib and
-                        i.attrib["property"] == "dcterms:modified"):
-                    i.text = time.strftime("%Y-%m-%dT%H:%M:%SZ")
-            elif i.tag.endswith("title"):
-                i.text = self.title
-            elif i.tag.endswith("manifest"):
-                for k in self.allpages:
-                    etree.SubElement(
-                        i, "item", **{"media-type": "application/xhtml+xml",
-                                      "href": "{}.xhtml".format(k["id"]),
-                                      "id": k["title"]})
-            elif i.tag.endswith("spine"):
-                for k in self.allpages:
-                    etree.SubElement(i, "itemref", idref=k["title"])
+        spine.xpath("/*/*[1]/*[1]")[0].text = time.strftime(
+            "%Y-%m-%dT%H:%M:%SZ")
+        spine.xpath("/*/*[1]/dc:title", namespaces={
+            "dc": "http://purl.org/dc/elements/1.1/"})[0].text = self.title
+        for k in self.allpages:
+            etree.SubElement(spine.xpath("/*/*[2]")[0], "item", **{
+                "media-type": "application/xhtml+xml", "href":
+                k["id"] + ".xhtml", "id": k["title"].replace(":", "-")})
+            etree.SubElement(spine.xpath("/*/*[3]")[0], "itemref",
+                             idref=k["title"].replace(":", "-"))
         os.mkdir("{}/images/".format(self.dir.name))
         imagedatadir = "{}images/".format(Page.datadir)
         if not os.path.exists(imagedatadir):
@@ -398,13 +389,14 @@ def yield_pages():
     scp_main = sorted(scp_main, key=natural_key)
     scp_blocks = [[i for i in scp_main if (int(i.split("-")[-1]) // 100 == n)]
                   for n in range(30)]
-    for b in scp_blocks:
+    for b in scp_blocks[:1]:
         b_name = "SCP Database/Articles {}-{}".format(b[0].split("-")[-1],
                                                       b[-1].split("-")[-1])
         for url in b:
             p = Page(url)
             p.chapter = b_name
             yield p
+    return
 
     def quick_yield(tags, chapter_name):
         L = [urls_by_tag(i) for i in tags if type(i) == str]
@@ -415,9 +407,9 @@ def yield_pages():
             p = Page(url)
             p.chapter = chapter_name
             yield p
-    yield from quick_yield(["joke", "scp"], "SCP Database/Joke Articles")
-    yield from quick_yield(["explained", "scp"],
-                           "SCP Database/Explained Phenomena")
+    #yield from quick_yield(["joke", "scp"], "SCP Database/Joke Articles")
+    #yield from quick_yield(["explained", "scp"],
+    #                       "SCP Database/Explained Phenomena")
     hubhubs = ["http://www.scp-wiki.net/canon-hub",
                "http://www.scp-wiki.net/goi-contest-2014",
                "http://www.scp-wiki.net/acidverse"]
@@ -425,7 +417,7 @@ def yield_pages():
     for i in quick_yield(["hub", ["tale", "goi2014"]], "Canons and Series"):
         if i.url not in nested_hubs:
             yield i
-    yield from quick_yield(["tale"], "Assorted Tales")
+    #yield from quick_yield(["tale"], "Assorted Tales")
 
 
 def main():
