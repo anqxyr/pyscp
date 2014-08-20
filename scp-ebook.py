@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from bs4 import BeautifulSoup as bs4
+from bs4 import BeautifulSoup
 from lxml import etree, html
 import re
 import os
@@ -13,11 +13,12 @@ import tempfile
 
 class Page():
 
-    """placeholder docstring"""
+    """Scrape and store contents and metadata of a page"""
 
-    #titles for scp articles
     image_whitelist = {}
+    #contains the titles of the SCP articles, e.g. "SCP-1511: Mobile Paradise"
     scp_index = {}
+    datadir = "/home/anqxyr/.scp-data/"
 
     def __init__(self, url=None):
         self.url = url
@@ -30,15 +31,16 @@ class Page():
         self.override()
 
     def override(self):
-        if self.url == "http://www.scp-wiki.net/scp-1047-j": self.data = None
+        if self.url == "http://www.scp-wiki.net/scp-1047-j":
+            self.data = None
         elif self.url == "http://www.scp-wiki.net/scp-2998":
-            x = [Page(self.url + "-" + str(n)) for n in range(2,11)]
+            x = [Page("{0}-{1}".format(self.url, n)) for n in range(2, 11)]
             for i in x:
                 i.title = "SCP-2998-" + i.url.split("-")[-1]
             self.list_children = lambda: x
         elif self.title == "Wills And Ways":
-            x = [k for k in self.list_children() if k.title !=
-                 "Marshall, Carter and Dark Hub "]
+            x = [k for k in self.list_children()
+                 if k.title != "Marshall, Carter and Dark Hub "]
             self.list_children = lambda: x
         elif self.title == "Serpent's Hand Hub":
             x = [k for k in self.list_children() if k.title !=
@@ -59,14 +61,16 @@ class Page():
                     with open(path, "w") as F:
                         F.write(data)
                 return data
+
         def scrape_page_body():
             print("downloading: \t" + self.url)
             try:
-                soup = bs4(requests.get(self.url).text)
+                soup = BeautifulSoup(requests.get(self.url).text)
             except Exception as e:
                 print("ERROR: " + str(e))
                 return None
             return str(soup)
+
         def scrape_history():
             if self.soup is None:
                 return None
@@ -89,12 +93,18 @@ class Page():
                 print("ERROR: " + str(e))
                 return None
             return data
-        cfile = re.search("/[^/]*$", self.url).group()[1:]
-        if cfile == "": self.soup = None; return
-        if not os.path.exists("data/"): os.mkdir("data/")
-        if not os.path.exists("data/history"): os.mkdir("data/history")
-        self.soup = cached("data/" + cfile, scrape_page_body)
-        self.history = cached("data/history/" + cfile, scrape_history)
+        cached_file = self.url.replace("http://www.scp-wiki.net/", "")\
+            .replace("/", "_").replace(":", "")
+        if cached_file == "":
+            self.soup = None
+            return
+        if not os.path.exists(Page.datadir):
+            os.mkdir(Page.datadir)
+        if not os.path.exists(Page.datadir + "history/"):
+            os.mkdir(Page.datadir + "history/")
+        self.soup = cached(Page.datadir + cached_file, scrape_page_body)
+        self.history = cached("{0}history/{1}".format(Page.datadir,
+                              cached_file), scrape_history)
 
     def cook(self):
         '''Cook the soup, retrieve title, data, and tags'''
@@ -102,12 +112,12 @@ class Page():
             self.title = None
             self.data = None
             return
-        soup = bs4(self.soup)
+        soup = BeautifulSoup(self.soup)
         # meta
         self.tags = [a.string for a in soup.select("div.page-tags a")]
         if self.history is not None:
-            self.author = bs4(self.history)\
-                          .select("tr")[-1].select("td")[-3].text
+            self.author = BeautifulSoup(self.history)\
+                .select("tr")[-1].select("td")[-3].text
         # title
         if soup.select("#page-title"):
             title = soup.select("#page-title")[0].text.strip()
@@ -122,7 +132,7 @@ class Page():
                               "http://www.scp-wiki.net/scp-series-2",
                               "http://www.scp-wiki.net/scp-series-3"]
                 for u in index_urls:
-                    s = bs4(Page(u).soup)
+                    s = BeautifulSoup(Page(u).soup)
                     entries = s.select("ul li")
                     for e in entries:
                         if re.match(".*>SCP-[0-9]*<.*", str(e)):
@@ -138,11 +148,15 @@ class Page():
         garbage = ["div.page-rate-widget-box", "div.scp-image-block"]
         [k.decompose() for e in garbage for k in data.select(e)]
         for i in data.select("img"):
-            if i.name == None: continue
-            if not i.has_attr("src"): continue
+            if i.name is None:
+                continue
+            if not i.has_attr("src"):
+                continue
             if i["src"] not in Page.image_whitelist:
                 for k in i.parents:
-                    if k.name == "table": k.decompose(); break
+                    if k.name == "table":
+                        k.decompose()
+                        break
                     if k.has_attr("class") and k["class"] == "scp-image-block":
                             print("yay")
                             k.decompose()
@@ -176,7 +190,7 @@ class Page():
             link_text = i.select("a.collapsible-block-link")[0].text
             content = i.select("div.collapsible-block-content")[0]
             if content.text == "":
-                content =  i.select("div.collapsible-block-unfolded")[0]
+                content = i.select("div.collapsible-block-unfolded")[0]
                 del(content["style"])
                 content.select("div.collapsible-block-content")[0].decompose()
                 content.select("div.collapsible-block-unfolded-link"
@@ -206,26 +220,19 @@ class Page():
                 "</p><p>".join(self.tags) + "</p></div>"
         self.data = data
 
-
     def list_children(self):
         def links(self):
             links = []
-            soup = bs4(self.soup)
+            soup = BeautifulSoup(self.soup)
             for a in soup.select("#page-content a"):
-                if not a.has_attr("href") or a["href"][0] != "/": continue
-                    # this whole section up to 'continue' is for
-                    # debug purposes only, can be deleted in the final version
-                    # if a.has_attr("href"):
-                    #     if (a["href"] != "javascript:;" and a["href"][0] != "#"
-                    #         and re.search("scp-wiki", a["href"])
-                    #             and not re.search("local--files", a["href"])):
-                    #         print("bad link on page " + self.url + "\t(" +
-                    #               a["href"] + ")")
-                    # continue
-                if a["href"][-4:] in [".png", ".jpg", ".gif"]: continue
+                if not a.has_attr("href") or a["href"][0] != "/":
+                    continue
+                if a["href"][-4:] in [".png", ".jpg", ".gif"]:
+                    continue
                 url = "http://www.scp-wiki.net" + a["href"]
                 url = url.rstrip("|")
-                if url in links: continue
+                if url in links:
+                    continue
                 links.append(url)
             return links
         if not any(i in self.tags for i in ["scp", "hub", "splash"]):
@@ -247,7 +254,7 @@ class Page():
             def backlinks(page, child):
                 if page.url in links(child):
                     return True
-                soup = bs4(child.soup)
+                soup = BeautifulSoup(child.soup)
                 if soup.select("#breadcrumbs a"):
                     crumb = soup.select("#breadcrumbs a")[-1]
                     crumb = "http://www.scp-wiki.net" + crumb["href"]
@@ -284,9 +291,8 @@ class Epub():
         self.images = {}
 
     def add_page(self, page, node=None):
-        if page.url in Epub.allpages_global: return
-        if page.data is None: return
-        #print(page.title)
+        if page.url in Epub.allpages_global or page.data is None:
+            return
         n = len(self.allpages)
         uid = "page_" + str(n).zfill(4)
         epub_page = copy.deepcopy(self.templates["page"])
@@ -297,12 +303,14 @@ class Epub():
                 body = html.fromstring(page.data)
                 i.append(body)
         epub_page.write(self.dir.name + "/" + uid + ".xhtml")
-        for i in bs4(page.soup if hasattr(page, "soup") else "").select("img"):
+        for i in BeautifulSoup(page.soup if hasattr(page, "soup")
+                               else "").select("img"):
             if i["src"] in Page.image_whitelist:
                 self.images[i["src"]] = page.title
         self.allpages.append({"title": page.title, "id": uid,
                               "author": page.author, "url": page.url})
-        if page.url is not None: Epub.allpages_global.append(page.url)
+        if page.url is not None:
+            Epub.allpages_global.append(page.url)
 
         def add_to_toc(node, page, uid):
             if node is None:
@@ -340,14 +348,16 @@ class Epub():
                 for k in self.allpages:
                     etree.SubElement(i, "itemref", idref=k["title"])
         os.mkdir(self.dir.name + "/images/")
-        if not os.path.exists("data/images/"): os.mkdir("data/images/")
+        imagedatadir = Page.datadir + "images/"
+        if not os.path.exists(imagedatadir):
+            os.mkdir(imagedatadir)
         for i in self.images:
             path = "_".join([i.split("/")[-2], i.split("/")[-1]])
-            if not os.path.isfile("data/images/" + path):
+            if not os.path.isfile(imagedatadir + path):
                 print("downloading image: " + i)
-                with open("data/images/" + path, "wb") as F:
+                with open(imagedatadir + path, "wb") as F:
                     shutil.copyfileobj(requests.get(i, stream=True).raw, F)
-            shutil.copy("data/images/" + path, self.dir.name + "/images/")
+            shutil.copy(imagedatadir + path, self.dir.name + "/images/")
         spine.write(self.dir.name + "/content.opf", xml_declaration=True,
                     encoding="utf-8", pretty_print=True)
         #other necessary files
@@ -366,20 +376,22 @@ class Epub():
 
 def yield_pages():
     def urls_by_tag(tag):
-        soup = bs4(requests.get("http://www.scp-wiki.net/system:"
+        soup = BeautifulSoup(requests.get("http://www.scp-wiki.net/system:"
                              "page-tags/tag/" + tag).text)
         urls = ["http://www.scp-wiki.net" + a["href"] for a in
                 soup.select("""div.pages-list
                             div.pages-list-item div.title a""")]
         return urls
+
     def natural_key(s):
         re_natural = re.compile('[0-9]+|[^0-9]+')
         return [(1, int(c)) if c.isdigit() else (0, c.lower()) for c
                 in re_natural.findall(s)] + [s]
     # skips
     url_001 = "http://www.scp-wiki.net/proposals-for-scp-001"
-    for i in bs4(requests.get(url_001).text).select("#page-content")[0].select("a"):
-        url = "http://www.scp-wiki.net/" + i["href"]
+    for i in BeautifulSoup(requests.get(url_001).text
+                           ).select("#page-content")[0].select("a"):
+        url = "http://www.scp-wiki.net" + i["href"]
         p = Page(url)
         p.chapter = "SCP Database/001 Proposals"
         yield p
@@ -387,7 +399,7 @@ def yield_pages():
     scp_main = sorted(scp_main, key=natural_key)
     scp_blocks = [[i for i in scp_main if (int(i.split("-")[-1]) // 100 == n)]
                   for n in range(30)]
-    for b in scp_blocks[:5]:
+    for b in scp_blocks[29:]:
         b_name = "SCP Database/Articles " + b[0].split("-")[-1] + "-" +\
                  b[-1].split("-")[-1]
         for url in b:
@@ -395,7 +407,7 @@ def yield_pages():
             p.chapter = b_name
             yield p
     return
-    
+
     def quick_yield(tags, chapter_name):
         L = [urls_by_tag(i) for i in tags if type(i) == str]
         for i in [i for i in tags if type(i) == list]:
@@ -405,9 +417,9 @@ def yield_pages():
             p = Page(url)
             p.chapter = chapter_name
             yield p
-    yield from quick_yield(["joke", "scp"], "SCP Database/Joke Articles")
-    yield from quick_yield(["explained", "scp"],
-                         "SCP Database/Explained Phenomena")
+    # yield from quick_yield(["joke", "scp"], "SCP Database/Joke Articles")
+    # yield from quick_yield(["explained", "scp"],
+    #                        "SCP Database/Explained Phenomena")
     hubhubs = ["http://www.scp-wiki.net/canon-hub",
                "http://www.scp-wiki.net/goi-contest-2014",
                "http://www.scp-wiki.net/acidverse"]
@@ -415,19 +427,20 @@ def yield_pages():
     for i in quick_yield(["hub", ["tale", "goi2014"]], "Canons and Series"):
         if i.url not in nested_hubs:
             yield i
-    yield from quick_yield(["tale"], "Assorted Tales")
+    #yield from quick_yield(["tale"], "Assorted Tales")
 
 
 def main():
     def retrieve_image_whitelist():
         whitelist_url = "http://scpsandbox2.wikidot.com/ebook-image-whitelist"
-        soup = bs4(requests.get(whitelist_url).text)
+        soup = BeautifulSoup(requests.get(whitelist_url).text)
         results = {}
         for i in soup.select("tr")[1:]:
             results[i.select("td")[0].text] = i.select("td")[1].text
         return results
+
     def add_static_pages(book):
-        static_pages =[ ]
+        static_pages = []
         for xf in [i for i in sorted(os.listdir(os.getcwd() + "/pages"))]:
             p = Page()
             p.title = xf[3:-6]
@@ -435,6 +448,7 @@ def main():
                 p.data = F.read()
             static_pages.append(p)
         [book.add_page(p) for p in static_pages]
+
     def add_attributions(book, overrides):
         attrib = Page()
         attrib.title = "Acknowledgments and Attributions"
@@ -460,39 +474,42 @@ def main():
                 add_one(attrib, i["title"], i["url"], i["author"])
         for i in book.images:
             if Page.image_whitelist[i] != "PUBLIC DOMAIN":
-                attrib.data += ("<p>The image " + i.split("/")[-2] + "_" + 
-                               i.split("/")[-1] + ", which appears on the page"
-                               " <b>" + book.images[i] + "</b>, is a CC image"
-                               " available at <u>" + Page.image_whitelist[i] +
-                               "</u>.</p>")
+                attrib.data += ("<p>The image " + i.split("/")[-2] + "_" +
+                                i.split("/")[-1] + ", which appears on the"
+                                " page <b>" + book.images[i] + "</b>, is a CC"
+                                " image available at <u>" +
+                                Page.image_whitelist[i] + "</u>.</p>")
         attrib.data += "</div>"
         book.add_page(attrib)
+
     def goes_in_book(previous_book, page):
         def increment_title(old_title):
             n = old_title[-2:]
             n = str(int(n) + 1).zfill(2)
             return old_title[:-2] + n
         if ("scp" in page.tags and
-            page.chapter.split("/")[-1] in previous_book.chapters):
-                return previous_book.title
+                page.chapter.split("/")[-1] in previous_book.chapters):
+            return previous_book.title
         elif (page.chapter == "Canons and Series" and
               previous_book.title[-4:-3] == "1"):
                 return "SCP Foundation: Tome 2.01"
         elif (page.chapter == "Assorted Tales" and
               previous_book.title[-4:-3] == "2"):
-                return "SCP Foundation: Tome 3.01"   
+                return "SCP Foundation: Tome 3.01"
         elif len(previous_book.allpages) < 500:
                 return previous_book.title
         else:
                 return increment_title(previous_book.title)
+
     def node_with_text(book, text):
         for k in book.toc.iter("navPoint"):
             if text == k.find("navLabel").find("text").text:
                 return k
     Page.image_whitelist = retrieve_image_whitelist()
     author_overrides = {i.select("td")[0].text: i.select("td")[1].text for i in
-                        bs4(requests.get("http://05command.wikidot."
-                        "com/alexandra-rewrite").text).select("tr")}
+                        BeautifulSoup(requests.get("http://05command.wikidot."
+                                                   "com/alexandra-rewrite")
+                                      .text).select("tr")}
     book = Epub("SCP Foundation: Tome 1.01")
     add_static_pages(book)
     book.chapters = []
