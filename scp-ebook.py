@@ -38,7 +38,7 @@ class Page():
         elif self.url == "http://www.scp-wiki.net/scp-2998":
             x = [Page("{}-{}".format(self.url, n)) for n in range(2, 11)]
             for i in x:
-                i.title = "SCP-2998-" + i.url.split("-")[-1]
+                i.title = "SCP-2998-{}".format(i.url.split("-")[-1])
             self.list_children = lambda: x
         elif self.title == "Wills And Ways":
             x = [k for k in self.list_children()
@@ -69,7 +69,7 @@ class Page():
             try:
                 soup = BeautifulSoup(requests.get(self.url).text)
             except Exception as e:
-                print("ERROR: " + str(e))
+                print("ERROR: {}".format(e))
                 return None
             return str(soup)
 
@@ -84,15 +84,15 @@ class Page():
                 return None
             headers = {"Content-Type": "application/x-www-form-urlencoded;",
                        "Cookie": "wikidot_token7=123456;"}
-            payload = ("page=1&perpage=1000&page_id=" + pageid +
-                       "&moduleName=history%2FPageRevisionListModule"
-                       "&wikidot_token7=123456")
+            payload = ("page=1&perpage=1000&page_id={}&moduleName=history%2FPa"
+                       "geRevisionListModule&wikidot_token7=123456"
+                       .format(pageid))
             try:
                 data = requests.post("http://www.scp-wiki.net/ajax-module-"
                                      "connector.php", data=payload,
                                      headers=headers).json()["body"]
             except Exception as e:
-                print("ERROR: " + str(e))
+                print("ERROR: {}".format(e))
                 return None
             return data
         cached_file = self.url.replace("http://www.scp-wiki.net/", "")\
@@ -102,8 +102,8 @@ class Page():
             return
         if not os.path.exists(Page.datadir):
             os.mkdir(Page.datadir)
-        if not os.path.exists(Page.datadir + "history/"):
-            os.mkdir(Page.datadir + "history/")
+        if not os.path.exists("{}history/".format(Page.datadir)):
+            os.mkdir("{}history/".format(Page.datadir))
         self.soup = cached(Page.datadir + cached_file, scrape_page_body)
         self.history = cached("{}history/{}".format(Page.datadir,
                               cached_file), scrape_history)
@@ -140,7 +140,7 @@ class Page():
                         if re.match(".*>SCP-[0-9]*<.*", str(e)):
                             i = e.text.split(" - ")
                             Page.scp_index[i[0]] = i[1]
-            title = title + ": " + Page.scp_index["SCP-" + title[4:]]
+            title = "{}: {}".format(title, Page.scp_index["SCP-" + title[4:]])
         self.title = title
         # body
         if not soup.select("#page-content"):
@@ -212,11 +212,11 @@ class Page():
             i["class"] = "quote"
         #add title to the page
         if "scp" in self.tags:
-            data = "<p class='scp-title'>" + self.title + "</p>" + str(data)
+            data = "<p class='scp-title'>{}</p>{}".format(self.title, data)
         else:
-            data = "<p class='tale-title'>" + self.title + "</p>" + str(data)
-        data += "<div class='tags' style='display: none'><hr/><p>" +\
-                "</p><p>".join(self.tags) + "</p></div>"
+            data = "<p class='tale-title'>{}</p>{}".format(self.title, data)
+        data += "<div class='tags' style='display: none'><hr/><p>{}</p></div>"\
+                .format("</p><p>".join(self.tags))
         self.data = data
 
     def list_children(self):
@@ -228,7 +228,7 @@ class Page():
                     continue
                 if a["href"][-4:] in [".png", ".jpg", ".gif"]:
                     continue
-                url = "http://www.scp-wiki.net" + a["href"]
+                url = "http://www.scp-wiki.net{}".format(a["href"])
                 url = url.rstrip("|")
                 if url in links:
                     continue
@@ -256,7 +256,7 @@ class Page():
                 soup = BeautifulSoup(child.soup)
                 if soup.select("#breadcrumbs a"):
                     crumb = soup.select("#breadcrumbs a")[-1]
-                    crumb = "http://www.scp-wiki.net" + crumb["href"]
+                    crumb = "http://www.scp-wiki.net{}".format(crumb["href"])
                     if self.url == crumb:
                         return True
                 return False
@@ -278,8 +278,8 @@ class Epub():
         self.dir = tempfile.TemporaryDirectory()
         self.templates = {}
         for i in os.listdir("templates"):
-            self.templates[i.split(".")[0]] = etree.parse(os.getcwd() +
-                                                          "/templates/" + i)
+            self.templates[i.split(".")[0]] = etree.parse(
+                "{}/templates/{}".format(os.getcwd(), i))
         self.allpages = []
         #pre-building toc
         toc = self.templates["toc"]
@@ -317,14 +317,15 @@ class Epub():
                                         str(len(self.allpages)))
             navlabel = etree.SubElement(navpoint, "navLabel")
             etree.SubElement(navlabel, "text").text = page.title
-            etree.SubElement(navpoint, "content", src=uid + ".xhtml")
+            etree.SubElement(navpoint, "content", src="{}.xhtml".format(uid))
             return navpoint
         new_node = add_to_toc(node, page, uid)
         [self.add_page(i, new_node) for i in page.list_children()]
 
     def save(self, filename):
-        self.toc.write(self.dir.name + "/toc.ncx", xml_declaration=True,
-                       encoding="utf-8", pretty_print=True)
+        self.toc.write(
+            "{}/toc.ncx".format(self.dir.name), xml_declaration=True,
+            encoding="utf-8", pretty_print=True)
         #building the spine
         spine = self.templates["content"]
         self.allpages.sort(key=lambda k: k["id"])
@@ -337,24 +338,24 @@ class Epub():
                 i.text = self.title
             elif i.tag.endswith("manifest"):
                 for k in self.allpages:
-                    etree.SubElement(i, "item",
-                                     href=k["id"] + ".xhtml", id=k["title"],
-                                     **{"media-type":
-                                        "application/xhtml+xml"})
+                    etree.SubElement(
+                        i, "item", **{"media-type": "application/xhtml+xml",
+                                      "href": "{}.xhtml".format(k["id"]),
+                                      "id": k["title"]})
             elif i.tag.endswith("spine"):
                 for k in self.allpages:
                     etree.SubElement(i, "itemref", idref=k["title"])
-        os.mkdir(self.dir.name + "/images/")
-        imagedatadir = Page.datadir + "images/"
+        os.mkdir("{}/images/".format(self.dir.name))
+        imagedatadir = "{}images/".format(Page.datadir)
         if not os.path.exists(imagedatadir):
             os.mkdir(imagedatadir)
         for i in self.images:
             path = "_".join([i.split("/")[-2], i.split("/")[-1]])
             if not os.path.isfile(imagedatadir + path):
-                print("downloading image: " + i)
+                print("downloading image: {}".format(i))
                 with open(imagedatadir + path, "wb") as F:
                     shutil.copyfileobj(requests.get(i, stream=True).raw, F)
-            shutil.copy(imagedatadir + path, self.dir.name + "/images/")
+            shutil.copy(imagedatadir + path, self.dir.name + "{}/images/")
         spine.write(self.dir.name + "/content.opf", xml_declaration=True,
                     encoding="utf-8", pretty_print=True)
         #other necessary files
@@ -373,8 +374,9 @@ class Epub():
 
 def yield_pages():
     def urls_by_tag(tag):
-        soup = BeautifulSoup(requests.get("http://www.scp-wiki.net/system:"
-                             "page-tags/tag/" + tag).text)
+        soup = BeautifulSoup(
+            requests.get("http://www.scp-wiki.net/system:page-tags/tag/" + tag)
+            .text)
         urls = ["http://www.scp-wiki.net" + a["href"] for a in
                 soup.select("""div.pages-list
                             div.pages-list-item div.title a""")]
@@ -397,8 +399,8 @@ def yield_pages():
     scp_blocks = [[i for i in scp_main if (int(i.split("-")[-1]) // 100 == n)]
                   for n in range(30)]
     for b in scp_blocks[29:]:
-        b_name = "SCP Database/Articles " + b[0].split("-")[-1] + "-" +\
-                 b[-1].split("-")[-1]
+        b_name = "SCP Database/Articles {}-{}".format(b[0].split("-")[-1],
+                                                      b[-1].split("-")[-1])
         for url in b:
             p = Page(url)
             p.chapter = b_name
@@ -454,10 +456,10 @@ def main():
         attrib.data = "<div class='attrib'>"
         for i in sorted(book.allpages, key=lambda k: k["id"]):
             def add_one(attrib, title, url, author, r=None):
-                attrib.data += "<p><b>" + title + "</b> (" + url +\
-                               ") was written by <b>" + author + "</b>"
+                attrib.data += "<p><b>{}</b> ({}) was written by <b>{}</b>"\
+                               .format(title, url, author)
                 if r is not None:
-                    attrib.data += " and rewritten by <b>" + r + "</b>.</p>"
+                    attrib.data += " and rewritten by <b>{}</b>.</p>".format(r)
                 else:
                     attrib.data += ".</p>"
             if i["url"] is None:
@@ -473,11 +475,11 @@ def main():
                 add_one(attrib, i["title"], i["url"], i["author"])
         for i in book.images:
             if Page.image_whitelist[i] != "PUBLIC DOMAIN":
-                attrib.data += ("<p>The image " + i.split("/")[-2] + "_" +
-                                i.split("/")[-1] + ", which appears on the"
-                                " page <b>" + book.images[i] + "</b>, is a CC"
-                                " image available at <u>" +
-                                Page.image_whitelist[i] + "</u>.</p>")
+                attrib.data += (
+                    "<p>The image {}_{}, which appears on the page <b>{}</b>, "
+                    "is a CC image available at <u>{}</u>.</p>".format(
+                        i.split("/")[-2], i.split("/")[-1], book.images[i],
+                        Page.image_whitelist[i]))
         attrib.data += "</div>"
         book.add_page(attrib)
 
@@ -523,7 +525,7 @@ def main():
                 print(c)
                 p = Page()
                 p.title = c
-                p.data = "<div class='title2'>" + c + "</div>"
+                p.data = "<div class='title2'>{}</div>".format(c)
                 book.add_page(p, node_with_text(book, previous_chapter))
                 book.chapters.append(c)
             previous_chapter = c
