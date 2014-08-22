@@ -481,7 +481,10 @@ def main():
             with open(os.path.join(os.getcwd() + "/pages", xf)) as F:
                 p.data = F.read()
             static_pages.append(p)
-        map(book.add_page, static_pages)
+        print(static_pages)
+        #map(book.add_page, static_pages)
+        [book.add_page(k) for k in static_pages]
+        print(book.allpages)
         book.chapters = []
         return book
 
