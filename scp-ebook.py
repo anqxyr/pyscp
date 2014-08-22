@@ -16,6 +16,7 @@ class Page():
     """Scrape and store contents and metadata of a page"""
 
     image_whitelist = {}
+    author_overrides = {}
     #contains the titles of the SCP articles, e.g. "SCP-1511: Mobile Paradise"
     scp_index = {}
     datadir = os.path.expanduser("~/.scp-data/")
@@ -25,6 +26,7 @@ class Page():
         self.tags = []
         self.images = []
         self.author = None
+        self.rewrite_author = None
         self.title = None
         self.soup = ""
         if url is not None:
@@ -118,8 +120,15 @@ class Page():
         # meta
         self.tags = [a.string for a in soup.select("div.page-tags a")]
         if self.history is not None:
-            self.author = BeautifulSoup(self.history)\
-                .select("tr")[-1].select("td")[-3].text
+            author = BeautifulSoup(self.history).select("tr")[-1].select(
+                "td")[-3].text
+            self.author = author
+            if self.url in Page.author_overrides:
+                override = Page.author_overrides[self.url]
+                if override[:10] == ":override:":
+                    self.author = override[10:]
+                else:
+                    self.rewrite_author = override
         # title
         if soup.select("#page-title"):
             title = soup.select("#page-title")[0].text.strip()
@@ -302,8 +311,9 @@ class Epub():
         for i in page.images:
             self.images[i] = page.title
         #add the page to the list of all pages in the book
-        self.allpages.append({"title": page.title, "id": uid, "author":
-                              page.author, "url": page.url})
+        self.allpages.append({
+            "title": page.title, "id": uid, "author": page.author,
+            "rewrite_author": page.rewrite_author, "url": page.url})
         if page.url is not None:
             Epub.allpages_global.append(page.url)
 
@@ -475,7 +485,7 @@ def main():
         book.chapters = []
         return book
 
-    def add_attributions(book, overrides):
+    def add_attributions(book):
         attrib = Page()
         attrib.title = "Acknowledgments and Attributions"
         attrib.data = "<div class='attrib'>"
@@ -489,15 +499,9 @@ def main():
                     attrib.data += ".</p>"
             if i["url"] is None:
                 continue
-            tail = i["url"].split("/")[-1]
-            if tail in overrides:
-                if overrides[tail][:10] == ":override:":
-                    add_one(attrib, i["title"], i["url"], overrides[tail][10:])
-                else:
-                    add_one(attrib, i["title"], i["url"], i["author"],
-                            overrides[tail])
-            elif i["author"] not in [None, "(account deleted)"]:
-                add_one(attrib, i["title"], i["url"], i["author"])
+            if i["author"] not in [None, "(account deleted)"]:
+                add_one(attrib, i["title"], i["url"], i["author"],
+                        i["rewrite_author"])
         for i in book.images:
             if Page.image_whitelist[i] != "PUBLIC DOMAIN":
                 attrib.data += (
@@ -539,14 +543,14 @@ def main():
         F.write(arrow.utcnow().format("YYYY-MM-DDTHH:mm:ss"))
     Page.image_whitelist = retrieve_table(
         "http://scpsandbox2.wikidot.com/ebook-image-whitelist")
-    author_overrides = retrieve_table(
+    Page.author_overrides = retrieve_table(
         "http://05command.wikidot.com/alexandra-rewrite")
     book = make_new_book("SCP Foundation: Tome 1.01")
 
     for i in yield_pages():
         book_name = goes_in_book(book, i)
         if book.title != book_name:
-            add_attributions(book, author_overrides)
+            add_attributions(book)
             book.save(book.title)
             book = make_new_book(book_name)
         previous_chapter = None
@@ -560,7 +564,7 @@ def main():
                 book.chapters.append(c)
             previous_chapter = c
         book.add_page(i, node_with_text(book, previous_chapter))
-    add_attributions(book, author_overrides)
+    add_attributions(book)
     book.save(book.title)
 
 main()
