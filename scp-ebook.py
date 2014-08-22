@@ -65,7 +65,7 @@ class Page():
                 return data
 
         def scrape_page_body():
-            print("downloading: \t" + self.url)
+            print("downloading page data: \t" + self.url)
             try:
                 soup = BeautifulSoup(requests.get(self.url).text)
             except Exception as e:
@@ -76,7 +76,7 @@ class Page():
         def scrape_history():
             if self.soup is None:
                 return None
-            print("d-ing history: \t" + self.url)
+            print("downloading history: \t" + self.url)
             pageid = re.search("pageId = ([^;]*);", self.soup)
             if pageid is not None:
                 pageid = pageid.group(1)
@@ -365,12 +365,11 @@ class Epub():
 
 def yield_pages():
     def urls_by_tag(tag):
-        soup = BeautifulSoup(
-            requests.get("http://www.scp-wiki.net/system:page-tags/tag/" + tag)
-            .text)
-        urls = ["http://www.scp-wiki.net" + a["href"] for a in
-                soup.select("""div.pages-list
-                            div.pages-list-item div.title a""")]
+        print("downloading tag info: {}".format(tag))
+        soup = BeautifulSoup(requests.get("http://www.scp-wiki.net/system:page"
+                             "-tags/tag/" + tag).text)
+        urls = ["http://www.scp-wiki.net" + a["href"] for a in soup.select(
+            "div.pages-list div.pages-list-item div.title a")]
         return urls
 
     def natural_key(s):
@@ -420,8 +419,32 @@ def yield_pages():
     #yield from quick_yield(["tale"], "Assorted Tales")
 
 
+def update(time):
+    def recent_changes(page):
+        print("downloading recent changes: page {}".format(page))
+        headers = {"Content-Type": "application/x-www-form-urlencoded;",
+                   "Cookie": "wikidot_token7=123456;"}
+        payload = ("page={}&perpage=100&page_id=1926945&moduleName=changes%2FS"
+                   "iteChangesListModule&wikidot_token7=123456".format(page))
+        try:
+            data = requests.post("http://www.scp-wiki.net/ajax-module-"
+                                 "connector.php", data=payload,
+                                 headers=headers).json()["body"]
+        except Exception as e:
+            print("ERROR: {}".format(e))
+            return None
+        return BeautifulSoup(data)
+    page = 1
+    while True:
+        soup = recent_changes(page)
+        for i in soup.select("div.changes-list-item"):
+            return
+        page += 1
+
+
 def main():
     def retrieve_table(url):
+        print("downloading tabled data: {}".format(url))
         soup = BeautifulSoup(requests.get(url).text)
         results = {}
         for i in soup.select("tr")[1:]:
@@ -498,6 +521,11 @@ def main():
             return None
         return book.toc.xpath('.//navPoint[child::navLabel[child::text[text()='
                               '"{}"]]]'.format(text))[0]
+    if os.path.exists("{}_lastcreated".format(Page.datadir)):
+        with open("{}_lastcreated".format(Page.datadir)) as F:
+            update(F.read())
+    with open("{}_lastcreated".format(Page.datadir), "w") as F:
+        F.write(time.strftime("%Y-%m-%dT%H:%M:%SZ"))
     Page.image_whitelist = retrieve_table(
         "http://scpsandbox2.wikidot.com/ebook-image-whitelist")
     author_overrides = retrieve_table(
