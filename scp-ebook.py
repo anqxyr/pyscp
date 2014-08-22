@@ -327,7 +327,7 @@ class Epub():
         spine = self.templates["content"]
         self.allpages.sort(key=lambda k: k["id"])
         spine.xpath("/*/*[1]/*[1]")[0].text = arrow.utcnow().format(
-            "%Y-%m-%dT%H:%M:%SZ")
+            "YYYY-MM-DDTHH:mm:ss")
         spine.xpath("/*/*[1]/dc:title", namespaces={
             "dc": "http://purl.org/dc/elements/1.1/"})[0].text = self.title
         for k in self.allpages:
@@ -438,7 +438,18 @@ def update(time):
     while True:
         soup = recent_changes(page)
         for i in soup.select("div.changes-list-item"):
-            return
+            rev_time = arrow.get(i.select("span.odate")[0].text,
+                                 "DD MMM YYYY HH:mm")
+            if rev_time.timestamp > arrow.get(time).timestamp:
+                url = i.select("td.title a")[0]["href"]
+                cached_file = Page.datadir + url.replace(
+                    "http://www.scp-wiki.net/", "").replace(
+                    "/", "_").replace(":", "")
+                if os.path.exists(cached_file):
+                    print("deleting outdated cache: {}".format(cached_file))
+                    os.remove(cached_file)
+            else:
+                return
         page += 1
 
 
@@ -525,7 +536,7 @@ def main():
         with open("{}_lastcreated".format(Page.datadir)) as F:
             update(F.read())
     with open("{}_lastcreated".format(Page.datadir), "w") as F:
-        F.write(arrow.utcnow().format("%Y-%m-%dT%H:%M:%SZ"))
+        F.write(arrow.utcnow().format("YYYY-MM-DDTHH:mm:ss"))
     Page.image_whitelist = retrieve_table(
         "http://scpsandbox2.wikidot.com/ebook-image-whitelist")
     author_overrides = retrieve_table(
