@@ -6,7 +6,7 @@ import re
 import os
 import shutil
 import copy
-import time
+import arrow
 import requests
 import tempfile
 
@@ -326,7 +326,7 @@ class Epub():
         #building the spine
         spine = self.templates["content"]
         self.allpages.sort(key=lambda k: k["id"])
-        spine.xpath("/*/*[1]/*[1]")[0].text = time.strftime(
+        spine.xpath("/*/*[1]/*[1]")[0].text = arrow.utcnow().format(
             "%Y-%m-%dT%H:%M:%SZ")
         spine.xpath("/*/*[1]/dc:title", namespaces={
             "dc": "http://purl.org/dc/elements/1.1/"})[0].text = self.title
@@ -525,7 +525,7 @@ def main():
         with open("{}_lastcreated".format(Page.datadir)) as F:
             update(F.read())
     with open("{}_lastcreated".format(Page.datadir), "w") as F:
-        F.write(time.strftime("%Y-%m-%dT%H:%M:%SZ"))
+        F.write(arrow.utcnow().format("%Y-%m-%dT%H:%M:%SZ"))
     Page.image_whitelist = retrieve_table(
         "http://scpsandbox2.wikidot.com/ebook-image-whitelist")
     author_overrides = retrieve_table(
