@@ -10,6 +10,7 @@ import arrow
 import requests
 import tempfile
 
+image_review_list = []
 
 class Page():
 
@@ -159,6 +160,12 @@ class Page():
         garbage = ["div.page-rate-widget-box", "div.scp-image-block"]
         [k.decompose() for e in garbage for k in data.select(e)]
         #images
+        for i in data.select("img"):
+            if i.has_attr("src"):
+                global image_review_list
+                image_review_list.append(
+                    {"url": i["src"], "page": self.url, "page_title":
+                     self.title, "author": self.author})
         for i in data.select("img"):
             if i.name is None or not i.has_attr("src"):
                 continue
@@ -347,16 +354,16 @@ class Epub():
             etree.SubElement(spine.xpath("/*/*[3]")[0], "itemref",
                              idref=k["title"].replace(":", "-"))
         os.mkdir("{}/images/".format(self.dir.name))
-        imagedatadir = "{}images/".format(Page.datadir)
-        if not os.path.exists(imagedatadir):
-            os.mkdir(imagedatadir)
+        imagedir = "{}images/".format(Page.datadir)
+        if not os.path.exists(imagedir):
+            os.mkdir(imagedir)
         for i in self.images:
             path = "_".join([i.split("/")[-2], i.split("/")[-1]])
-            if not os.path.isfile(imagedatadir + path):
+            if not os.path.isfile(imagedir + path):
                 print("downloading image: {}".format(i))
-                with open(imagedatadir + path, "wb") as F:
+                with open(imagedir + path, "wb") as F:
                     shutil.copyfileobj(requests.get(i, stream=True).raw, F)
-            shutil.copy(imagedatadir + path, self.dir.name + "{}/images/")
+            shutil.copy(imagedir + path, "{}/images/".format(self.dir.name))
         spine.write(self.dir.name + "/content.opf", xml_declaration=True,
                     encoding="utf-8", pretty_print=True)
         #other necessary files
@@ -398,14 +405,13 @@ def yield_pages():
     scp_main = sorted(scp_main, key=natural_key)
     scp_blocks = [[i for i in scp_main if (int(i.split("-")[-1]) // 100 == n)]
                   for n in range(30)]
-    for b in scp_blocks[:1]:
+    for b in scp_blocks:
         b_name = "SCP Database/Articles {}-{}".format(b[0].split("-")[-1],
                                                       b[-1].split("-")[-1])
         for url in b:
             p = Page(url)
             p.chapter = b_name
             yield p
-    return
 
     def quick_yield(tags, chapter_name):
         L = [urls_by_tag(i) for i in tags if type(i) == str]
@@ -416,9 +422,9 @@ def yield_pages():
             p = Page(url)
             p.chapter = chapter_name
             yield p
-    #yield from quick_yield(["joke", "scp"], "SCP Database/Joke Articles")
-    #yield from quick_yield(["explained", "scp"],
-    #                       "SCP Database/Explained Phenomena")
+    yield from quick_yield(["joke", "scp"], "SCP Database/Joke Articles")
+    yield from quick_yield(["explained", "scp"],
+                           "SCP Database/Explained Phenomena")
     hubhubs = ["http://www.scp-wiki.net/canon-hub",
                "http://www.scp-wiki.net/goi-contest-2014",
                "http://www.scp-wiki.net/acidverse"]
@@ -426,7 +432,55 @@ def yield_pages():
     for i in quick_yield(["hub", ["tale", "goi2014"]], "Canons and Series"):
         if i.url not in nested_hubs:
             yield i
-    #yield from quick_yield(["tale"], "Assorted Tales")
+    yield from quick_yield(["tale"], "Assorted Tales")
+
+
+def image_review():
+    """This function is not related to the ebook and is not necessary
+    for it to work. It is here to help the wiki staff only"""
+    #removing duplicates from the list
+    new_list = []
+    for i in image_review_list:
+        if i["url"] not in [k["url"] for k in new_list]:
+            new_list.append(i)
+    new_list.sort(key=lambda x: x["page_title"])
+    with open("image_review.txt", "w") as F:
+        F.write("||~ Image||~ Page/Author||~ Search Results||~ Source"
+                "||~ Status||~ Notes||\n")
+        for img in new_list:
+            if (img["url"] == "http://scp-wiki.wdfiles.com/local--files/compon"
+                    "ent:heritage-rating/scp-heritage-v3.png"):
+                continue
+            post = requests.post("http://tineye.com/search", data={
+                "url": img["url"]}, allow_redirects=False).headers
+            tineye_url = ("[{} TinEye]".format(post["location"]) if "location"
+                          in post else "TinEye")
+            google_url = ("https://www.google.com/searchbyimage?&image_url={}"
+                          .format(img["url"]))
+            title = img["page_title"]
+            title = title if len(title) < 40 else title[:36] + "(..)"
+            user = img["author"]
+            user = ("[[user {}]]".format(user) if user not in
+                    ["Account Deleted"] else "None")
+            F.write('|| _\n[[image {0} link="{0}" width="50px"]] _\n'
+                    .format(img["url"]))
+            F.write('||[{} {}] _\n{} _\n'.format(img["page"], title, user))
+            F.write('||{} _\n [{} Google] _\n'.format(tineye_url, google_url))
+            F.write('|| [pasteurlhere source] _\n'
+                    '|| _\n[!-- Pick one, delete others, then delete the'
+                    ' comment block\n'
+                    '##darkred|**PERMANENTLY REMOVED**## _\n'
+                    '##darkred|**PERMISSION DENIED**## _\n'
+                    '##darkred|**UNABLE TO CONTACT**## _\n'
+                    '##darkred|**SOURCE UNKNOWN**## _\n'
+                    '##blue|**REPLACED**## _\n'
+                    '##blue|**AWAITING REPLY**## _\n'
+                    '##blue|**PERMISSION GRANTED**## _\n'
+                    '##blue|**BY-NC-SA CC**## _\n'
+                    '##green|**BY-SA CC**## _\n'
+                    '##green|**PUBLIC DOMAIN**## _\n'
+                    '--]\n || [!-- write_notes_here --] ||\n')
+
 
 
 def update(time):
@@ -434,7 +488,7 @@ def update(time):
         print("downloading recent changes: page {}".format(page))
         headers = {"Content-Type": "application/x-www-form-urlencoded;",
                    "Cookie": "wikidot_token7=123456;"}
-        payload = ("page={}&perpage=100&page_id=1926945&moduleName=changes%2FS"
+        payload = ("page={}&perpage=20&page_id=1926945&moduleName=changes%2FS"
                    "iteChangesListModule&wikidot_token7=123456".format(page))
         try:
             data = requests.post("http://www.scp-wiki.net/ajax-module-"
@@ -481,10 +535,8 @@ def main():
             with open(os.path.join(os.getcwd() + "/pages", xf)) as F:
                 p.data = F.read()
             static_pages.append(p)
-        print(static_pages)
         #map(book.add_page, static_pages)
         [book.add_page(k) for k in static_pages]
-        print(book.allpages)
         book.chapters = []
         return book
 
@@ -569,5 +621,6 @@ def main():
         book.add_page(i, node_with_text(book, previous_chapter))
     add_attributions(book)
     book.save(book.title)
+    image_review()
 
 main()
