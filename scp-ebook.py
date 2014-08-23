@@ -157,7 +157,7 @@ class Page():
             self.data = None
             return
         data = soup.select("#page-content")[0]
-        garbage = ["div.page-rate-widget-box", "div.scp-image-block"]
+        garbage = ["div.page-rate-widget-box"]
         [k.decompose() for e in garbage for k in data.select(e)]
         #images
         for i in data.select("img"):
@@ -165,7 +165,8 @@ class Page():
                 global image_review_list
                 image_review_list.append(
                     {"url": i["src"], "page": self.url, "page_title":
-                     self.title, "author": self.author})
+                    self.title, "author": self.author, "rewrite": 
+                    self.rewrite_author})
         for i in data.select("img"):
             if i.name is None or not i.has_attr("src"):
                 continue
@@ -405,13 +406,14 @@ def yield_pages():
     scp_main = sorted(scp_main, key=natural_key)
     scp_blocks = [[i for i in scp_main if (int(i.split("-")[-1]) // 100 == n)]
                   for n in range(30)]
-    for b in scp_blocks:
+    for b in scp_blocks[5:10]:
         b_name = "SCP Database/Articles {}-{}".format(b[0].split("-")[-1],
                                                       b[-1].split("-")[-1])
         for url in b:
             p = Page(url)
             p.chapter = b_name
             yield p
+    return
 
     def quick_yield(tags, chapter_name):
         L = [urls_by_tag(i) for i in tags if type(i) == str]
@@ -443,11 +445,17 @@ def image_review():
     for i in image_review_list:
         if i["url"] not in [k["url"] for k in new_list]:
             new_list.append(i)
-    new_list.sort(key=lambda x: x["page_title"])
+
+    def natural_key(s):
+        re_natural = re.compile('[0-9]+|[^0-9]+')
+        return [(1, int(c)) if c.isdigit() else (0, c.lower()) for c
+                in re_natural.findall(s)] + [s]
+    new_list.sort(key=lambda x: natural_key(x["page_title"]))
     with open("image_review.txt", "w") as F:
         F.write("||~ Image||~ Page/Author||~ Search Results||~ Source"
                 "||~ Status||~ Notes||\n")
         for img in new_list:
+            print("processinig image {}".format(img["url"]))
             if (img["url"] == "http://scp-wiki.wdfiles.com/local--files/compon"
                     "ent:heritage-rating/scp-heritage-v3.png"):
                 continue
@@ -462,24 +470,15 @@ def image_review():
             user = img["author"]
             user = ("[[user {}]]".format(user) if user not in
                     ["Account Deleted"] else "None")
-            F.write('|| _\n[[image {0} link="{0}" width="50px"]] _\n'
+            if img["rewrite"] is not None:
+                user += ", [[user {}]]".format(img["rewrite"])
+            F.write('|| _\n[[image {0} width="50px"]] _\n'
                     .format(img["url"]))
-            F.write('||[{} {}] _\n{} _\n'.format(img["page"], title, user))
+            F.write('||[{} page] _\n{} _\n'.format(img["page"], user))
             F.write('||{} _\n [{} Google] _\n'.format(tineye_url, google_url))
-            F.write('|| [pasteurlhere source] _\n'
-                    '|| _\n[!-- Pick one, delete others, then delete the'
-                    ' comment block\n'
-                    '##darkred|**PERMANENTLY REMOVED**## _\n'
-                    '##darkred|**PERMISSION DENIED**## _\n'
-                    '##darkred|**UNABLE TO CONTACT**## _\n'
-                    '##darkred|**SOURCE UNKNOWN**## _\n'
-                    '##blue|**REPLACED**## _\n'
-                    '##blue|**AWAITING REPLY**## _\n'
-                    '##blue|**PERMISSION GRANTED**## _\n'
-                    '##blue|**BY-NC-SA CC**## _\n'
-                    '##green|**BY-SA CC**## _\n'
-                    '##green|**PUBLIC DOMAIN**## _\n'
-                    '--]\n || [!-- write_notes_here --] ||\n')
+            F.write('|| [pasteurlhere ->] _\n'
+                    '|| _\n[!-- copy page status here\n'
+                    '--]\n|| [!-- write notes here --] ||\n')
 
 
 
@@ -598,8 +597,9 @@ def main():
         F.write(arrow.utcnow().format("YYYY-MM-DDTHH:mm:ss"))
     Page.image_whitelist = retrieve_table(
         "http://scpsandbox2.wikidot.com/ebook-image-whitelist")
-    Page.author_overrides = retrieve_table(
-        "http://05command.wikidot.com/alexandra-rewrite")
+    Page.author_overrides = {
+        "http://www.scp-wiki.net/" + k: v for k, v in
+        retrieve_table("http://05command.wikidot.com/alexandra-rewrite").items()}
     book = make_new_book("SCP Foundation: Tome 1.01")
 
     for i in yield_pages():
@@ -622,5 +622,6 @@ def main():
     add_attributions(book)
     book.save(book.title)
     image_review()
+    print("done")
 
 main()
