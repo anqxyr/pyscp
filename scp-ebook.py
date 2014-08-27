@@ -2,6 +2,7 @@
 
 from bs4 import BeautifulSoup
 from lxml import etree, html
+from functools import wraps
 import re
 import os
 import shutil
@@ -22,113 +23,139 @@ def cached(func):
     if not os.path.exists(path):
         os.makedirs(path)
 
+    @wraps(func)
     def cached_func(page):
-        replace = {"http://": "", "/": "_", ":": "-"}
-        for new_str in (page.url.replace(k, v) for k, v in replace.items()):
+        replace = [("http://", ""), ("/", "_"), ("www.", ""), (":", "-")]
+        url_norm = page.url
+        for new_str in (url_norm.replace(k, v) for k, v in replace):
             url_norm = new_str
-        if os.path.isfile(path + url_norm):
-            with open(path + url_norm) as cached_file:
+        fullpath = "{}/{}".format(path, url_norm)
+        if os.path.isfile(fullpath):
+            with open(fullpath) as cached_file:
                 data = cached_file.read()
         else:
-            print("{}({})".format(func.__name__, page.url))
+            print("{:<40}{}".format(func.__name__, page.url))
             data = func(page)
-            with open(path + url_norm, "w") as cached_file:
-                cached_file.write(data)
+            if data is not None:
+                with open(fullpath, "w") as cached_file:
+                    cached_file.write(data)
         return data
     return cached_func
+
+
+def verbose(func):
+    @wraps(func)
+    def verbose_func(*args, **keyargs):
+        print("Entering {}".format(func.__name__))
+        print("Arguments")
+        for i in args:
+            print("\t\t{}".format(i))
+        print("Keyword arguments:")
+        for k, v in keyargs.items():
+            print("\t\t{}: {}".format(k, v))
+        result = func(*args, **keyargs)
+        print("Finished {}".format(func.__name__))
+        return result
+    return verbose_func
+
+
+def wikidot_module(name, page, perpage, pageid):
+    """Retrieves data from the specified wikidot module"""
+    headers = {"Content-Type": "application/x-www-form-urlencoded;",
+               "Cookie": "wikidot_token7=123456;"}
+    payload = {"page": page, "perpage": perpage, "page_id": pageid,
+               "moduleName": name, "wikidot_token7": "123456"}
+    payload = "&".join("=".join(i) for i in payload.items())
+    try:
+        data = requests.post(
+            "http://www.scp-wiki.net/ajax-module-connector.php",
+            data=payload, headers=headers).json()["body"]
+    except Exception as e:
+        print("ERROR: {}".format(e))
+        data = None
+    return data
 
 
 class Page():
 
     """Scrape and store contents and metadata of a page"""
 
-    image_whitelist = {}
-    author_overrides = {}
-    #contains the titles of the SCP articles, e.g. "SCP-1511: Mobile Paradise"
-    scp_index = {}
+    images = {}
+    authors = {}
+    titles = {}
+    overrides = {"http://www.scp-wiki.net/scp-1047-j",
+                 "http://www.scp-wiki.net/scp-2998",
+                 "http://www.scp-wiki.net/wills-and-ways-hub",
+                 "http://www.scp-wiki.net/serpent-s-hand-hub",
+                 "http://www.scp-wiki.net/chicago-spirit-hub"}
 
     def __init__(self, url=None):
         self.url = url
         self.tags = []
         self.images = []
-        self.author = None
-        self.rewrite_author = None
         self.title = None
         self.soup = ""
         if url is not None:
-            self.scrape()
-            self.cook()
-        self.override()
-
-    def scrape(self):
-        self.soup = self._scrape_body()
-        self.history = self._scrape_history()
+            self.soup = self._scrape_body()
+            if self.soup is not None:
+                #self.data = self._cook()
+                self._cook()
+                self.history = self._scrape_history()
+            if self.history is not None:
+                #self.authors is a dict of all the authors of the article
+                self.authors = self._pick_authors()
+        if url in Page.overrides:
+            self._override()
 
     @cached
     def _scrape_body(self):
         try:
-            soup = BeautifulSoup(requests.get(self.url).text)
+            soup = requests.get(self.url).text
         except Exception as e:
             print("ERROR: {}".format(e))
-            return None
-        return str(soup)
+            soup = None
+        return soup
 
     @cached
     def _scrape_history(self):
-        if re.search("pageId = ([^;]*);", self.soup) is None:
-            return None
-        pageid = re.search("pageId = ([^;]*);", self.soup).group(1)
-        headers = {"Content-Type": "application/x-www-form-urlencoded;",
-                   "Cookie": "wikidot_token7=123456;"}
-        payload = ("page=1&perpage=1000&page_id={}&moduleName=history%2FPage"
-                   "RevisionListModule&wikidot_token7=123456".format(pageid))
-        try:
-            data = requests.post(
-                "http://www.scp-wiki.net/ajax-module-connector.php",
-                data=payload, headers=headers).json()["body"]
-        except Exception as e:
-            print("ERROR: {}".format(e))
-            return None
-        return data
+        re_pageid = re.search("pageId = ([^;]*);", self.soup)
+        if re_pageid is not None:
+            pageid = re_pageid.group(1)
+            return wikidot_module(name="history%2FPageRevisionListModule",
+                                  page="1", perpage="1000", pageid=pageid)
 
-    def override(self):
-        if self.url == "http://www.scp-wiki.net/scp-1047-j":
-            self.data = None
-        elif self.url == "http://www.scp-wiki.net/scp-2998":
-            x = [Page("{}-{}".format(self.url, n)) for n in range(2, 11)]
-            for i in x:
-                i.title = "SCP-2998-{}".format(i.url.split("-")[-1])
-            self.list_children = lambda: x
-        elif self.title == "Wills And Ways":
-            x = [k for k in self.list_children()
-                 if k.title != "Marshall, Carter and Dark Hub "]
-            self.list_children = lambda: x
-        elif self.title == "Serpent's Hand Hub":
-            x = [k for k in self.list_children() if k.title !=
-                 "Black Queen Hub"]
-            self.list_children = lambda: x
-        elif self.url == "Chicago Spirit Hub":
-            self.list_children = lambda: []
+    def _override(self):
+        def _except(partial_url):
+            #rewrite with filter later on
+            return [page for page in self.list_children()
+                    if page.url != "http://www.scp-wiki.net/" + partial_url]
 
-    def cook(self):
+        def _subpages(page_range):
+            new_children = []
+            for n in page_range:
+                page = Page("{}-{}".format(self.url, n))
+                page.title = "{}-{}".format(self.title, n)
+                new_children.append(page)
+            return new_children
+        ov_data = {"scp-1047-j": None}
+        ov_children = {
+            "scp-2998": (_subpages, range(2, 11)),
+            "wills-and-ways-hub": (_except, "marshall-carter-and-dark-hub"),
+            "serpent-s-hand-hub": (_except, "black-queen-hub"),
+            "chicago-spirit-hub": (list, "")}
+        for k, v in ov_data.items():
+            if self.url == "http://www.scp-wiki.net/" + k:
+                self.data = v
+        for k, v in ov_children.items():
+            if self.url == "http://www.scp-wiki.net/" + k:
+                new_children = v[0](v[1])
+                self.list_children = lambda: new_children
+
+    def _cook(self):
         '''Cook the soup, retrieve title, data, and tags'''
-        if not self.soup:
-            self.title = None
-            self.data = None
-            return
         soup = BeautifulSoup(self.soup)
-        # meta
+        # tags
         self.tags = [a.string for a in soup.select("div.page-tags a")]
-        if self.history is not None:
-            author = BeautifulSoup(self.history).select("tr")[-1].select(
-                "td")[-3].text
-            self.author = author
-            if self.url in Page.author_overrides:
-                override = Page.author_overrides[self.url]
-                if override[:10] == ":override:":
-                    self.author = override[10:]
-                else:
-                    self.rewrite_author = override
         # title
         if soup.select("#page-title"):
             title = soup.select("#page-title")[0].text.strip()
@@ -138,7 +165,7 @@ class Page():
         # it's easier to check if the page is a mainlist skip
         # by regexping its url instead of looking at tags
         if "scp" in self.tags and re.match(".*scp-[0-9]{3,4}$", self.url):
-            if Page.scp_index == {}:
+            if Page.titles == {}:
                 index_urls = ["http://www.scp-wiki.net/scp-series",
                               "http://www.scp-wiki.net/scp-series-2",
                               "http://www.scp-wiki.net/scp-series-3"]
@@ -148,8 +175,8 @@ class Page():
                     for e in entries:
                         if re.match(".*>SCP-[0-9]*<.*", str(e)):
                             i = e.text.split(" - ")
-                            Page.scp_index[i[0]] = i[1]
-            title = "{}: {}".format(title, Page.scp_index["SCP-" + title[4:]])
+                            Page.titles[i[0]] = i[1]
+            title = "{}: {}".format(title, Page.titles["SCP-" + title[4:]])
         self.title = title
         # body
         if not soup.select("#page-content"):
@@ -160,16 +187,9 @@ class Page():
         [k.decompose() for e in garbage for k in data.select(e)]
         #images
         for i in data.select("img"):
-            if i.has_attr("src"):
-                global image_review_list
-                image_review_list.append({
-                    "url": i["src"], "page": self.url, "page_title":
-                    self.title, "author": self.author, "rewrite":
-                    self.rewrite_author})
-        for i in data.select("img"):
             if i.name is None or not i.has_attr("src"):
                 continue
-            if i["src"] not in Page.image_whitelist:
+            if i["src"] not in Page.images:
                 for k in i.parents:
                     if k.name == "table" or (k.has_attr("class") and k["class"]
                                              == "scp-image-block"):
@@ -234,6 +254,17 @@ class Page():
         data += "<div class='tags' style='display: none'><hr/><p>{}</p></div>"\
                 .format("</p><p>".join(self.tags))
         self.data = data
+
+    def _pick_authors(self):
+        history = BeautifulSoup(self.history)
+        author = history.select("tr")[-1].select("td")[-3].text
+        if self.url not in Page.authors:
+            return {author: "original"}
+        new_author = Page.authors[self.url]
+        if new_author[:10] == ":override:":
+            return {new_author[10:]: "original"}
+        else:
+            return {author: "original", new_author: "rewrite"}
 
     def list_children(self):
         def links(self):
@@ -319,8 +350,8 @@ class Epub():
             self.images[i] = page.title
         #add the page to the list of all pages in the book
         self.allpages.append({
-            "title": page.title, "id": uid, "author": page.author,
-            "rewrite_author": page.rewrite_author, "url": page.url})
+            "title": page.title, "id": uid, "authors": page.authors,
+            "url": page.url})
         if page.url is not None:
             Epub.allpages_global.append(page.url)
 
@@ -406,14 +437,14 @@ def yield_pages():
     scp_main = sorted(scp_main, key=natural_key)
     scp_blocks = [[i for i in scp_main if (int(i.split("-")[-1]) // 100 == n)]
                   for n in range(30)]
-    for b in scp_blocks[10:]:
-        break
+    for b in scp_blocks[3:4]:
         b_name = "SCP Database/Articles {}-{}".format(b[0].split("-")[-1],
                                                       b[-1].split("-")[-1])
         for url in b:
             p = Page(url)
             p.chapter = b_name
             yield p
+    return
 
     def quick_yield(tags, chapter_name):
         L = [urls_by_tag(i) for i in tags if type(i) == str]
@@ -424,9 +455,9 @@ def yield_pages():
             p = Page(url)
             p.chapter = chapter_name
             yield p
-    yield from quick_yield(["joke", "scp"], "SCP Database/Joke Articles")
-    yield from quick_yield(["explained", "scp"],
-                           "SCP Database/Explained Phenomena")
+    #yield from quick_yield(["joke", "scp"], "SCP Database/Joke Articles")
+    #yield from quick_yield(["explained", "scp"],
+    #                       "SCP Database/Explained Phenomena")
     hubhubs = ["http://www.scp-wiki.net/canon-hub",
                "http://www.scp-wiki.net/goi-contest-2014",
                "http://www.scp-wiki.net/acidverse"]
@@ -434,54 +465,7 @@ def yield_pages():
     for i in quick_yield(["hub", ["tale", "goi2014"]], "Canons and Series"):
         if i.url not in nested_hubs:
             yield i
-    yield from quick_yield(["tale"], "Assorted Tales")
-
-
-def image_review():
-    """This function is not related to the ebook and is not necessary
-    for it to work. It is here to help the wiki staff only"""
-    #removing duplicates from the list
-    new_list = []
-    for i in image_review_list:
-        if i["url"] not in [k["url"] for k in new_list]:
-            new_list.append(i)
-
-    def natural_key(s):
-        re_natural = re.compile('[0-9]+|[^0-9]+')
-        return [(1, int(c)) if c.isdigit() else (0, c.lower()) for c
-                in re_natural.findall(s)] + [s]
-    try:
-        new_list.sort(key=lambda x: natural_key(x["page_title"]))
-    except:
-        print(i["page_title"] for i in new_list)
-    with open("image_review.txt", "w") as F:
-        F.write("||~ Image||~ Page/Author||~ Search Results||~ Source"
-                "||~ Status||~ Notes||\n")
-        for img in new_list:
-            print("processinig image {}".format(img["url"]))
-            if (img["url"] == "http://scp-wiki.wdfiles.com/local--files/compon"
-                    "ent:heritage-rating/scp-heritage-v3.png"):
-                continue
-            post = requests.post("http://tineye.com/search", data={
-                "url": img["url"]}, allow_redirects=False).headers
-            tineye_url = ("[{} TinEye]".format(post["location"]) if "location"
-                          in post else "TinEye")
-            google_url = ("https://www.google.com/searchbyimage?&image_url={}"
-                          .format(img["url"]))
-            title = img["page_title"]
-            title = title if len(title) < 40 else title[:36] + "(..)"
-            user = img["author"]
-            user = ("[[user {}]]".format(user) if user not in
-                    ["Account Deleted"] else "None")
-            if img["rewrite"] is not None:
-                user += ", [[user {}]]".format(img["rewrite"])
-            F.write('|| _\n[[image {0} width="50px"]] _\n'
-                    .format(img["url"]))
-            F.write('||[{} page] _\n{} _\n'.format(img["page"], user))
-            F.write('||{} _\n [{} Google] _\n'.format(tineye_url, google_url))
-            F.write('|| [pasteurlhere ->] _\n'
-                    '|| _\n[!-- copy page status here\n'
-                    '--]\n|| [!-- write notes here --] ||\n')
+    #yield from quick_yield(["tale"], "Assorted Tales")
 
 
 def update(time):
@@ -546,25 +530,23 @@ def main():
         attrib.title = "Acknowledgments and Attributions"
         attrib.data = "<div class='attrib'>"
         for i in sorted(book.allpages, key=lambda k: k["id"]):
-            def add_one(attrib, title, url, author, r=None):
+            def add_one(attrib, title, url, authors):
                 attrib.data += "<p><b>{}</b> ({}) was written by <b>{}</b>"\
-                               .format(title, url, author)
-                if r is not None:
-                    attrib.data += " and rewritten by <b>{}</b>.</p>".format(r)
-                else:
-                    attrib.data += ".</p>"
+                               .format(title, url, " ".join(authors.keys()))
+                #if r is not None:
+                #    attrib.data += " and rewritten by <b>{}</b>.</p>".format(r)
+                #else:
+                #    attrib.data += ".</p>"
             if i["url"] is None:
                 continue
-            if i["author"] not in [None, "(account deleted)"]:
-                add_one(attrib, i["title"], i["url"], i["author"],
-                        i["rewrite_author"])
+            add_one(attrib, i["title"], i["url"], i["authors"])
         for i in book.images:
-            if Page.image_whitelist[i] != "PUBLIC DOMAIN":
+            if Page.images[i] != "PUBLIC DOMAIN":
                 attrib.data += (
                     "<p>The image {}_{}, which appears on the page <b>{}</b>, "
                     "is a CC image available at <u>{}</u>.</p>".format(
                         i.split("/")[-2], i.split("/")[-1], book.images[i],
-                        Page.image_whitelist[i]))
+                        Page.images[i]))
         attrib.data += "</div>"
         book.add_page(attrib)
 
@@ -597,9 +579,9 @@ def main():
             update(F.read())
     with open("{}_lastcreated".format(datadir), "w") as F:
         F.write(arrow.utcnow().format("YYYY-MM-DDTHH:mm:ss"))
-    Page.image_whitelist = retrieve_table(
+    Page.images = retrieve_table(
         "http://scpsandbox2.wikidot.com/ebook-image-whitelist")
-    Page.author_overrides = {
+    Page.authors = {
         "http://www.scp-wiki.net/" + k: v for k, v in
         retrieve_table("http://05command.wikidot.com/alexandra-rewrite")
         .items()}
@@ -624,7 +606,6 @@ def main():
         book.add_page(i, node_with_text(book, previous_chapter))
     add_attributions(book)
     book.save(book.title)
-    image_review()
     print("done")
 
 main()
