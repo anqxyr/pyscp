@@ -9,13 +9,17 @@ import shutil
 import copy
 import arrow
 import requests
+from requests.adapters import HTTPAdapter
 import tempfile
 
 
 datadir = os.path.expanduser("~/.scp-data/")
+req = requests.Session()
+req.mount("http://www.scp-wiki.net/", HTTPAdapter(max_retries=5))
 
 
-def cached(func):
+def cached_to_disk(func):
+    """Save the results of the func to the directory specified in datadir."""
     path = datadir + func.__name__
     replace = {"_scrape_body": "data", "_scrape_history": "history"}
     for new_str in (path.replace(k, v) for k, v in replace.items()):
@@ -43,46 +47,41 @@ def cached(func):
     return cached_func
 
 
-def verbose(func):
-    @wraps(func)
-    def verbose_func(*args, **keyargs):
-        print("Entering {}".format(func.__name__))
-        print("Arguments")
-        for i in args:
-            print("\t\t{}".format(i))
-        print("Keyword arguments:")
-        for k, v in keyargs.items():
-            print("\t\t{}: {}".format(k, v))
-        result = func(*args, **keyargs)
-        print("Finished {}".format(func.__name__))
-        return result
-    return verbose_func
-
-
 def wikidot_module(name, page, perpage, pageid):
-    """Retrieves data from the specified wikidot module"""
+    """Retrieve data from the specified wikidot module."""
     headers = {"Content-Type": "application/x-www-form-urlencoded;",
                "Cookie": "wikidot_token7=123456;"}
     payload = {"page": page, "perpage": perpage, "page_id": pageid,
                "moduleName": name, "wikidot_token7": "123456"}
     payload = "&".join("=".join(i) for i in payload.items())
-    try:
-        data = requests.post(
-            "http://www.scp-wiki.net/ajax-module-connector.php",
-            data=payload, headers=headers).json()["body"]
-    except Exception as e:
-        print("ERROR: {}".format(e))
-        data = None
+    data = req.post("http://www.scp-wiki.net/ajax-module-connector.php",
+                    data=payload, headers=headers).json()["body"]
     return data
+
+
+def _page_init_titles():
+        """Return a dict of SCP articles' titles"""
+        index_urls = ["http://www.scp-wiki.net/scp-series",
+                      "http://www.scp-wiki.net/scp-series-2",
+                      "http://www.scp-wiki.net/scp-series-3"]
+        titles = {}
+        for url in index_urls:
+            soup = BeautifulSoup(req.get(url).text)
+            articles = [i for i in soup.select("ul > li")
+                        if re.search("scp-[0-9]+", i.a["href"])]
+            for e in articles:
+                k, v = e.text.split(" - ", maxsplit=1)
+                titles[k] = v
+        return titles
 
 
 class Page():
 
-    """Scrape and store contents and metadata of a page"""
+    """Scrape and store contents and metadata of a page."""
 
     images = {}
     authors = {}
-    titles = {}
+    titles = _page_init_titles()
     overrides = {"http://www.scp-wiki.net/scp-1047-j",
                  "http://www.scp-wiki.net/scp-2998",
                  "http://www.scp-wiki.net/wills-and-ways-hub",
@@ -107,16 +106,12 @@ class Page():
         if url in Page.overrides:
             self._override()
 
-    @cached
+    @cached_to_disk
     def _scrape_body(self):
-        try:
-            soup = requests.get(self.url).text
-        except Exception as e:
-            print("ERROR: {}".format(e))
-            soup = None
+        soup = req.get(self.url).text
         return soup
 
-    @cached
+    @cached_to_disk
     def _scrape_history(self):
         re_pageid = re.search("pageId = ([^;]*);", self.soup)
         if re_pageid is not None:
@@ -125,30 +120,21 @@ class Page():
                                   page="1", perpage="1000", pageid=pageid)
 
     def _override(self):
-        def _except(partial_url):
-            #rewrite with filter later on
-            return [page for page in self.list_children()
-                    if page.url != "http://www.scp-wiki.net/" + partial_url]
-
-        def _subpages(page_range):
-            new_children = []
-            for n in page_range:
-                page = Page("{}-{}".format(self.url, n))
-                page.title = "{}-{}".format(self.title, n)
-                new_children.append(page)
-            return new_children
+        _inrange = lambda x: [Page("{}-{}".format(self.url, n)) for n in x]
+        _except = lambda x: [p for p in self.list_children()
+                             if p.url != "http://www.scp-wiki.net/" + x]
         ov_data = {"scp-1047-j": None}
-        ov_children = {
-            "scp-2998": (_subpages, range(2, 11)),
-            "wills-and-ways-hub": (_except, "marshall-carter-and-dark-hub"),
-            "serpent-s-hand-hub": (_except, "black-queen-hub"),
-            "chicago-spirit-hub": (list, "")}
+        ov_children = [
+            ("scp-2998", _inrange, range(2, 11)),
+            ("wills-and-ways-hub", _except, "marshall-carter-and-dark-hub"),
+            ("serpent-s-hand-hub", _except, "black-queen-hub"),
+            ("chicago-spirit-hub", list, "")]
         for k, v in ov_data.items():
             if self.url == "http://www.scp-wiki.net/" + k:
                 self.data = v
-        for k, v in ov_children.items():
-            if self.url == "http://www.scp-wiki.net/" + k:
-                new_children = v[0](v[1])
+        for url, func, args in ov_children:
+            if self.url == "http://www.scp-wiki.net/" + url:
+                new_children = func(args)
                 self.list_children = lambda: new_children
 
     def _cook(self):
@@ -165,17 +151,8 @@ class Page():
         # it's easier to check if the page is a mainlist skip
         # by regexping its url instead of looking at tags
         if "scp" in self.tags and re.match(".*scp-[0-9]{3,4}$", self.url):
-            if Page.titles == {}:
-                index_urls = ["http://www.scp-wiki.net/scp-series",
-                              "http://www.scp-wiki.net/scp-series-2",
-                              "http://www.scp-wiki.net/scp-series-3"]
-                for u in index_urls:
-                    s = BeautifulSoup(Page(u).soup)
-                    entries = s.select("ul li")
-                    for e in entries:
-                        if re.match(".*>SCP-[0-9]*<.*", str(e)):
-                            i = e.text.split(" - ")
-                            Page.titles[i[0]] = i[1]
+            #if Page.titles == {}:
+
             title = "{}: {}".format(title, Page.titles["SCP-" + title[4:]])
         self.title = title
         # body
@@ -437,7 +414,7 @@ def yield_pages():
     scp_main = sorted(scp_main, key=natural_key)
     scp_blocks = [[i for i in scp_main if (int(i.split("-")[-1]) // 100 == n)]
                   for n in range(30)]
-    for b in scp_blocks[3:4]:
+    for b in scp_blocks[29:]:
         b_name = "SCP Database/Articles {}-{}".format(b[0].split("-")[-1],
                                                       b[-1].split("-")[-1])
         for url in b:
@@ -473,7 +450,7 @@ def update(time):
         print("downloading recent changes: page {}".format(page))
         headers = {"Content-Type": "application/x-www-form-urlencoded;",
                    "Cookie": "wikidot_token7=123456;"}
-        payload = ("page={}&perpage=20&page_id=1926945&moduleName=changes%2FS"
+        payload = ("page={}&perpage=100&page_id=1926945&moduleName=changes%2FS"
                    "iteChangesListModule&wikidot_token7=123456".format(page))
         try:
             data = requests.post("http://www.scp-wiki.net/ajax-module-"
