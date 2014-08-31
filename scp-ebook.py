@@ -68,7 +68,7 @@ def _page_init_titles():
         for url in index_urls:
             soup = BeautifulSoup(req.get(url).text)
             articles = [i for i in soup.select("ul > li")
-                        if re.search("scp-[0-9]+", i.a["href"])]
+                        if re.search("(SCP|SPC)-[0-9]+", i.text)]
             for e in articles:
                 k, v = e.text.split(" - ", maxsplit=1)
                 titles[k] = v
@@ -82,155 +82,170 @@ class Page():
     images = {}
     authors = {}
     titles = _page_init_titles()
-    overrides = {"http://www.scp-wiki.net/scp-1047-j",
-                 "http://www.scp-wiki.net/scp-2998",
-                 "http://www.scp-wiki.net/wills-and-ways-hub",
-                 "http://www.scp-wiki.net/serpent-s-hand-hub",
-                 "http://www.scp-wiki.net/chicago-spirit-hub"}
 
     def __init__(self, url=None):
         self.url = url
+        self.data = None
+        self.title = None
         self.tags = []
         self.images = []
-        self.title = None
-        self.soup = ""
+        self.history = None
+        self.soup = None
         if url is not None:
             self.soup = self._scrape_body()
             if self.soup is not None:
-                #self.data = self._cook()
-                self._cook()
+                self.data, self.title, self.tags = self._cook()
                 self.history = self._scrape_history()
-            if self.history is not None:
-                #self.authors is a dict of all the authors of the article
-                self.authors = self._pick_authors()
-        if url in Page.overrides:
-            self._override()
+                if self.history is not None:
+                    self.authors = self._pick_authors()
+        self._override()
 
     @cached_to_disk
     def _scrape_body(self):
-        soup = req.get(self.url).text
-        return soup
+        """Scrape the contents of the page."""
+        data = req.get(self.url)
+        if data.status_code != 404:
+            return data.text
 
     @cached_to_disk
     def _scrape_history(self):
-        re_pageid = re.search("pageId = ([^;]*);", self.soup)
-        if re_pageid is not None:
-            pageid = re_pageid.group(1)
-            return wikidot_module(name="history%2FPageRevisionListModule",
-                                  page="1", perpage="1000", pageid=pageid)
+        """Scrape page's history."""
+        pageid = re.search("pageId = ([^;]*);", self.soup)
+        if pageid is None:
+            return None
+        return wikidot_module(name="history%2FPageRevisionListModule",
+                              page="1", perpage="1000", pageid=pageid.group(1))
 
     def _override(self):
         _inrange = lambda x: [Page("{}-{}".format(self.url, n)) for n in x]
         _except = lambda x: [p for p in self.list_children()
                              if p.url != "http://www.scp-wiki.net/" + x]
-        ov_data = {"scp-1047-j": None}
+        ov_data = [("scp-1047-j", None)]
         ov_children = [
             ("scp-2998", _inrange, range(2, 11)),
             ("wills-and-ways-hub", _except, "marshall-carter-and-dark-hub"),
             ("serpent-s-hand-hub", _except, "black-queen-hub"),
             ("chicago-spirit-hub", list, "")]
-        for k, v in ov_data.items():
-            if self.url == "http://www.scp-wiki.net/" + k:
-                self.data = v
-        for url, func, args in ov_children:
-            if self.url == "http://www.scp-wiki.net/" + url:
-                new_children = func(args)
-                self.list_children = lambda: new_children
+        for partial_url, data in ov_data:
+            if self.url == "http://www.scp-wiki.net/" + partial_url:
+                self.data = data
+        for partial_url, func, args in ov_children:
+            if self.url == "http://www.scp-wiki.net/" + partial_url:
+                self.list_children = lambda: func(args)
 
     def _cook(self):
-        '''Cook the soup, retrieve title, data, and tags'''
+        '''Retrieve title, data, and tags'''
         soup = BeautifulSoup(self.soup)
+        # body
+        parse_elements = [
+            ("div.page-rate-widget-box", lambda x: x.decompose()),
+            ("div.yui-navset", self._parse_tabview),
+            ("div.collapsible-block", self._parse_collapsible),
+            ("blockquote", self._parse_quote),
+            ("sup.footnoteref", self._parse_footnote),
+            ("sup.footnote-footer", self._parse_footnote_footer),
+            ("a", self._parse_link),
+            ("img", self._parse_image)]
+        if not soup.select("#page-content"):
+            data = None
+        else:
+            data = soup.select("#page-content")[0]
+            for element, func in parse_elements:
+                for i in data.select(element):
+                    func(i)
         # tags
-        self.tags = [a.string for a in soup.select("div.page-tags a")]
+        tags = [a.string for a in soup.select("div.page-tags a")]
         # title
         if soup.select("#page-title"):
             title = soup.select("#page-title")[0].text.strip()
         else:
             title = ""
-        # because 001 proposals don't have their own tag,
-        # it's easier to check if the page is a mainlist skip
-        # by regexping its url instead of looking at tags
-        if "scp" in self.tags and re.match(".*scp-[0-9]{3,4}$", self.url):
-            #if Page.titles == {}:
-
-            title = "{}: {}".format(title, Page.titles["SCP-" + title[4:]])
-        self.title = title
-        # body
-        if not soup.select("#page-content"):
-            self.data = None
-            return
-        data = soup.select("#page-content")[0]
-        garbage = ["div.page-rate-widget-box"]
-        [k.decompose() for e in garbage for k in data.select(e)]
-        #images
-        for i in data.select("img"):
-            if i.name is None or not i.has_attr("src"):
-                continue
-            if i["src"] not in Page.images:
-                for k in i.parents:
-                    if k.name == "table" or (k.has_attr("class") and k["class"]
-                                             == "scp-image-block"):
-                        k.decompose()
-                        break
-                i.decompose()
-            else:
-                self.images.append(i["src"])
-                image_url = i["src"].split("/")
-                i["src"] = "images/{}_{}".format(image_url[-2], image_url[-1])
-        # tables
-        # tab-views
-        for i in data.select("div.yui-navset"):
-            wraper = soup.new_tag("div", **{"class": "tabview"})
-            titles = [a.text for a in i.select("ul.yui-nav em")]
-            tabs = i.select("div.yui-content > div")
-            for k in tabs:
-                k.attrs = {"class": "tabview-tab"}
-                tab_title = soup.new_tag("div", **{"class": "tab-title"})
-                tab_title.string = titles[tabs.index(k)]
-                k.insert(0, tab_title)
-                wraper.append(k)
-            i.replace_with(wraper)
-        # footnotes
-        for i in data.select("sup.footnoteref"):
-            i.string = i.a.string
-        for i in data.select("div.footnote-footer"):
-            i["class"] = "footnote"
-            del(i["id"])
-            i.string = "".join([k for k in i.strings])
-        # collapsibles
-        for i in data.select("div.collapsible-block"):
-            link_text = i.select("a.collapsible-block-link")[0].text
-            content = i.select("div.collapsible-block-content")[0]
-            if content.text == "":
-                content = i.select("div.collapsible-block-unfolded")[0]
-                del(content["style"])
-                content.select("div.collapsible-block-content")[0].decompose()
-                content.select("div.collapsible-block-unfolded-link"
-                               )[0].decompose()
-            content["class"] = "collaps-content"
-            col = soup.new_tag("div", **{"class": "collapsible"})
-            content = content.wrap(col)
-            col_title = soup.new_tag("div", **{"class": "collaps-title"})
-            col_title.string = link_text
-            content.div.insert_before(col_title)
-            i.replace_with(content)
-        # links
-        for i in data.select("a"):
-            #del(i["href"])
-            i.name = "span"
-            i["class"] = "link"
-        #quote boxes
-        for i in data.select("blockquote"):
-            i.name = "div"
-            i["class"] = "quote"
+        if "scp" in tags and re.search("scp-[0-9]+$", self.url):
+            title = "{}: {}".format(title,
+                                    Page.titles[title.replace("SPC", "SCP")])
         #add title to the page
-        if "scp" in self.tags:
-            data = "<p class='scp-title'>{}</p>{}".format(self.title, data)
+        if "scp" in tags:
+            data = "<p class='scp-title'>{}</p>{}".format(title, data)
         else:
-            data = "<p class='tale-title'>{}</p>{}".format(self.title, data)
+            data = "<p class='tale-title'>{}</p>{}".format(title, data)
         data += "<div class='tags' style='display: none'><hr/><p>{}</p></div>"\
-                .format("</p><p>".join(self.tags))
-        self.data = data
+                .format("</p><p>".join(tags))
+        return data, title, tags
+
+    def _parse_image(self, element):
+        if element.name is None or not element.has_attr("src"):
+            return
+        if element["src"] not in Page.images:
+            #loop through the image's parents, until we find what to cut
+            for tag in element.parents:
+                # old-style image formatting:
+                if (tag.select("table > tr > td > img") is not None and
+                    tag.has_attr("style") and tag["style"] == "float:right; "
+                    "margin:0 2em 1em 2em; width:300px; border:0;") or (
+                        tag.has_attr("class") and
+                        tag["class"] == "scp-image-block"):
+                    tag.decompose()
+                    break
+            else:
+                # if we couldn't find any parents to remove,
+                # just remove the image itself
+                element.decompose()
+        else:
+                self.images.append(element["src"])
+                page, image_url = element["src"].split("/")[-2:]
+                element["src"] = "images/{}_{}".format(page, image_url)
+
+    def _parse_tabview(self, element):
+        soup = BeautifulSoup(self.soup)
+        wraper = soup.new_tag("div", **{"class": "tabview"})
+        titles = [a.text for a in element.select("ul.yui-nav em")]
+        tabs = element.select("div.yui-content > div")
+        for k in tabs:
+            k.attrs = {"class": "tabview-tab"}
+            tab_title = soup.new_tag("div", **{"class": "tab-title"})
+            tab_title.string = titles[tabs.index(k)]
+            k.insert(0, tab_title)
+            wraper.append(k)
+        element.replace_with(wraper)
+
+    def _parse_collapsible(self, element):
+        link_text = element.select("a.collapsible-block-link")[0].text
+        try:
+            content = element.select("div.collapsible-block-content")[0]
+        except:
+            print(element.prettify())
+            exit()
+        if content.text == "":
+            content = element.select("div.collapsible-block-unfolded")[0]
+            del(content["style"])
+            content.select("div.collapsible-block-content")[0].decompose()
+            content.select("div.collapsible-block-unfolded-link"
+                           )[0].decompose()
+        content["class"] = "collaps-content"
+        soup = BeautifulSoup(self.soup)
+        col = soup.new_tag("div", **{"class": "collapsible"})
+        content = content.wrap(col)
+        col_title = soup.new_tag("div", **{"class": "collaps-title"})
+        col_title.string = link_text
+        content.div.insert_before(col_title)
+        element.replace_with(content)
+
+    def _parse_link(self, element):
+        del(element["href"])
+        element.name = "span"
+        element["class"] = "link"
+
+    def _parse_quote(self, element):
+        element.name = "div"
+        element["class"] = "quote"
+
+    def _parse_footnote(self, element):
+        element.string = element.a.string
+
+    def _parse_footnote_footer(self, element):
+        element["class"] = "footnote"
+        del(element["id"])
+        element.string = "".join([k for k in element.strings])
 
     def _pick_authors(self):
         history = BeautifulSoup(self.history)
@@ -243,27 +258,30 @@ class Page():
         else:
             return {author: "original", new_author: "rewrite"}
 
+    def links(self):
+        if self.soup is None:
+            return []
+        links = []
+        soup = BeautifulSoup(self.soup)
+        for a in soup.select("#page-content a"):
+            if not a.has_attr("href") or a["href"][0] != "/":
+                continue
+            if a["href"][-4:] in [".png", ".jpg", ".gif"]:
+                continue
+            url = "http://www.scp-wiki.net{}".format(a["href"])
+            url = url.rstrip("|")
+            if url in links:
+                continue
+            links.append(url)
+        return links
+
     def list_children(self):
-        def links(self):
-            links = []
-            soup = BeautifulSoup(self.soup)
-            for a in soup.select("#page-content a"):
-                if not a.has_attr("href") or a["href"][0] != "/":
-                    continue
-                if a["href"][-4:] in [".png", ".jpg", ".gif"]:
-                    continue
-                url = "http://www.scp-wiki.net{}".format(a["href"])
-                url = url.rstrip("|")
-                if url in links:
-                    continue
-                links.append(url)
-            return links
-        if not any(i in self.tags for i in ["scp", "hub", "splash"]):
+        if not hasattr(self, "tags"):
             return []
         lpages = []
-        for url in links(self):
+        for url in self.links():
             p = Page(url)
-            if p.soup and p.data:
+            if p.soup is not None and p.data is not None:
                 lpages.append(p)
         if any(i in self.tags for i in ["scp", "splash"]):
             mpages = [i for i in lpages if
@@ -275,7 +293,7 @@ class Page():
                       ["tale", "goi-format", "goi2014"])]
 
             def backlinks(page, child):
-                if page.url in links(child):
+                if page.url in child.links():
                     return True
                 soup = BeautifulSoup(child.soup)
                 if soup.select("#breadcrumbs a"):
@@ -288,6 +306,7 @@ class Page():
                 return [p for p in mpages if backlinks(self, p)]
             else:
                 return mpages
+        return []
 
 
 class Epub():
@@ -405,7 +424,6 @@ def yield_pages():
     url_001 = "http://www.scp-wiki.net/proposals-for-scp-001"
     for i in BeautifulSoup(requests.get(url_001).text
                            ).select("#page-content")[0].select("a"):
-        break
         url = "http://www.scp-wiki.net" + i["href"]
         p = Page(url)
         p.chapter = "SCP Database/001 Proposals"
@@ -414,14 +432,13 @@ def yield_pages():
     scp_main = sorted(scp_main, key=natural_key)
     scp_blocks = [[i for i in scp_main if (int(i.split("-")[-1]) // 100 == n)]
                   for n in range(30)]
-    for b in scp_blocks[29:]:
+    for b in scp_blocks:
         b_name = "SCP Database/Articles {}-{}".format(b[0].split("-")[-1],
                                                       b[-1].split("-")[-1])
         for url in b:
             p = Page(url)
             p.chapter = b_name
             yield p
-    return
 
     def quick_yield(tags, chapter_name):
         L = [urls_by_tag(i) for i in tags if type(i) == str]
@@ -432,9 +449,9 @@ def yield_pages():
             p = Page(url)
             p.chapter = chapter_name
             yield p
-    #yield from quick_yield(["joke", "scp"], "SCP Database/Joke Articles")
-    #yield from quick_yield(["explained", "scp"],
-    #                       "SCP Database/Explained Phenomena")
+    yield from quick_yield(["joke", "scp"], "SCP Database/Joke Articles")
+    yield from quick_yield(["explained", "scp"],
+                           "SCP Database/Explained Phenomena")
     hubhubs = ["http://www.scp-wiki.net/canon-hub",
                "http://www.scp-wiki.net/goi-contest-2014",
                "http://www.scp-wiki.net/acidverse"]
@@ -442,7 +459,7 @@ def yield_pages():
     for i in quick_yield(["hub", ["tale", "goi2014"]], "Canons and Series"):
         if i.url not in nested_hubs:
             yield i
-    #yield from quick_yield(["tale"], "Assorted Tales")
+    yield from quick_yield(["tale"], "Assorted Tales")
 
 
 def update(time):
@@ -508,12 +525,13 @@ def main():
         attrib.data = "<div class='attrib'>"
         for i in sorted(book.allpages, key=lambda k: k["id"]):
             def add_one(attrib, title, url, authors):
-                attrib.data += "<p><b>{}</b> ({}) was written by <b>{}</b>"\
-                               .format(title, url, " ".join(authors.keys()))
-                #if r is not None:
-                #    attrib.data += " and rewritten by <b>{}</b>.</p>".format(r)
-                #else:
-                #    attrib.data += ".</p>"
+                attrib.data += \
+                    "<p><b>{}</b> ({}) was written by <b>{}</b>".format(
+                        title, url, " ".join(
+                            k for k, v in authors.items() if v == "original"))
+                for au in (k for k, v in authors.items() if v == "rewrite"):
+                    attrib.data += ", rewritten by <b>{}</b>".format(au)
+                attrib.data += ".</p>"
             if i["url"] is None:
                 continue
             add_one(attrib, i["title"], i["url"], i["authors"])
