@@ -131,11 +131,16 @@ class Page():
                 self.data = data
         for partial_url, func, args in ov_children:
             if self.url == "http://www.scp-wiki.net/" + partial_url:
-                self.list_children = lambda: func(args)
+                new_children = func(args)
+                self.list_children = lambda: new_children
 
     def _cook(self):
         '''Retrieve title, data, and tags'''
         soup = BeautifulSoup(self.soup)
+        rating = soup.select("div.page-rate-widget-box span.number")
+        for i in rating:
+            if int(i.text) < 0:
+                return None, None, []
         # body
         parse_elements = [
             ("div.page-rate-widget-box", lambda x: x.decompose()),
@@ -179,8 +184,8 @@ class Page():
             #loop through the image's parents, until we find what to cut
             for p in element.parents:
                 # old-style image formatting:
-                old_style = bool(p.select("table > tr > td > img") and
-                                 len(p.select("table > tr > td")) == 1)
+                old_style = bool(p.select("table tr > td > img") and
+                                 len(p.select("table tr > td")) == 1)
                 new_style = bool("class" in p.attrs and
                                  "scp-image-block" in p["class"])
                 if old_style or new_style:
@@ -374,12 +379,13 @@ class Epub():
             "YYYY-MM-DDTHH:mm:ss")
         spine.xpath("/*/*[1]/dc:title", namespaces={
             "dc": "http://purl.org/dc/elements/1.1/"})[0].text = self.title
-        for k in self.allpages:
+        for i, k in enumerate(self.allpages):
+            uid = "page_{:0>4}".format(i)
             etree.SubElement(spine.xpath("/*/*[2]")[0], "item", **{
                 "media-type": "application/xhtml+xml", "href":
-                k["id"] + ".xhtml", "id": k["title"].replace(":", "-")})
+                k["id"] + ".xhtml", "id": uid})
             etree.SubElement(spine.xpath("/*/*[3]")[0], "itemref",
-                             idref=k["title"].replace(":", "-"))
+                             idref=uid)
         os.mkdir("{}/images/".format(self.dir.name))
         imagedir = "{}images/".format(datadir)
         if not os.path.exists(imagedir):
@@ -432,14 +438,13 @@ def yield_pages():
     scp_main = sorted(scp_main, key=natural_key)
     scp_blocks = [[i for i in scp_main if (int(i.split("-")[-1]) // 100 == n)]
                   for n in range(30)]
-    for b in scp_blocks[:5]:
+    for b in scp_blocks:
         b_name = "SCP Database/Articles {}-{}".format(b[0].split("-")[-1],
                                                       b[-1].split("-")[-1])
         for url in b:
             p = Page(url)
             p.chapter = b_name
             yield p
-    return
 
     def quick_yield(tags, chapter_name):
         L = [urls_by_tag(i) for i in tags if type(i) == str]
@@ -536,19 +541,18 @@ def main():
         book.add_page(attrib)
 
     def goes_in_book(previous_book, page):
+        return previous_book.title
         def increment_title(old_title):
-            n = old_title[-2:]
-            n = str(int(n) + 1).zfill(2)
-            return old_title[:-2] + n
+            n = old_title[-1:]
+            n = str(int(n) + 1)
+            return old_title[:-1] + n
         if ("scp" in page.tags and
                 page.chapter.split("/")[-1] in previous_book.chapters):
             return previous_book.title
-        elif (page.chapter == "Canons and Series" and
-              previous_book.title[-4:-3] == "1"):
-                return "SCP Foundation: Tome 2.01"
-        elif (page.chapter == "Assorted Tales" and
-              previous_book.title[-4:-3] == "2"):
-                return "SCP Foundation: Tome 3.01"
+        elif ((page.chapter == "Canons and Series" or
+               page.chapter == "Assorted Tales") and
+              page.chapter not in previous_book.chapters):
+                return increment_title(previous_book.title)
         elif len(previous_book.allpages) < 500:
                 return previous_book.title
         else:
@@ -570,13 +574,13 @@ def main():
         "http://www.scp-wiki.net/" + k: v for k, v in
         retrieve_table("http://05command.wikidot.com/alexandra-rewrite")
         .items()}
-    book = make_new_book("SCP Foundation: Tome 1.01")
+    book = make_new_book("SCP Foundation: The Complete Collection")
 
     for i in yield_pages():
         book_name = goes_in_book(book, i)
         if book.title != book_name:
             add_attributions(book)
-            book.save(book.title)
+            book.save("/home/anqxyr/heap/_ebook/" + book.title)
             book = make_new_book(book_name)
         previous_chapter = None
         for c in i.chapter.split("/"):
