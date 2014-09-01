@@ -53,7 +53,7 @@ def wikidot_module(name, page, perpage, pageid):
                "Cookie": "wikidot_token7=123456;"}
     payload = {"page": page, "perpage": perpage, "page_id": pageid,
                "moduleName": name, "wikidot_token7": "123456"}
-    payload = "&".join("=".join(i) for i in payload.items())
+    payload = "&".join("=".join((k, str(v))) for k, v in payload.items())
     data = req.post("http://www.scp-wiki.net/ajax-module-connector.php",
                     data=payload, headers=headers).json()["body"]
     return data
@@ -113,8 +113,8 @@ class Page():
         pageid = re.search("pageId = ([^;]*);", self.soup)
         if pageid is None:
             return None
-        return wikidot_module(name="history%2FPageRevisionListModule",
-                              page="1", perpage="1000", pageid=pageid.group(1))
+        return wikidot_module(name="history/PageRevisionListModule",
+                              page=1, perpage=1000, pageid=pageid.group(1))
 
     def _override(self):
         _inrange = lambda x: [Page("{}-{}".format(self.url, n)) for n in x]
@@ -177,14 +177,14 @@ class Page():
             return
         if element["src"] not in Page.images:
             #loop through the image's parents, until we find what to cut
-            for tag in element.parents:
+            for p in element.parents:
                 # old-style image formatting:
-                if (tag.select("table > tr > td > img") is not None and
-                    tag.has_attr("style") and tag["style"] == "float:right; "
-                    "margin:0 2em 1em 2em; width:300px; border:0;") or (
-                        tag.has_attr("class") and
-                        tag["class"] == "scp-image-block"):
-                    tag.decompose()
+                old_style = bool(p.select("table > tr > td > img") and
+                                 len(p.select("table > tr > td")) == 1)
+                new_style = bool("class" in p.attrs and
+                                 "scp-image-block" in p["class"])
+                if old_style or new_style:
+                    p.decompose()
                     break
             else:
                 # if we couldn't find any parents to remove,
@@ -432,13 +432,14 @@ def yield_pages():
     scp_main = sorted(scp_main, key=natural_key)
     scp_blocks = [[i for i in scp_main if (int(i.split("-")[-1]) // 100 == n)]
                   for n in range(30)]
-    for b in scp_blocks:
+    for b in scp_blocks[:5]:
         b_name = "SCP Database/Articles {}-{}".format(b[0].split("-")[-1],
                                                       b[-1].split("-")[-1])
         for url in b:
             p = Page(url)
             p.chapter = b_name
             yield p
+    return
 
     def quick_yield(tags, chapter_name):
         L = [urls_by_tag(i) for i in tags if type(i) == str]
@@ -463,23 +464,12 @@ def yield_pages():
 
 
 def update(time):
-    def recent_changes(page):
-        print("downloading recent changes: page {}".format(page))
-        headers = {"Content-Type": "application/x-www-form-urlencoded;",
-                   "Cookie": "wikidot_token7=123456;"}
-        payload = ("page={}&perpage=100&page_id=1926945&moduleName=changes%2FS"
-                   "iteChangesListModule&wikidot_token7=123456".format(page))
-        try:
-            data = requests.post("http://www.scp-wiki.net/ajax-module-"
-                                 "connector.php", data=payload,
-                                 headers=headers).json()["body"]
-        except Exception as e:
-            print("ERROR: {}".format(e))
-            return None
-        return BeautifulSoup(data)
     page = 1
     while True:
-        soup = recent_changes(page)
+        print("downloading recent changes: page {}".format(page))
+        soup = BeautifulSoup(wikidot_module(
+            name="changes/SiteChangesListModule", page=page, perpage=100,
+            pageid=1926945))
         for i in soup.select("div.changes-list-item"):
             rev_time = arrow.get(i.select("span.odate")[0].text,
                                  "DD MMM YYYY HH:mm")
@@ -600,7 +590,7 @@ def main():
             previous_chapter = c
         book.add_page(i, node_with_text(book, previous_chapter))
     add_attributions(book)
-    book.save(book.title)
+    book.save("/home/anqxyr/heap/_ebook/" + book.title)
     print("done")
 
 main()
