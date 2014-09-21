@@ -6,7 +6,7 @@ import re
 import arrow
 from requests.adapters import HTTPAdapter
 from bs4 import BeautifulSoup
-from functools import wraps
+import functools
 
 
 datadir = os.path.expanduser("~/.scp-data/")
@@ -14,33 +14,40 @@ req = requests.Session()
 req.mount("http://www.scp-wiki.net/", HTTPAdapter(max_retries=5))
 
 
-def cached_to_disk(func):
-    """Save the results of the func to the directory specified in datadir."""
-    path = datadir + func.__name__
-    replace = {"_scrape_body": "data", "_scrape_history": "history"}
-    for new_str in (path.replace(k, v) for k, v in replace.items()):
-        path = new_str
-    if not os.path.exists(path):
-        os.makedirs(path)
+def normalize(url):
+    replace = [("http://", ""), ("/", "_"), ("www.", ""), (":", "-")]
+    for i in (url.replace(k, v) for k, v in replace):
+        url = i
+    return url
 
-    @wraps(func)
-    def cached_func(page):
-        replace = [("http://", ""), ("/", "_"), ("www.", ""), (":", "-")]
-        url_norm = page.url
-        for new_str in (url_norm.replace(k, v) for k, v in replace):
-            url_norm = new_str
-        fullpath = "{}/{}".format(path, url_norm)
+
+class CacheDecorator():
+    """Save the results of the func to the directory specified in datadir."""
+    
+    def __init__(self, func, cachedir, filename):
+        self.cachedir = os.path.join(datadir, cachedir)
+        self.filename = filename
+        self.func = func
+        if not os.path.exists(self.cachedir):
+            os.makedirs(self.cachedir)
+        functools.update_wrapper(self, func)
+
+    def __call__(self, *args, **kwargs):
+        fullpath = os.path.join(self.cachedir, self.filename(*args, **kwargs))
         if os.path.isfile(fullpath):
             with open(fullpath) as cached_file:
                 data = cached_file.read()
         else:
-            print("{:<40}{}".format(func.__name__, page.url))
-            data = func(page)
+            print("{:<40}{}".format(self.func.__name__, args[0]))
+            data = self.func(*args, **kwargs)
             if data is not None:
                 with open(fullpath, "w") as cached_file:
                     cached_file.write(data)
         return data
-    return cached_func
+
+
+def cached_to_disk(cachedir, filename):
+    return lambda func: CacheDecorator(func, cachedir, filename)
 
 
 def wikidot_module(name, page, perpage, pageid):
@@ -106,22 +113,22 @@ class Page():
         self.history = None
         self.soup = None
         if url is not None:
-            self.soup = self._scrape_body()
+            self.soup = Page._scrape_body(self)
             if self.soup is not None:
                 self.data, self.title, self.tags = self._cook()
-                self.history = self._scrape_history()
+                self.history = Page._scrape_history(self)
                 if self.history is not None:
                     self.authors = self._pick_authors()
         self._override()
 
-    @cached_to_disk
+    @cached_to_disk("data", lambda page: normalize(page.url))
     def _scrape_body(self):
         """Scrape the contents of the page."""
         data = req.get(self.url)
         if data.status_code != 404:
             return data.text
 
-    @cached_to_disk
+    @cached_to_disk("history", lambda page: normalize(page.url))
     def _scrape_history(self):
         """Scrape page's history."""
         pageid = re.search("pageId = ([^;]*);", self.soup)
@@ -405,3 +412,7 @@ def update(time):
             else:
                 return
         page += 1
+
+
+for i in yield_pages():
+    print(i.title)
