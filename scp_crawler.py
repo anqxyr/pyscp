@@ -2,11 +2,12 @@
 
 import os
 import requests
-from requests.adapters import HTTPAdapter
-from functools import wraps
 import re
-from bs4 import BeautifulSoup
 import arrow
+from requests.adapters import HTTPAdapter
+from bs4 import BeautifulSoup
+from functools import wraps
+
 
 datadir = os.path.expanduser("~/.scp-data/")
 req = requests.Session()
@@ -48,13 +49,11 @@ def wikidot_module(name, page, perpage, pageid):
                "Cookie": "wikidot_token7=123456;"}
     payload = {"page": page, "perpage": perpage, "page_id": pageid,
                "moduleName": name, "wikidot_token7": "123456"}
-    payload = "&".join("=".join((k, str(v))) for k, v in payload.items())
-    data = req.post("http://www.scp-wiki.net/ajax-module-connector.php",
+    return req.post("http://www.scp-wiki.net/ajax-module-connector.php",
                     data=payload, headers=headers).json()["body"]
-    return data
 
 
-def _page_init_titles():
+def _init_titles():
         """Return a dict of SCP articles' titles"""
         index_urls = ["http://www.scp-wiki.net/scp-series",
                       "http://www.scp-wiki.net/scp-series-2",
@@ -70,13 +69,32 @@ def _page_init_titles():
         return titles
 
 
+def _init_images():
+    url = "http://scpsandbox2.wikidot.com/ebook-image-whitelist"
+    soup = BeautifulSoup(req.get(url).text)
+    results = {}
+    for i in soup.select("tr")[1:]:
+        results[i.select("td")[0].text] = i.select("td")[1].text
+    return results
+
+
+def _init_rewrites():
+    url = "http://05command.wikidot.com/alexandra-rewrite"
+    soup = BeautifulSoup(req.get(url).text)
+    results = {}
+    pref = "http://www.scp-wiki.net/"
+    for i in soup.select("tr")[1:]:
+        results[pref + i.select("td")[0].text] = i.select("td")[1].text
+    return results
+
+titles = _init_titles()
+images = _init_images()
+rewrites = _init_rewrites()
+
+
 class Page():
 
     """Scrape and store contents and metadata of a page."""
-
-    images = {}
-    authors = {}
-    titles = _page_init_titles()
 
     def __init__(self, url=None):
         self.url = url
@@ -84,6 +102,7 @@ class Page():
         self.title = None
         self.tags = []
         self.images = []
+        self.authors = []
         self.history = None
         self.soup = None
         if url is not None:
@@ -162,7 +181,7 @@ class Page():
             title = ""
         if "scp" in tags and re.search("scp-[0-9]+$", self.url):
             title = "{}: {}".format(title,
-                                    Page.titles[title.replace("SPC", "SCP")])
+                                    titles[title.replace("SPC", "SCP")])
         #add title to the page
         if "scp" in tags:
             data = "<p class='scp-title'>{}</p>{}".format(title, data)
@@ -175,7 +194,7 @@ class Page():
     def _parse_image(self, element):
         if element.name is None or not element.has_attr("src"):
             return
-        if element["src"] not in Page.images:
+        if element["src"] not in images:
             #loop through the image's parents, until we find what to cut
             for p in element.parents:
                 # old-style image formatting:
@@ -250,9 +269,9 @@ class Page():
     def _pick_authors(self):
         history = BeautifulSoup(self.history)
         author = history.select("tr")[-1].select("td")[-3].text
-        if self.url not in Page.authors:
+        if self.url not in rewrites:
             return {author: "original"}
-        new_author = Page.authors[self.url]
+        new_author = rewrites[self.url]
         if new_author[:10] == ":override:":
             return {new_author[10:]: "original"}
         else:
