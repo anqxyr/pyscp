@@ -129,7 +129,7 @@ class Page():
                 self.data, self.title, self.tags = self._cook()
                 self.history = self._scrape_history()
                 if self.history is not None:
-                    self.authors = self._pick_authors()
+                    self.authors = self._parse_authors()
         self._override()
 
     @cache_to_disk
@@ -284,7 +284,7 @@ class Page():
         del(element["id"])
         element.string = "".join([k for k in element.strings])
 
-    def _pick_authors(self):
+    def _parse_authors(self):
         history = BeautifulSoup(self.history)
         author = history.select("tr")[-1].select("td")[-3].text
         if self.url not in rewrites:
@@ -346,60 +346,86 @@ class Page():
         return []
 
 
-def yield_pages():
-    def urls_by_tag(tag):
-        print("downloading tag info: {}".format(tag))
-        soup = BeautifulSoup(requests.get("http://www.scp-wiki.net/system:page"
-                             "-tags/tag/" + tag).text)
-        urls = ["http://www.scp-wiki.net" + a["href"] for a in soup.select(
-            "div.pages-list div.pages-list-item div.title a")]
-        return urls
+@cache_to_disk
+def _scrape_tag(tag):
+    soup = BeautifulSoup(requests.get("http://www.scp-wiki.net/system:page"
+                         "-tags/tag/" + tag).text)
+    urls = ["http://www.scp-wiki.net" + a["href"] for a in soup.select(
+        "div.pages-list div.pages-list-item div.title a")]
+    return urls
 
-    def natural_key(s):
-        re_natural = re.compile('[0-9]+|[^0-9]+')
-        return [(1, int(c)) if c.isdigit() else (0, c.lower()) for c
-                in re_natural.findall(s)] + [s]
-    # skips
-    url_001 = "http://www.scp-wiki.net/proposals-for-scp-001"
-    for i in BeautifulSoup(requests.get(url_001).text
-                           ).select("#page-content")[0].select("a"):
-        url = "http://www.scp-wiki.net" + i["href"]
-        p = Page(url)
-        p.chapter = "SCP Database/001 Proposals"
-        yield p
-    scp_main = [i for i in urls_by_tag("scp") if re.match(".*scp-[0-9]*$", i)]
-    scp_main = sorted(scp_main, key=natural_key)
-    scp_blocks = [[i for i in scp_main if (int(i.split("-")[-1]) // 100 == n)]
+
+def get_skips():
+    skips = [i for i in _scrape_tag("scp") if re.match(".*scp-[0-9]*$", i)]
+    skips.sort(key=_natural_key)
+    scp_blocks = [[i for i in skips if (int(i.split("-")[-1]) // 100 == n)]
                   for n in range(30)]
-    for b in scp_blocks[:1]:
+    for b in scp_blocks:
         b_name = "SCP Database/Articles {}-{}".format(b[0].split("-")[-1],
                                                       b[-1].split("-")[-1])
         for url in b:
             p = Page(url)
             p.chapter = b_name
             yield p
-    return
 
-    def quick_yield(tags, chapter_name):
-        L = [urls_by_tag(i) for i in tags if type(i) == str]
-        for i in [i for i in tags if type(i) == list]:
-            a = [x for k in i for x in urls_by_tag(k)]
-            L.append(a)
-        for url in [i for i in L[0] if all(i in t for t in L)]:
-            p = Page(url)
-            p.chapter = chapter_name
-            yield p
-    #yield from quick_yield(["joke", "scp"], "SCP Database/Joke Articles")
-    #yield from quick_yield(["explained", "scp"],
-    #                       "SCP Database/Explained Phenomena")
+
+def get_001_proposals():
+    proposals_hub = Page("http://www.scp-wiki.net/proposals-for-scp-001")
+    for url in proposals_hub.links():
+        p = Page(url)
+        p.chapter = "SCP Database/001 Proposals"
+        yield p
+
+
+def get_joke_articles():
+    for url in _scrape_tag("joke"):
+        p = Page(url)
+        p.chapter = "SCP Database/Joke Articles"
+        yield p
+
+
+def get_ex_articles():
+    for url in _scrape_tag("explained"):
+        p = Page(url)
+        p.chapter = "SCP Database/Explained Phenomena"
+        yield p
+
+
+def get_hubs():
     hubhubs = ["http://www.scp-wiki.net/canon-hub",
                "http://www.scp-wiki.net/goi-contest-2014",
                "http://www.scp-wiki.net/acidverse"]
     nested_hubs = [i.url for k in hubhubs for i in Page(k).list_children()]
-    for i in quick_yield(["hub", ["tale", "goi2014"]], "Canons and Series"):
-        if i.url not in nested_hubs:
-            yield i
-    #yield from quick_yield(["tale"], "Assorted Tales")
+    hubs = [i for i in _scrape_tag("hub") if i in _scrape_tag("tale")
+            or i in _scrape_tag("goi2014")]
+    for url in hubs:
+        if url not in nested_hubs:
+            p = Page(url)
+            p.chapter = "Canons and Series"
+            yield p
+
+
+def get_tales():
+    for url in _scrape_tag("tale"):
+        p = Page(url)
+        p.chapter = "Assorted Tales"
+        yield p
+
+
+def get_all_pages():
+#    yield from get_001_proposals()
+#    yield from get_skips()
+#    yield from get_joke_articles()
+#    yield from get_ex_articles()
+#    yield from get_hubs()
+#    yield from get_tales()
+    pass
+
+
+def _natural_key(s):
+    re_natural = re.compile('[0-9]+|[^0-9]+')
+    return [(1, int(c)) if c.isdigit() else (0, c.lower()) for c
+            in re_natural.findall(s)] + [s]
 
 
 def update(time):
@@ -425,5 +451,5 @@ def update(time):
         page += 1
 
 
-for i in yield_pages():
+for i in get_all_pages():
     print(i.title)
