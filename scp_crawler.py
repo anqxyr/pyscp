@@ -14,40 +14,46 @@ req = requests.Session()
 req.mount("http://www.scp-wiki.net/", HTTPAdapter(max_retries=5))
 
 
-def normalize(url):
-    replace = [("http://", ""), ("/", "_"), ("www.", ""), (":", "-")]
-    for i in (url.replace(k, v) for k, v in replace):
-        url = i
-    return url
-
-
-class CacheDecorator():
+class cache_to_disk():
     """Save the results of the func to the directory specified in datadir."""
-    
-    def __init__(self, func, cachedir, filename):
-        self.cachedir = os.path.join(datadir, cachedir)
-        self.filename = filename
+
+    def __init__(self, func):
+        self.path = os.path.join(datadir, func.__name__)
         self.func = func
-        if not os.path.exists(self.cachedir):
-            os.makedirs(self.cachedir)
+        if not os.path.exists(self.path):
+            os.makedirs(self.path)
         functools.update_wrapper(self, func)
 
     def __call__(self, *args, **kwargs):
-        fullpath = os.path.join(self.cachedir, self.filename(*args, **kwargs))
+        filename = self._make_filename(*args, **kwargs)
+        fullpath = os.path.join(self.path, filename)
         if os.path.isfile(fullpath):
             with open(fullpath) as cached_file:
                 data = cached_file.read()
         else:
-            print("{:<40}{}".format(self.func.__name__, args[0]))
+            print("{:<40}{}".format(self.func.__name__, filename))
             data = self.func(*args, **kwargs)
             if data is not None:
                 with open(fullpath, "w") as cached_file:
                     cached_file.write(data)
         return data
 
+    def __get__(self, obj, objtype):
+        '''Support instance methods.'''
+        return functools.partial(self.__call__, obj)
 
-def cached_to_disk(cachedir, filename):
-    return lambda func: CacheDecorator(func, cachedir, filename)
+    def _make_filename(self, *args, **kwargs):
+        #this WILL NOT WORK in a general case
+        #it does just enough for what we need and nothing more
+        if args == () and kwargs == {}:
+            return "no_args"
+        url = getattr(args[0], "url", None)
+        if url is not None:
+            replace = ["http://", "/", "www.scp-wiki.net", ":"]
+            for i in (url.replace(r, "") for r in replace):
+                url = i
+            return url
+        return repr(args[0])
 
 
 def wikidot_module(name, page, perpage, pageid):
@@ -113,22 +119,22 @@ class Page():
         self.history = None
         self.soup = None
         if url is not None:
-            self.soup = Page._scrape_body(self)
+            self.soup = self._scrape_body()
             if self.soup is not None:
                 self.data, self.title, self.tags = self._cook()
-                self.history = Page._scrape_history(self)
+                self.history = self._scrape_history()
                 if self.history is not None:
                     self.authors = self._pick_authors()
         self._override()
 
-    @cached_to_disk("data", lambda page: normalize(page.url))
+    @cache_to_disk
     def _scrape_body(self):
         """Scrape the contents of the page."""
         data = req.get(self.url)
         if data.status_code != 404:
             return data.text
 
-    @cached_to_disk("history", lambda page: normalize(page.url))
+    @cache_to_disk
     def _scrape_history(self):
         """Scrape page's history."""
         pageid = re.search("pageId = ([^;]*);", self.soup)
