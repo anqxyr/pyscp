@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 
-import os
-import requests
-import re
-import arrow
-from requests.adapters import HTTPAdapter
 from bs4 import BeautifulSoup
+import arrow
 import functools
+import os
+import pickle
+import re
+import requests
 
 
 datadir = os.path.expanduser("~/.scp-data/")
 req = requests.Session()
-req.mount("http://www.scp-wiki.net/", HTTPAdapter(max_retries=5))
+req.mount("http://www.scp-wiki.net/",
+          requests.adapters.HTTPAdapter(max_retries=5))
 
 
 class cache_to_disk():
@@ -28,14 +29,14 @@ class cache_to_disk():
         filename = self._make_filename(*args, **kwargs)
         fullpath = os.path.join(self.path, filename)
         if os.path.isfile(fullpath):
-            with open(fullpath) as cached_file:
-                data = cached_file.read()
+            with open(fullpath, "rb") as cache_file:
+                data = pickle.load(cache_file)
         else:
             print("{:<40}{}".format(self.func.__name__, filename))
             data = self.func(*args, **kwargs)
             if data is not None:
-                with open(fullpath, "w") as cached_file:
-                    cached_file.write(data)
+                with open(fullpath, "wb") as cache_file:
+                    pickle.dump(data, cache_file)
         return data
 
     def __get__(self, obj, objtype):
@@ -66,22 +67,24 @@ def wikidot_module(name, page, perpage, pageid):
                     data=payload, headers=headers).json()["body"]
 
 
+@cache_to_disk
 def _init_titles():
-        """Return a dict of SCP articles' titles"""
-        index_urls = ["http://www.scp-wiki.net/scp-series",
-                      "http://www.scp-wiki.net/scp-series-2",
-                      "http://www.scp-wiki.net/scp-series-3"]
-        titles = {}
-        for url in index_urls:
-            soup = BeautifulSoup(req.get(url).text)
-            articles = [i for i in soup.select("ul > li")
-                        if re.search("(SCP|SPC)-[0-9]+", i.text)]
-            for e in articles:
-                k, v = e.text.split(" - ", maxsplit=1)
-                titles[k] = v
-        return titles
+    """Return a dict of SCP articles' titles"""
+    index_urls = ["http://www.scp-wiki.net/scp-series",
+                  "http://www.scp-wiki.net/scp-series-2",
+                  "http://www.scp-wiki.net/scp-series-3"]
+    titles = {}
+    for url in index_urls:
+        soup = BeautifulSoup(req.get(url).text)
+        articles = [i for i in soup.select("ul > li")
+                    if re.search("(SCP|SPC)-[0-9]+", i.text)]
+        for e in articles:
+            k, v = e.text.split(" - ", maxsplit=1)
+            titles[k] = v
+    return titles
 
 
+@cache_to_disk
 def _init_images():
     url = "http://scpsandbox2.wikidot.com/ebook-image-whitelist"
     soup = BeautifulSoup(req.get(url).text)
@@ -91,6 +94,7 @@ def _init_images():
     return results
 
 
+@cache_to_disk
 def _init_rewrites():
     url = "http://05command.wikidot.com/alexandra-rewrite"
     soup = BeautifulSoup(req.get(url).text)
@@ -99,6 +103,7 @@ def _init_rewrites():
     for i in soup.select("tr")[1:]:
         results[pref + i.select("td")[0].text] = i.select("td")[1].text
     return results
+
 
 titles = _init_titles()
 images = _init_images()
