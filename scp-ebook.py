@@ -6,7 +6,6 @@ import shutil
 import copy
 import arrow
 import requests
-from bs4 import BeautifulSoup
 import tempfile
 import scp_crawler
 
@@ -113,14 +112,6 @@ class Epub():
 
 
 def main():
-    def retrieve_table(url):
-        print("downloading tabled data: {}".format(url))
-        soup = BeautifulSoup(requests.get(url).text)
-        results = {}
-        for i in soup.select("tr")[1:]:
-            results[i.select("td")[0].text] = i.select("td")[1].text
-        return results
-
     def make_new_book(title):
         book = Epub(title)
         static_pages = []
@@ -152,17 +143,17 @@ def main():
                 continue
             add_one(attrib, i["title"], i["url"], i["authors"])
         for i in book.images:
-            if scp_crawler.Page.images[i] != "PUBLIC DOMAIN":
+            if scp_crawler.images[i] != "PUBLIC DOMAIN":
                 attrib.data += (
                     "<p>The image {}_{}, which appears on the page <b>{}</b>, "
                     "is a CC image available at <u>{}</u>.</p>".format(
                         i.split("/")[-2], i.split("/")[-1], book.images[i],
-                        scp_crawler.Page.images[i]))
+                        scp_crawler.images[i]))
         attrib.data += "</div>"
         book.add_page(attrib)
 
     def goes_in_book(previous_book, page):
-        return previous_book.title
+        #return previous_book.title
 
         def increment_title(old_title):
             n = old_title[-1:]
@@ -190,15 +181,9 @@ def main():
             scp_crawler.update(F.read())
     with open("{}_lastcreated".format(datadir), "w") as F:
         F.write(arrow.utcnow().format("YYYY-MM-DDTHH:mm:ss"))
-    scp_crawler.Page.images = retrieve_table(
-        "http://scpsandbox2.wikidot.com/ebook-image-whitelist")
-    scp_crawler.Page.authors = {
-        "http://www.scp-wiki.net/" + k: v for k, v in
-        retrieve_table("http://05command.wikidot.com/alexandra-rewrite")
-        .items()}
-    book = make_new_book("SCP Foundation: The Complete Collection")
+    book = make_new_book("SCP Foundation: Tome 1")
 
-    for i in scp_crawler.yield_pages():
+    for i in scp_crawler.all_pages():
         book_name = goes_in_book(book, i)
         if book.title != book_name:
             add_attributions(book)

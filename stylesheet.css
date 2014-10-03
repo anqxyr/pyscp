@@ -87,6 +87,10 @@
         font-weight: bold;
         text-decoration: underline;
     }
+    .footer {
+        text-align: center;
+        margin-top: 80%;
+    }
     * {
         font-family: "HelveticaNeue-Light", "Helvetica Neue Light", "Helvetica Neue", Helvetica, Arial, "Lucida Grande", sans-serif;
     }

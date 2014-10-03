@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
-from bs4 import BeautifulSoup
 import arrow
+import bs4
 import functools
 import os
 import pickle
@@ -16,6 +16,7 @@ req.mount("http://www.scp-wiki.net/",
 
 
 class cache_to_disk():
+
     """Save the results of the func to the directory specified in datadir."""
 
     def __init__(self, func):
@@ -53,6 +54,8 @@ class cache_to_disk():
             replace = ["http://", "/", "www.scp-wiki.net", ":"]
             for i in (url.replace(r, "") for r in replace):
                 url = i
+            if url == "":
+                url = "www.scp-wiki.net"
             return url
         return repr(args[0])
 
@@ -75,19 +78,19 @@ def _init_titles():
                   "http://www.scp-wiki.net/scp-series-3"]
     titles = {}
     for url in index_urls:
-        soup = BeautifulSoup(req.get(url).text)
+        soup = bs4.BeautifulSoup(req.get(url).text)
         articles = [i for i in soup.select("ul > li")
-                    if re.search("(SCP|SPC)-[0-9]+", i.text)]
+                    if re.search("[SCP]+-[0-9]+", i.text)]
         for e in articles:
             k, v = e.text.split(" - ", maxsplit=1)
-            titles[k] = v
+            titles[k.split("-")[1]] = v
     return titles
 
 
 @cache_to_disk
 def _init_images():
     url = "http://scpsandbox2.wikidot.com/ebook-image-whitelist"
-    soup = BeautifulSoup(req.get(url).text)
+    soup = bs4.BeautifulSoup(req.get(url).text)
     results = {}
     for i in soup.select("tr")[1:]:
         results[i.select("td")[0].text] = i.select("td")[1].text
@@ -97,7 +100,7 @@ def _init_images():
 @cache_to_disk
 def _init_rewrites():
     url = "http://05command.wikidot.com/alexandra-rewrite"
-    soup = BeautifulSoup(req.get(url).text)
+    soup = bs4.BeautifulSoup(req.get(url).text)
     results = {}
     pref = "http://www.scp-wiki.net/"
     for i in soup.select("tr")[1:]:
@@ -168,11 +171,12 @@ class Page():
 
     def _cook(self):
         '''Retrieve title, data, and tags'''
-        soup = BeautifulSoup(self.soup)
-        rating = soup.select("div.page-rate-widget-box span.number")
-        for i in rating:
-            if int(i.text) < 0:
+        soup = bs4.BeautifulSoup(self.soup)
+        rating = soup.select("#pagerate-button span")
+        if rating != []:
+            if int(rating[0].text) < 0:
                 return None, None, []
+            self.rating = rating[0].text
         # body
         parse_elements = [
             ("div.page-rate-widget-box", lambda x: x.decompose()),
@@ -199,7 +203,7 @@ class Page():
             title = ""
         if "scp" in tags and re.search("scp-[0-9]+$", self.url):
             title = "{}: {}".format(title,
-                                    titles[title.replace("SPC", "SCP")])
+                                    titles[title.split("-")[1]])
         #add title to the page
         if "scp" in tags:
             data = "<p class='scp-title'>{}</p>{}".format(title, data)
@@ -233,7 +237,7 @@ class Page():
                 element["src"] = "images/{}_{}".format(page, image_url)
 
     def _parse_tabview(self, element):
-        soup = BeautifulSoup(self.soup)
+        soup = bs4.BeautifulSoup(self.soup)
         wraper = soup.new_tag("div", **{"class": "tabview"})
         titles = [a.text for a in element.select("ul.yui-nav em")]
         tabs = element.select("div.yui-content > div")
@@ -247,11 +251,7 @@ class Page():
 
     def _parse_collapsible(self, element):
         link_text = element.select("a.collapsible-block-link")[0].text
-        try:
-            content = element.select("div.collapsible-block-content")[0]
-        except:
-            print(element.prettify())
-            exit()
+        content = element.select("div.collapsible-block-content")[0]
         if content.text == "":
             content = element.select("div.collapsible-block-unfolded")[0]
             del(content["style"])
@@ -259,7 +259,7 @@ class Page():
             content.select("div.collapsible-block-unfolded-link"
                            )[0].decompose()
         content["class"] = "collaps-content"
-        soup = BeautifulSoup(self.soup)
+        soup = bs4.BeautifulSoup(self.soup)
         col = soup.new_tag("div", **{"class": "collapsible"})
         content = content.wrap(col)
         col_title = soup.new_tag("div", **{"class": "collaps-title"})
@@ -285,7 +285,7 @@ class Page():
         element.string = "".join([k for k in element.strings])
 
     def _parse_authors(self):
-        history = BeautifulSoup(self.history)
+        history = bs4.BeautifulSoup(self.history)
         author = history.select("tr")[-1].select("td")[-3].text
         if self.url not in rewrites:
             return {author: "original"}
@@ -299,7 +299,7 @@ class Page():
         if self.soup is None:
             return []
         links = []
-        soup = BeautifulSoup(self.soup)
+        soup = bs4.BeautifulSoup(self.soup)
         for a in soup.select("#page-content a"):
             if not a.has_attr("href") or a["href"][0] != "/":
                 continue
@@ -326,13 +326,13 @@ class Page():
             return mpages
         if "hub" in self.tags and any(i in self.tags
                                       for i in ["tale", "goi2014"]):
-            mpages = [i for i in lpages if any(k in i.tags for k in
-                      ["tale", "goi-format", "goi2014"])]
+            mpages = [i for i in lpages if any(
+                k in i.tags for k in ["tale", "goi-format", "goi2014"])]
 
             def backlinks(page, child):
                 if page.url in child.links():
                     return True
-                soup = BeautifulSoup(child.soup)
+                soup = bs4.BeautifulSoup(child.soup)
                 if soup.select("#breadcrumbs a"):
                     crumb = soup.select("#breadcrumbs a")[-1]
                     crumb = "http://www.scp-wiki.net{}".format(crumb["href"])
@@ -348,14 +348,14 @@ class Page():
 
 @cache_to_disk
 def _scrape_tag(tag):
-    soup = BeautifulSoup(requests.get("http://www.scp-wiki.net/system:page"
-                         "-tags/tag/" + tag).text)
+    soup = bs4.BeautifulSoup(req.get(
+        "http://www.scp-wiki.net/system:page-tags/tag/" + tag).text)
     urls = ["http://www.scp-wiki.net" + a["href"] for a in soup.select(
         "div.pages-list div.pages-list-item div.title a")]
     return urls
 
 
-def get_skips():
+def _yield_skips():
     skips = [i for i in _scrape_tag("scp") if re.match(".*scp-[0-9]*$", i)]
     skips.sort(key=_natural_key)
     scp_blocks = [[i for i in skips if (int(i.split("-")[-1]) // 100 == n)]
@@ -369,7 +369,7 @@ def get_skips():
             yield p
 
 
-def get_001_proposals():
+def _yield_001_proposals():
     proposals_hub = Page("http://www.scp-wiki.net/proposals-for-scp-001")
     for url in proposals_hub.links():
         p = Page(url)
@@ -377,21 +377,21 @@ def get_001_proposals():
         yield p
 
 
-def get_joke_articles():
+def _yield_joke_articles():
     for url in _scrape_tag("joke"):
         p = Page(url)
         p.chapter = "SCP Database/Joke Articles"
         yield p
 
 
-def get_ex_articles():
+def _yield_ex_articles():
     for url in _scrape_tag("explained"):
         p = Page(url)
         p.chapter = "SCP Database/Explained Phenomena"
         yield p
 
 
-def get_hubs():
+def _yield_hubs():
     hubhubs = ["http://www.scp-wiki.net/canon-hub",
                "http://www.scp-wiki.net/goi-contest-2014",
                "http://www.scp-wiki.net/acidverse"]
@@ -405,20 +405,20 @@ def get_hubs():
             yield p
 
 
-def get_tales():
+def _yield_tales():
     for url in _scrape_tag("tale"):
         p = Page(url)
         p.chapter = "Assorted Tales"
         yield p
 
 
-def get_all_pages():
-#    yield from get_001_proposals()
-#    yield from get_skips()
-#    yield from get_joke_articles()
-#    yield from get_ex_articles()
-#    yield from get_hubs()
-#    yield from get_tales()
+def all_pages():
+    yield from _yield_001_proposals()
+    yield from _yield_skips()
+    yield from _yield_joke_articles()
+    yield from _yield_ex_articles()
+    yield from _yield_hubs()
+    yield from _yield_tales()
     pass
 
 
@@ -432,7 +432,7 @@ def update(time):
     page = 1
     while True:
         print("downloading recent changes: page {}".format(page))
-        soup = BeautifulSoup(wikidot_module(
+        soup = bs4.BeautifulSoup(wikidot_module(
             name="changes/SiteChangesListModule", page=page, perpage=100,
             pageid=1926945))
         for i in soup.select("div.changes-list-item"):
@@ -449,7 +449,3 @@ def update(time):
             else:
                 return
         page += 1
-
-
-for i in get_all_pages():
-    print(i.title)
