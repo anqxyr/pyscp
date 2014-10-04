@@ -4,15 +4,119 @@ import arrow
 import bs4
 import functools
 import os
+import peewee
 import pickle
 import re
 import requests
 
 
-datadir = os.path.expanduser("~/.scp-data/")
-req = requests.Session()
-req.mount("http://www.scp-wiki.net/",
-          requests.adapters.HTTPAdapter(max_retries=5))
+DATADB = "scp_data.db"
+db = peewee.SqliteDatabase(DATADB)
+
+
+class BaseModel(peewee.Model):
+
+    class Meta:
+        database = db
+
+
+class PageData(BaseModel):
+    url = peewee.CharField(unique=True)
+    html = peewee.TextField()
+    history = peewee.TextField()
+    votes = peewee.TextField()
+
+
+class Snapshot:
+
+    def __init__(self):
+        req = requests.Session()
+        req.mount("http://www.scp-wiki.net/",
+                  requests.adapters.HTTPAdapter(max_retries=5))
+        self.req = req
+        db.connect()
+        db.create_tables([PageData], safe=True)
+
+    def _wikidot_module(self, module_name, res_index, res_per_page, pageid):
+        """Retrieve data from the specified wikidot module."""
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded;",
+            "Cookie": "wikidot_token7=123456;"}
+        payload = {
+            "page_id": pageid,
+            "pageId": pageid,  # fuck wikidot
+            "moduleName": module_name,
+            "page": res_index,
+            "perpage": res_per_page,
+            "wikidot_token7": "123456"}
+        data = self.req.post(
+            "http://www.scp-wiki.net/ajax-module-connector.php",
+            data=payload,
+            headers=headers)
+        try:
+            return data.json()["body"]
+        except Exception as e:
+            print(module_name)
+            print(data.json())
+            print(payload)
+            print(e)
+            exit()
+
+
+    def _scrape_html(self, url):
+        data = self.req.get(url)
+        if data.status_code != 404:
+            return data.text
+        else:
+            return None
+
+    def _scrape_history(self, pageid):
+        return self._wikidot_module(
+            module_name="history/PageRevisionListModule",
+            res_index=1,
+            res_per_page=1000,
+            pageid=pageid)
+
+    def _scrape_votes(self, pageid):
+        return self._wikidot_module(
+            module_name="pagerate/WhoRatedPageModule",
+            res_index=None,
+            res_per_page=None,
+            pageid=pageid)
+
+    def _page_to_db(self, db_page):
+        url = db_page.url
+        print("adding {} to the db".format(url))
+        html = self._scrape_html(url)
+        pageid = re.search("pageId = ([^;]*);", html)
+        if pageid is None:
+            history = None
+            votes = None
+        else:
+            pageid = pageid.group(1)
+            history = self._scrape_history(pageid)
+            votes = self._scrape_votes(pageid)
+        db_page.html = html
+        db_page.history = history
+        db_page.votes = votes
+        db_page.save()
+
+    def take(self):
+        baseurl = "http://www.scp-wiki.net/system:list-all-pages/p/{}"
+        soup = bs4.BeautifulSoup(self.req.get(baseurl).text)
+        counter = soup.select("div.pager span.pager-no")[0].text
+        last_page = int(counter.split(" ")[-1])
+        for index in range(1, 2):
+            data = self.req.get(baseurl.format(index))
+            soup = bs4.BeautifulSoup(data.text)
+            new_pages = soup.select("div.list-pages-item a")
+            for link in new_pages:
+                url = "http://www.scp-wiki.net{}".format(link["href"])
+                try:
+                    db_page = PageData.get(PageData.url == url)
+                except PageData.DoesNotExist:
+                    db_page = PageData(url=url)
+                self._page_to_db(db_page)
 
 
 class cache_to_disk():
@@ -58,16 +162,6 @@ class cache_to_disk():
                 url = "www.scp-wiki.net"
             return url
         return repr(args[0])
-
-
-def wikidot_module(name, page, perpage, pageid):
-    """Retrieve data from the specified wikidot module."""
-    headers = {"Content-Type": "application/x-www-form-urlencoded;",
-               "Cookie": "wikidot_token7=123456;"}
-    payload = {"page": page, "perpage": perpage, "page_id": pageid,
-               "moduleName": name, "wikidot_token7": "123456"}
-    return req.post("http://www.scp-wiki.net/ajax-module-connector.php",
-                    data=payload, headers=headers).json()["body"]
 
 
 @cache_to_disk
@@ -134,13 +228,6 @@ class Page():
                 if self.history is not None:
                     self.authors = self._parse_authors()
         self._override()
-
-    @cache_to_disk
-    def _scrape_body(self):
-        """Scrape the contents of the page."""
-        data = req.get(self.url)
-        if data.status_code != 404:
-            return data.text
 
     @cache_to_disk
     def _scrape_history(self):
@@ -449,3 +536,11 @@ def update(time):
             else:
                 return
         page += 1
+
+
+def main():
+    sn = Snapshot()
+    sn.take()
+
+
+main()
