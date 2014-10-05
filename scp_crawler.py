@@ -37,6 +37,10 @@ class Snapshot:
         db.connect()
         db.create_tables([PageData], safe=True)
 
+    ###########################################################################
+    # Scraping Methods
+    ###########################################################################
+
     def _wikidot_module(self, module_name, res_index, res_per_page, pageid):
         """Retrieve data from the specified wikidot module."""
         headers = {
@@ -62,7 +66,6 @@ class Snapshot:
             print(e)
             exit()
 
-
     def _scrape_html(self, url):
         data = self.req.get(url)
         if data.status_code != 404:
@@ -83,6 +86,39 @@ class Snapshot:
             res_index=None,
             res_per_page=None,
             pageid=pageid)
+
+    def _scrape_scp_titles(self):
+        """Yield tuples of SCP articles' titles"""
+        series_urls = [
+            "http://www.scp-wiki.net/scp-series",
+            "http://www.scp-wiki.net/scp-series-2",
+            "http://www.scp-wiki.net/scp-series-3"]
+        for url in series_urls:
+            soup = bs4.BeautifulSoup(self.req.get(url).text)
+            articles = [i for i in soup.select("ul > li")
+                        if re.search("[SCP]+-[0-9]+", i.text)]
+            for i in articles:
+                url = "http://www.scp-wiki.net{}".format(i.a["href"])
+                skip, title = i.text.split(" - ", maxsplit=1)
+                yield (url, skip, title)
+
+    def _scrape_image_whitelist(self):
+        url = "http://scpsandbox2.wikidot.com/ebook-image-whitelist"
+        soup = bs4.BeautifulSoup(self.req.get(url).text)
+        for i in soup.select("tr")[1:]:
+            im_url = i.select("td")[0].text
+            source = i.select("td")[1].text
+            yield (im_url, source)
+
+    def _scrape_rewrites(self):
+        url = "http://05command.wikidot.com/alexandra-rewrite"
+        soup = bs4.BeautifulSoup(self.req.get(url).text)
+        for i in soup.select("tr")[1:]:
+            url = "http://www.scp-wiki.net/{}".format(i.select("td")[0].text)
+            author = i.select("td")[1].text
+            yield (url, author)
+
+    ###########################################################################
 
     def _page_to_db(self, db_page):
         url = db_page.url
@@ -540,7 +576,8 @@ def update(time):
 
 def main():
     sn = Snapshot()
-    sn.take()
+    for i in sn._scrape_image_whitelist():
+        print(i)
 
 
 main()
