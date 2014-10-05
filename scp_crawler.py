@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 
+###############################################################################
+# Module Imports
+###############################################################################
+
 import arrow
 import bs4
 import functools
@@ -9,8 +13,16 @@ import pickle
 import re
 import requests
 
+###############################################################################
+# Global Constants
+###############################################################################
 
 DATADB = "scp_data.db"
+
+###############################################################################
+# Database ORM Classes
+###############################################################################
+
 db = peewee.SqliteDatabase(DATADB)
 
 
@@ -25,6 +37,30 @@ class PageData(BaseModel):
     html = peewee.TextField()
     history = peewee.TextField()
     votes = peewee.TextField()
+
+
+class TitleData(BaseModel):
+    url = peewee.CharField(unique=True)
+    skip = peewee.CharField()
+    title = peewee.CharField()
+
+
+class ImageData(BaseModel):
+    image_url = peewee.CharField(unique=True)
+    image_source = peewee.CharField()
+
+
+class RewriteData(BaseModel):
+    url = peewee.CharField(unique=True)
+    author = peewee.CharField()
+    override = peewee.BooleanField()
+
+
+class TagData(BaseModel):
+    tag = peewee.CharField(unique=True)
+    data = peewee.TextField()
+
+###############################################################################
 
 
 class Snapshot:
@@ -119,6 +155,8 @@ class Snapshot:
             yield (url, author)
 
     ###########################################################################
+    # Database Methods
+    ###########################################################################
 
     def _page_to_db(self, db_page):
         url = db_page.url
@@ -136,6 +174,11 @@ class Snapshot:
         db_page.history = history
         db_page.votes = votes
         db_page.save()
+
+    def _titles_to_db(self):
+        pass
+
+    ###########################################################################
 
     def take(self):
         baseurl = "http://www.scp-wiki.net/system:list-all-pages/p/{}"
