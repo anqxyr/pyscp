@@ -20,6 +20,32 @@ import requests
 DATADB = "scp_data.db"
 
 ###############################################################################
+# Decorators
+###############################################################################
+
+
+class verbose():
+
+    """Print a message when calling a function"""
+
+    def __init__(self, func):
+        self.func = func
+
+    def __call__(self, *args, **kwargs):
+        oustr = "{0:<20}{1:<20}; {2:<20}"
+        ouname = self.fund.__name__
+        ouargs = ", ".join(args)
+        oukwar = ", ".join(": ".join(k, v) for k, v in kwargs.items())
+        print(oustr.format(ouname, ouargs, oukwar), end='')
+        data = self.func(*args, **kwargs)
+        print("completed")
+        return data
+
+    def __get__(self, obj, objtype):
+        '''Support instance methods.'''
+        return functools.partial(self.__call__, obj)
+
+###############################################################################
 # Database ORM Classes
 ###############################################################################
 
@@ -176,6 +202,7 @@ class Snapshot:
     # Database Methods
     ###########################################################################
 
+    @verbose
     def _page_to_db(self, url):
         try:
             db_page = PageData.get(PageData.url == url)
@@ -195,6 +222,7 @@ class Snapshot:
         db_page.votes = votes
         db_page.save()
 
+    @verbose
     def _meta_tables(self):
         TitleData.delete().execute()
         for url, skip, title in self._scrape_scp_titles():
@@ -206,6 +234,7 @@ class Snapshot:
         for url, author, override in self._scrape_rewrites():
             RewriteData.create(url=url, author=author, override=override)
  
+    @verbose
     def _tag_to_db(self, tag):
         urls = list(self._scrape_tag(tag))
         TagData.delete().where(~ (TagData.tag << urls))
@@ -546,8 +575,7 @@ def update(time):
 
 def main():
     sn = Snapshot()
-    for i in sn._scrape_image_whitelist():
-        print(i)
+    sn.take()
 
 
 main()
