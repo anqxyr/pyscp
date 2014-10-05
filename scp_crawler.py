@@ -48,6 +48,8 @@ class TitleData(BaseModel):
 class ImageData(BaseModel):
     image_url = peewee.CharField(unique=True)
     image_source = peewee.CharField()
+    # for future use:
+    #image_status = peewee.CharField()
 
 
 class RewriteData(BaseModel):
@@ -152,7 +154,20 @@ class Snapshot:
         for i in soup.select("tr")[1:]:
             url = "http://www.scp-wiki.net/{}".format(i.select("td")[0].text)
             author = i.select("td")[1].text
-            yield (url, author)
+            if author.startswith(":override:"):
+                override = True
+                author = author[10:]
+            else:
+                override = False
+            yield (url, author, override)
+
+    def _scrape_tag(self, tag):
+        url = "http://www.scp-wiki.net/system:page-tags/tag/{}".format(tag)
+        soup = bs4.BeautifulSoup(self.req.get(url).text)
+        for i in soup.select("div.pages-list-item a"):
+            url = "http://www.scp-wiki.net{}".format(i["href"])
+            yield url
+        
 
     ###########################################################################
     # Database Methods
