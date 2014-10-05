@@ -232,94 +232,6 @@ class Snapshot:
                 self._page_to_db(db_page)
 
 
-class cache_to_disk():
-
-    """Save the results of the func to the directory specified in datadir."""
-
-    def __init__(self, func):
-        self.path = os.path.join(datadir, func.__name__)
-        self.func = func
-        if not os.path.exists(self.path):
-            os.makedirs(self.path)
-        functools.update_wrapper(self, func)
-
-    def __call__(self, *args, **kwargs):
-        filename = self._make_filename(*args, **kwargs)
-        fullpath = os.path.join(self.path, filename)
-        if os.path.isfile(fullpath):
-            with open(fullpath, "rb") as cache_file:
-                data = pickle.load(cache_file)
-        else:
-            print("{:<40}{}".format(self.func.__name__, filename))
-            data = self.func(*args, **kwargs)
-            if data is not None:
-                with open(fullpath, "wb") as cache_file:
-                    pickle.dump(data, cache_file)
-        return data
-
-    def __get__(self, obj, objtype):
-        '''Support instance methods.'''
-        return functools.partial(self.__call__, obj)
-
-    def _make_filename(self, *args, **kwargs):
-        #this WILL NOT WORK in a general case
-        #it does just enough for what we need and nothing more
-        if args == () and kwargs == {}:
-            return "no_args"
-        url = getattr(args[0], "url", None)
-        if url is not None:
-            replace = ["http://", "/", "www.scp-wiki.net", ":"]
-            for i in (url.replace(r, "") for r in replace):
-                url = i
-            if url == "":
-                url = "www.scp-wiki.net"
-            return url
-        return repr(args[0])
-
-
-@cache_to_disk
-def _init_titles():
-    """Return a dict of SCP articles' titles"""
-    index_urls = ["http://www.scp-wiki.net/scp-series",
-                  "http://www.scp-wiki.net/scp-series-2",
-                  "http://www.scp-wiki.net/scp-series-3"]
-    titles = {}
-    for url in index_urls:
-        soup = bs4.BeautifulSoup(req.get(url).text)
-        articles = [i for i in soup.select("ul > li")
-                    if re.search("[SCP]+-[0-9]+", i.text)]
-        for e in articles:
-            k, v = e.text.split(" - ", maxsplit=1)
-            titles[k.split("-")[1]] = v
-    return titles
-
-
-@cache_to_disk
-def _init_images():
-    url = "http://scpsandbox2.wikidot.com/ebook-image-whitelist"
-    soup = bs4.BeautifulSoup(req.get(url).text)
-    results = {}
-    for i in soup.select("tr")[1:]:
-        results[i.select("td")[0].text] = i.select("td")[1].text
-    return results
-
-
-@cache_to_disk
-def _init_rewrites():
-    url = "http://05command.wikidot.com/alexandra-rewrite"
-    soup = bs4.BeautifulSoup(req.get(url).text)
-    results = {}
-    pref = "http://www.scp-wiki.net/"
-    for i in soup.select("tr")[1:]:
-        results[pref + i.select("td")[0].text] = i.select("td")[1].text
-    return results
-
-
-titles = _init_titles()
-images = _init_images()
-rewrites = _init_rewrites()
-
-
 class Page():
 
     """Scrape and store contents and metadata of a page."""
@@ -341,15 +253,6 @@ class Page():
                 if self.history is not None:
                     self.authors = self._parse_authors()
         self._override()
-
-    @cache_to_disk
-    def _scrape_history(self):
-        """Scrape page's history."""
-        pageid = re.search("pageId = ([^;]*);", self.soup)
-        if pageid is None:
-            return None
-        return wikidot_module(name="history/PageRevisionListModule",
-                              page=1, perpage=1000, pageid=pageid.group(1))
 
     def _override(self):
         _inrange = lambda x: [Page("{}-{}".format(self.url, n)) for n in x]
@@ -544,16 +447,6 @@ class Page():
             else:
                 return mpages
         return []
-
-
-@cache_to_disk
-def _scrape_tag(tag):
-    soup = bs4.BeautifulSoup(req.get(
-        "http://www.scp-wiki.net/system:page-tags/tag/" + tag).text)
-    urls = ["http://www.scp-wiki.net" + a["href"] for a in soup.select(
-        "div.pages-list div.pages-list-item div.title a")]
-    return urls
-
 
 def _yield_skips():
     skips = [i for i in _scrape_tag("scp") if re.match(".*scp-[0-9]*$", i)]
