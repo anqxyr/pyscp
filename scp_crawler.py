@@ -59,13 +59,15 @@ class RewriteData(BaseModel):
 
 
 class TagData(BaseModel):
-    tag = peewee.CharField(unique=True)
-    data = peewee.TextField()
+    tag = peewee.CharField(index=True)
+    url = peewee.CharField()
 
 ###############################################################################
 
 
 class Snapshot:
+
+    RTAGS = ["scp", "tale", "hub", "joke", "explained", "goi-format"]
 
     def __init__(self):
         req = requests.Session()
@@ -73,7 +75,9 @@ class Snapshot:
                   requests.adapters.HTTPAdapter(max_retries=5))
         self.req = req
         db.connect()
-        db.create_tables([PageData], safe=True)
+        db.create_tables(
+            [PageData, TitleData, ImageData, RewriteData, TagData],
+            safe=True)
 
     ###########################################################################
     # Scraping Methods
@@ -144,9 +148,9 @@ class Snapshot:
         url = "http://scpsandbox2.wikidot.com/ebook-image-whitelist"
         soup = bs4.BeautifulSoup(self.req.get(url).text)
         for i in soup.select("tr")[1:]:
-            im_url = i.select("td")[0].text
-            source = i.select("td")[1].text
-            yield (im_url, source)
+            image_url = i.select("td")[0].text
+            image_source = i.select("td")[1].text
+            yield (image_url, image_source)
 
     def _scrape_rewrites(self):
         url = "http://05command.wikidot.com/alexandra-rewrite"
@@ -166,16 +170,17 @@ class Snapshot:
         soup = bs4.BeautifulSoup(self.req.get(url).text)
         for i in soup.select("div.pages-list-item a"):
             url = "http://www.scp-wiki.net{}".format(i["href"])
-            yield url
-        
+            yield url        
 
     ###########################################################################
     # Database Methods
     ###########################################################################
 
-    def _page_to_db(self, db_page):
-        url = db_page.url
-        print("adding {} to the db".format(url))
+    def _page_to_db(self, url):
+        try:
+            db_page = PageData.get(PageData.url == url)
+        except PageData.DoesNotExist:
+            db_page = PageData(url=url)
         html = self._scrape_html(url)
         pageid = re.search("pageId = ([^;]*);", html)
         if pageid is None:
@@ -190,26 +195,40 @@ class Snapshot:
         db_page.votes = votes
         db_page.save()
 
-    def _titles_to_db(self):
-        pass
+    def _meta_tables(self):
+        TitleData.delete().execute()
+        for url, skip, title in self._scrape_scp_titles():
+            TitleData.create(url=url, skip=skip, title=title)
+        ImageData.delete().execute()
+        for image_url, image_source in self._scrape_image_whitelist():
+            ImageData.create(image_url=image_url, image_source=image_source)
+        RewriteData.delete().execute()
+        for url, author, override in self._scrape_rewrites():
+            RewriteData.create(url=url, author=author, override=override)
+ 
+    def _tag_to_db(self, tag):
+        urls = list(self._scrape_tag(tag))
+        TagData.delete().where(~ (TagData.tag << urls))
+        old_urls = TagData.select(TagData.url)
+        for url in [i for i in urls if i not in old_urls]:
+            TagData.create(tag=tag, url=url)
 
     ###########################################################################
 
     def take(self):
+        self._meta_tables()
+        for tag in Snapshot.RTAGS:
+            self._tag_to_db(tag)
         baseurl = "http://www.scp-wiki.net/system:list-all-pages/p/{}"
         soup = bs4.BeautifulSoup(self.req.get(baseurl).text)
         counter = soup.select("div.pager span.pager-no")[0].text
         last_page = int(counter.split(" ")[-1])
-        for index in range(1, 2):
+        for index in range(1, last_page + 1):
             data = self.req.get(baseurl.format(index))
             soup = bs4.BeautifulSoup(data.text)
             new_pages = soup.select("div.list-pages-item a")
             for link in new_pages:
                 url = "http://www.scp-wiki.net{}".format(link["href"])
-                try:
-                    db_page = PageData.get(PageData.url == url)
-                except PageData.DoesNotExist:
-                    db_page = PageData(url=url)
                 self._page_to_db(db_page)
 
 
