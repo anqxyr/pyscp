@@ -6,7 +6,6 @@
 
 import arrow
 import bs4
-import functools
 import peewee
 import re
 import requests
@@ -38,8 +37,8 @@ class BaseModel(peewee.Model):
 class PageData(BaseModel):
     url = peewee.CharField(unique=True)
     html = peewee.TextField()
-    history = peewee.TextField()
-    votes = peewee.TextField()
+    history = peewee.TextField(null=True)
+    votes = peewee.TextField(null=True)
 
 
 class TitleData(BaseModel):
@@ -68,7 +67,7 @@ class TagData(BaseModel):
 
 class SnapshotInfo(BaseModel):
     time_created = peewee.DateTimeField()
-    time_updated = peewee.DateTimeField()
+    time_updated = peewee.DateTimeField(null=True)
 
 ###############################################################################
 
@@ -126,7 +125,7 @@ class Snapshot:
         return self._wikidot_module(
             module_name="history/PageRevisionListModule",
             res_index=1,
-            res_per_page=1000,
+            res_per_page=1000000,
             pageid=pageid)
 
     def _scrape_votes(self, pageid):
@@ -190,6 +189,9 @@ class Snapshot:
         except PageData.DoesNotExist:
             db_page = PageData(url=url)
         html = self._scrape_html(url)
+        # this will break if html is None
+        # however html should never be None with the current code
+        # so I'll leave it as is to signal bad pages on the site
         pageid = re.search("pageId = ([^;]*);", html)
         if pageid is None:
             history = None
@@ -238,7 +240,6 @@ class Snapshot:
         if action == "created":
             time = arrow.utcnow().format("YYYY-MM-DD HH:mm:ss")
             info_row.time_created = time
-            info_row.time_updated = time
         info_row.save()
 
     ###########################################################################
@@ -252,7 +253,7 @@ class Snapshot:
         soup = bs4.BeautifulSoup(self.req.get(baseurl).text)
         counter = soup.select("div.pager span.pager-no")[0].text
         last_page = int(counter.split(" ")[-1])
-        for index in range(1, last_page + 1):
+        for index in reversed(range(1, last_page + 1)):
             data = self.req.get(baseurl.format(index))
             soup = bs4.BeautifulSoup(data.text)
             new_pages = soup.select("div.list-pages-item a")
