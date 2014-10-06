@@ -243,6 +243,8 @@ class Snapshot:
         info_row.save()
 
     ###########################################################################
+    # Public Methods
+    ###########################################################################
 
     def take(self):
         self._update_info("created")
@@ -261,27 +263,26 @@ class Snapshot:
                 url = "http://www.scp-wiki.net{}".format(link["href"])
                 self._page_to_db(url)
 
+    def pagedata(self, url):
+        """Retrieve PageData from the database"""
+        data = PageData.get(PageData.url == url)
+        return (data.html, data.history, data.votes)
+
 
 class Page():
 
     """Scrape and store contents and metadata of a page."""
 
-    def __init__(self, url=None):
+    def __init__(self, url=None, pagedata=None):
         self.url = url
-        self.data = None
-        self.title = None
-        self.tags = []
-        self.images = []
-        self.authors = []
-        self.history = None
-        self.soup = None
-        if url is not None:
-            self.soup = self._scrape_body()
-            if self.soup is not None:
-                self.data, self.title, self.tags = self._cook()
-                self.history = self._scrape_history()
-                if self.history is not None:
-                    self.authors = self._parse_authors()
+        if pagedata is not None:
+            raw_html, raw_history, raw_votes = pagedata
+            self._parse_html(raw_html)
+            self._raw_html = raw_html
+            if raw_history is not None:
+                self._parse_history(raw_history)
+            if raw_votes is not None:
+                self._parse_votes(raw_votes)
         self._override()
 
     def _override(self):
@@ -302,34 +303,42 @@ class Page():
                 new_children = func(args)
                 self.list_children = lambda: new_children
 
-    def _cook(self):
+    ###########################################################################
+    # Parsing Methods
+    ###########################################################################
+
+    def _parse_html(self, raw_html):
         '''Retrieve title, data, and tags'''
-        soup = bs4.BeautifulSoup(self.soup)
-        rating = soup.select("#pagerate-button span")
-        if rating != []:
-            if int(rating[0].text) < 0:
-                return None, None, []
-            self.rating = rating[0].text
-        # body
-        parse_elements = [
-            ("div.page-rate-widget-box", lambda x: x.decompose()),
-            ("div.yui-navset", self._parse_tabview),
-            ("div.collapsible-block", self._parse_collapsible),
-            ("blockquote", self._parse_quote),
-            ("sup.footnoteref", self._parse_footnote),
-            ("sup.footnote-footer", self._parse_footnote_footer),
-            ("a", self._parse_link),
-            ("img", self._parse_image)]
+        soup = bs4.BeautifulSoup(raw_html)
+        rating_el = soup.select("#pagerate-button span")
+        if rating_el:
+            self.rating = rating_el[0].text
+        
+        self._parse_body(soup)
+        self.tags = [a.string for a in soup.select("div.page-tags a")]
+        self._parse_title(soup)
+        self._add_title()
+        #add title to the page
+        # if "scp" in tags:
+        #     data = "<p class='scp-title'>{}</p>{}".format(title, data)
+        # else:
+        #     data = "<p class='tale-title'>{}</p>{}".format(title, data)
+
+    def _parse_body(self, soup):
         if not soup.select("#page-content"):
-            data = None
-        else:
-            data = soup.select("#page-content")[0]
-            for element, func in parse_elements:
-                for i in data.select(element):
-                    func(i)
-        # tags
-        tags = [a.string for a in soup.select("div.page-tags a")]
-        # title
+            self.data = None
+            return
+        self.data = bs4.BeautifulSoup(soup.select("#page-content")[0])
+        for i in data.select("div.page-rate-widget-box"):
+            i.decompose()
+        self._parse_images()
+        self._parse_tabviews()
+        self._parse_collapsibles()
+        self._parse_links()
+        self._parse_quotes()
+        self._parse_footnotes()
+
+    def _parse_title(self, soup):
         if soup.select("#page-title"):
             title = soup.select("#page-title")[0].text.strip()
         else:
@@ -337,85 +346,81 @@ class Page():
         if "scp" in tags and re.search("scp-[0-9]+$", self.url):
             title = "{}: {}".format(title,
                                     titles[title.split("-")[1]])
-        #add title to the page
-        if "scp" in tags:
-            data = "<p class='scp-title'>{}</p>{}".format(title, data)
-        else:
-            data = "<p class='tale-title'>{}</p>{}".format(title, data)
-        data += "<div class='tags' style='display: none'><hr/><p>{}</p></div>"\
-                .format("</p><p>".join(tags))
-        return data, title, tags
 
-    def _parse_image(self, element):
-        if element.name is None or not element.has_attr("src"):
-            return
-        if element["src"] not in images:
-            #loop through the image's parents, until we find what to cut
-            for p in element.parents:
-                # old-style image formatting:
-                old_style = bool(p.select("table tr > td > img") and
-                                 len(p.select("table tr > td")) == 1)
-                new_style = bool("class" in p.attrs and
-                                 "scp-image-block" in p["class"])
-                if old_style or new_style:
-                    p.decompose()
-                    break
+    def _parse_images(self):
+        for i in self.data.select("img"):
+            if i.name is None or not i.has_attr("src"):
+                return
+            if i["src"] not in images:
+                #loop through the image's parents, until we find what to cut
+                for p in i.parents:
+                    # old-style image formatting:
+                    old_style = bool(p.select("table tr > td > img") and
+                                     len(p.select("table tr > td")) == 1)
+                    new_style = bool("class" in p.attrs and
+                                     "scp-image-block" in p["class"])
+                    if old_style or new_style:
+                        p.decompose()
+                        break
+                else:
+                    # if we couldn't find any parents to remove,
+                    # just remove the image itself
+                    i.decompose()
             else:
-                # if we couldn't find any parents to remove,
-                # just remove the image itself
-                element.decompose()
-        else:
-                self.images.append(element["src"])
-                page, image_url = element["src"].split("/")[-2:]
-                element["src"] = "images/{}_{}".format(page, image_url)
+                    self.images.append(i["src"])
+                    page, image_url = i["src"].split("/")[-2:]
+                    i["src"] = "images/{}_{}".format(page, image_url)
 
-    def _parse_tabview(self, element):
-        soup = bs4.BeautifulSoup(self.soup)
-        wraper = soup.new_tag("div", **{"class": "tabview"})
-        titles = [a.text for a in element.select("ul.yui-nav em")]
-        tabs = element.select("div.yui-content > div")
-        for k in tabs:
-            k.attrs = {"class": "tabview-tab"}
-            tab_title = soup.new_tag("div", **{"class": "tab-title"})
-            tab_title.string = titles[tabs.index(k)]
-            k.insert(0, tab_title)
-            wraper.append(k)
-        element.replace_with(wraper)
+    def _parse_tabviews(self):
+        for i in self.data.select("div.yui-navset"):
+            wraper = self.data.new_tag("div", **{"class": "tabview"})
+            titles = [a.text for a in i.select("ul.yui-nav em")]
+            tabs = i.select("div.yui-content > div")
+            for k in tabs:
+                k.attrs = {"class": "tabview-tab"}
+                tab_title = self.data.new_tag("div", **{"class": "tab-title"})
+                tab_title.string = titles[tabs.index(k)]
+                k.insert(0, tab_title)
+                wraper.append(k)
+            i.replace_with(wraper)
 
-    def _parse_collapsible(self, element):
-        link_text = element.select("a.collapsible-block-link")[0].text
-        content = element.select("div.collapsible-block-content")[0]
-        if content.text == "":
-            content = element.select("div.collapsible-block-unfolded")[0]
-            del(content["style"])
-            content.select("div.collapsible-block-content")[0].decompose()
-            content.select("div.collapsible-block-unfolded-link"
-                           )[0].decompose()
-        content["class"] = "collaps-content"
-        soup = bs4.BeautifulSoup(self.soup)
-        col = soup.new_tag("div", **{"class": "collapsible"})
-        content = content.wrap(col)
-        col_title = soup.new_tag("div", **{"class": "collaps-title"})
-        col_title.string = link_text
-        content.div.insert_before(col_title)
-        element.replace_with(content)
+    def _parse_collapsibles(self):
+        for i in self.data.select("div.collapsible-block"):
+            link_text = i.select("a.collapsible-block-link")[0].text
+            content = i.select("div.collapsible-block-content")[0]
+            if content.text == "":
+                content = i.select("div.collapsible-block-unfolded")[0]
+                del(content["style"])
+                content.select("div.collapsible-block-content")[0].decompose()
+                content.select("div.collapsible-block-unfolded-link"
+                               )[0].decompose()
+            content["class"] = "collaps-content"
+            soup = bs4.BeautifulSoup(self.soup)
+            col = soup.new_tag("div", **{"class": "collapsible"})
+            content = content.wrap(col)
+            col_title = soup.new_tag("div", **{"class": "collaps-title"})
+            col_title.string = link_text
+            content.div.insert_before(col_title)
+            i.replace_with(content)
 
-    def _parse_link(self, element):
-        del(element["href"])
-        element.name = "span"
-        element["class"] = "link"
+    def _parse_links(self):
+        for i in self.data.select("a"):
+            del(i["href"])
+            i.name = "span"
+            i["class"] = "link"
 
-    def _parse_quote(self, element):
-        element.name = "div"
-        element["class"] = "quote"
+    def _parse_quotes(self):
+        for i in self.data.select("blockquote"):
+            i.name = "div"
+            i["class"] = "quote"
 
-    def _parse_footnote(self, element):
-        element.string = element.a.string
-
-    def _parse_footnote_footer(self, element):
-        element["class"] = "footnote"
-        del(element["id"])
-        element.string = "".join([k for k in element.strings])
+    def _parse_footnotes(self):
+        for i in self.data.select("sup.footnoteref"):
+            i.string = i.a.string
+        for i in self.data.select("sup.footnote-footer"):
+            i["class"] = "footnote"
+            del(i["id"])
+            i.string = "".join([k for k in i.strings])
 
     def _parse_authors(self):
         history = bs4.BeautifulSoup(self.history)
@@ -427,6 +432,8 @@ class Page():
             return {new_author[10:]: "original"}
         else:
             return {author: "original", new_author: "rewrite"}
+
+    ###########################################################################
 
     def links(self):
         if self.soup is None:
@@ -445,7 +452,7 @@ class Page():
             links.append(url)
         return links
 
-    def list_children(self):
+    def children(self):
         if not hasattr(self, "tags"):
             return []
         lpages = []
