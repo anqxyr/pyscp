@@ -10,11 +10,13 @@ import peewee
 import re
 import requests
 
+from collections import namedtuple
+
 ###############################################################################
 # Global Constants
 ###############################################################################
 
-DATADB = "scp_data.db"
+DBPATH = "/home/anqxyr/heap/scp_data.db"
 
 ###############################################################################
 # Decorators
@@ -25,7 +27,7 @@ DATADB = "scp_data.db"
 # Database ORM Classes
 ###############################################################################
 
-db = peewee.SqliteDatabase(DATADB)
+db = peewee.SqliteDatabase(DBPATH)
 
 
 class BaseModel(peewee.Model):
@@ -263,20 +265,27 @@ class Snapshot:
                 url = "http://www.scp-wiki.net{}".format(link["href"])
                 self._page_to_db(url)
 
-    def pagedata(self, url):
+    def pagedata(self, url_list):
         """Retrieve PageData from the database"""
-        data = PageData.get(PageData.url == url)
-        return (data.html, data.history, data.votes)
+        query = PageData.select().where(PageData.url << url_list)
+        for i in query:
+            yield (i.url, i.html, i.history, i.votes)
+
+    def tag(self, tag):
+        """Retrieve list of pages with the tag from the database"""
+        query = TagData.select().where(TagData.tag == tag)
+        for i in query:
+            yield i.url
 
 
 class Page():
 
     """Scrape and store contents and metadata of a page."""
 
-    def __init__(self, url=None, pagedata=None):
-        self.url = url
+    def __init__(self, pagedata=None):
         if pagedata is not None:
-            raw_html, raw_history, raw_votes = pagedata
+            url, raw_html, raw_history, raw_votes = pagedata
+            self.url = url
             self._parse_html(raw_html)
             self._raw_html = raw_html
             if raw_history is not None:
@@ -317,19 +326,43 @@ class Page():
         self._parse_body(soup)
         self.tags = [a.string for a in soup.select("div.page-tags a")]
         self._parse_title(soup)
-        self._add_title()
+        #self._add_title()
         #add title to the page
         # if "scp" in tags:
         #     data = "<p class='scp-title'>{}</p>{}".format(title, data)
         # else:
         #     data = "<p class='tale-title'>{}</p>{}".format(title, data)
 
+    def _parse_history(self, raw_history):
+        soup = bs4.BeautifulSoup(raw_history)
+        history = []
+        Revision = namedtuple('Revision', 'number author time comment')
+        for i in soup.select('tr')[1:]:
+            rev_data = i.select('td')
+            number = int(rev_data[0].text.strip('.'))
+            author = rev_data[4].text
+            time = arrow.get(rev_data[5].text, 'DD MMM YYYY HH:mm')
+            time = time.format('YYYY-MM-DD HH:mm:ss')
+            comment = rev_data[6].text
+            history.append(Revision(number, author, time, comment))
+        self.history = list(reversed(history))
+
+    def _parse_votes(self, raw_votes):
+        soup = bs4.BeautifulSoup(raw_votes)
+        votes = []
+        VoteData = namedtuple('VoteData', 'user vote')
+        for i in soup.select('span.printuser'):
+            user = i.text
+            vote = i.next_sibling.next_sibling.text.strip()
+            votes.append(VoteData(user, vote))
+        self.votes = votes
+
     def _parse_body(self, soup):
         if not soup.select("#page-content"):
             self.data = None
             return
-        self.data = bs4.BeautifulSoup(soup.select("#page-content")[0])
-        for i in data.select("div.page-rate-widget-box"):
+        self.data = soup.select("#page-content")[0]
+        for i in self.data.select("div.page-rate-widget-box"):
             i.decompose()
         self._parse_images()
         self._parse_tabviews()
@@ -343,33 +376,35 @@ class Page():
             title = soup.select("#page-title")[0].text.strip()
         else:
             title = ""
-        if "scp" in tags and re.search("scp-[0-9]+$", self.url):
-            title = "{}: {}".format(title,
-                                    titles[title.split("-")[1]])
+        self.title = title
+        # if "scp" in self.tags and re.search("scp-[0-9]+$", self.url):
+        #     title = "{}: {}".format(title,
+        #                             titles[title.split("-")[1]])
 
     def _parse_images(self):
         for i in self.data.select("img"):
             if i.name is None or not i.has_attr("src"):
                 return
-            if i["src"] not in images:
-                #loop through the image's parents, until we find what to cut
-                for p in i.parents:
-                    # old-style image formatting:
-                    old_style = bool(p.select("table tr > td > img") and
-                                     len(p.select("table tr > td")) == 1)
-                    new_style = bool("class" in p.attrs and
-                                     "scp-image-block" in p["class"])
-                    if old_style or new_style:
-                        p.decompose()
-                        break
-                else:
-                    # if we couldn't find any parents to remove,
-                    # just remove the image itself
-                    i.decompose()
-            else:
-                    self.images.append(i["src"])
-                    page, image_url = i["src"].split("/")[-2:]
-                    i["src"] = "images/{}_{}".format(page, image_url)
+            self.images = getattr(self, images, []).append(i["src"])
+            # if i["src"] not in images:
+            #     #loop through the image's parents, until we find what to cut
+            #     for p in i.parents:
+            #         # old-style image formatting:
+            #         old_style = bool(p.select("table tr > td > img") and
+            #                          len(p.select("table tr > td")) == 1)
+            #         new_style = bool("class" in p.attrs and
+            #                          "scp-image-block" in p["class"])
+            #         if old_style or new_style:
+            #             p.decompose()
+            #             break
+            #     else:
+            #         # if we couldn't find any parents to remove,
+            #         # just remove the image itself
+            #         i.decompose()
+            # else:
+            #         self.images.append(i["src"])
+            #         page, image_url = i["src"].split("/")[-2:]
+            #         i["src"] = "images/{}_{}".format(page, image_url)
 
     def _parse_tabviews(self):
         for i in self.data.select("div.yui-navset"):
@@ -583,7 +618,12 @@ def update(time):
 
 
 def main():
-    pass
+    sn = Snapshot()
+    url = "http://www.scp-wiki.net/scp-1600"
+    pagedata = sn.pagedata([url])
+    skip = Page(list(pagedata)[0])
+    for i in skip.votes:
+        print(i)
 
 
 main()
