@@ -76,6 +76,7 @@ class SnapshotInfo(BaseModel):
 # Primary Classes
 ###############################################################################
 
+
 class Snapshot:
 
     RTAGS = ["scp", "tale", "hub", "joke", "explained", "goi-format"]
@@ -88,6 +89,7 @@ class Snapshot:
         db.connect()
         db.create_tables([PageData, TitleData, ImageData, RewriteData,
                           TagData, SnapshotInfo], safe=True)
+        self.db = db
 
     ###########################################################################
     # Scraping Methods
@@ -269,7 +271,10 @@ class Snapshot:
 
     def pagedata(self, url):
         """Retrieve PageData from the database"""
-        data = PageData.get(PageData.url == url)
+        try:
+            data = PageData.get(PageData.url == url)
+        except PageData.DoesNotExist as e:
+            raise e
         pd = namedtuple("PageData", "html history votes")
         return pd(data.html, data.history, data.votes)
 
@@ -311,7 +316,7 @@ class Page:
 
     def _override(self):
         _inrange = lambda x: [Page("{}-{}".format(self.url, n)) for n in x]
-        _except = lambda x: [p for p in self.list_children()
+        _except = lambda x: [p for p in self.children()
                              if p.url != "http://www.scp-wiki.net/" + x]
         ov_data = [("scp-1047-j", None)]
         ov_children = [
@@ -325,7 +330,7 @@ class Page:
         for partial_url, func, args in ov_children:
             if self.url == "http://www.scp-wiki.net/" + partial_url:
                 new_children = func(args)
-                self.list_children = lambda: new_children
+                self.children = lambda: new_children
 
     ###########################################################################
     # Parsing Methods
@@ -494,10 +499,10 @@ class Page:
     ###########################################################################
 
     def links(self):
-        if self.soup is None:
+        if self._raw_html is None:
             return []
         links = []
-        soup = bs4.BeautifulSoup(self.soup)
+        soup = bs4.BeautifulSoup(self._raw_html)
         for a in soup.select("#page-content a"):
             if not a.has_attr("href") or a["href"][0] != "/":
                 continue
@@ -516,7 +521,7 @@ class Page:
         lpages = []
         for url in self.links():
             p = Page(url)
-            if p.soup is not None and p.data is not None:
+            if p.data is not None:
                 lpages.append(p)
         if any(i in self.tags for i in ["scp", "splash"]):
             mpages = [i for i in lpages if
@@ -530,7 +535,7 @@ class Page:
             def backlinks(page, child):
                 if page.url in child.links():
                     return True
-                soup = bs4.BeautifulSoup(child.soup)
+                soup = bs4.BeautifulSoup(child._raw_html)
                 if soup.select("#breadcrumbs a"):
                     crumb = soup.select("#breadcrumbs a")[-1]
                     crumb = "http://www.scp-wiki.net{}".format(crumb["href"])
@@ -548,6 +553,23 @@ class Page:
 ###############################################################################
 
 
+def get_all():
+    count = PageData.select().count()
+    for n in range(1, count // 50 + 2):
+        query = PageData.select().order_by(PageData.url).paginate(n, 50)
+        for i in query:
+            p = Page()
+            p.url = i.url
+            p._parse_html(i.html)
+            p._raw_html = i.html
+            if i.history is not None:
+                p._parse_history(i.history)
+            if i.votes is not None:
+                p._parse_votes(i.votes)
+            p._override()
+            yield p
+
+
 def get_skips():
     tagged_as_scp = Page.sn.tag("scp")
     mainlist = [i for i in tagged_as_scp if re.search("scp-[0-9]*$", i)]
@@ -557,7 +579,7 @@ def get_skips():
         num = int(url.split("-")[-1])
         block = num // 100      # should range from 0 to 29
         scp_blocks[block].append(url)
-    for block in scp_blocks.values():
+    for block in (scp_blocks[i] for i in range(10, 30)):
         first = block[0].split("-")[-1]
         last = block[-1].split("-")[-1]
         block_name = "SCP Database/Articles {}-{}".format(first, last)
@@ -565,7 +587,7 @@ def get_skips():
             p = Page(url)
             p.chapter = block_name
             yield p
-
+    
 
 def _yield_001_proposals():
     proposals_hub = Page("http://www.scp-wiki.net/proposals-for-scp-001")
@@ -593,7 +615,7 @@ def _yield_hubs():
     hubhubs = ["http://www.scp-wiki.net/canon-hub",
                "http://www.scp-wiki.net/goi-contest-2014",
                "http://www.scp-wiki.net/acidverse"]
-    nested_hubs = [i.url for k in hubhubs for i in Page(k).list_children()]
+    nested_hubs = [i.url for k in hubhubs for i in Page(k).children()]
     hubs = [i for i in _scrape_tag("hub") if i in _scrape_tag("tale")
             or i in _scrape_tag("goi2014")]
     for url in hubs:
@@ -608,17 +630,6 @@ def _yield_tales():
         p = Page(url)
         p.chapter = "Assorted Tales"
         yield p
-
-
-def all_pages():
-    yield from _yield_001_proposals()
-    yield from _yield_skips()
-    yield from _yield_joke_articles()
-    yield from _yield_ex_articles()
-    yield from _yield_hubs()
-    yield from _yield_tales()
-    pass
-
 
 def update(time):
     page = 1
@@ -644,7 +655,7 @@ def update(time):
 
 
 def main():
-    for page in get_skips():
-        print(page.title)
+    for page in get_all():
+        print("{}    ({})".format(page.title, page.url))
 
 main()
