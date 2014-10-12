@@ -6,11 +6,12 @@
 
 import arrow
 import bs4
+import natsort
 import peewee
 import re
 import requests
 
-from collections import namedtuple
+from collections import namedtuple, defaultdict
 
 ###############################################################################
 # Global Constants
@@ -72,7 +73,8 @@ class SnapshotInfo(BaseModel):
     time_updated = peewee.DateTimeField(null=True)
 
 ###############################################################################
-
+# Primary Classes
+###############################################################################
 
 class Snapshot:
 
@@ -278,7 +280,7 @@ class Snapshot:
             yield i.url
 
 
-class Page():
+class Page:
 
     """Scrape and store contents and metadata of a page."""
 
@@ -540,18 +542,26 @@ class Page():
                 return mpages
         return []
 
+###############################################################################
+# Methods For Retrieving Certain Pages
+###############################################################################
 
-def _yield_skips():
-    skips = [i for i in _scrape_tag("scp") if re.match(".*scp-[0-9]*$", i)]
-    skips.sort(key=_natural_key)
-    scp_blocks = [[i for i in skips if (int(i.split("-")[-1]) // 100 == n)]
-                  for n in range(30)]
-    for b in scp_blocks:
-        b_name = "SCP Database/Articles {}-{}".format(b[0].split("-")[-1],
-                                                      b[-1].split("-")[-1])
-        for url in b:
-            p = Page(url)
-            p.chapter = b_name
+def get_skips():
+    tagged_as_scp = Page.sn.tag("scp")
+    mainlist = [i for i in tagged_as_scp if re.search("scp-[0-9]*$", i)]
+    skips = natsort.natsorted(mainlist, signed=False)
+    scp_blocks = defaultdict(list)
+    for url in skips:
+        num = int(url.split("-")[-1])
+        block = num // 100      # should range from 0 to 29
+        scp_blocks[block].append(url)
+    for block in scp_blocks.values():
+        first = block[0].split("-")[-1]
+        last = block[-1].split("-")[-1]
+        block_name = "SCP Database/Articles {}-{}".format(first, last)
+        for url in block:
+            p = Page.from_url(url)
+            p.chapter = block_name
             yield p
 
 
@@ -608,12 +618,6 @@ def all_pages():
     pass
 
 
-def _natural_key(s):
-    re_natural = re.compile('[0-9]+|[^0-9]+')
-    return [(1, int(c)) if c.isdigit() else (0, c.lower()) for c
-            in re_natural.findall(s)] + [s]
-
-
 def update(time):
     page = 1
     while True:
@@ -638,7 +642,6 @@ def update(time):
 
 
 def main():
-    sn = Snapshot()
     url = "http://www.scp-wiki.net/scp-1600"
     skip = Page.from_url(url)
     for i in skip.votes:
