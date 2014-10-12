@@ -270,8 +270,9 @@ class Snapshot:
     def pagedata(self, url_list):
         """Retrieve PageData from the database"""
         query = PageData.select().where(PageData.url << url_list)
+        pd = namedtuple("PageData", "url html history votes")
         for i in query:
-            yield (i.url, i.html, i.history, i.votes)
+            yield pd(i.url, i.html, i.history, i.votes)
 
     def tag(self, tag):
         """Retrieve list of pages with the tag from the database"""
@@ -390,9 +391,9 @@ class Page:
         data = self._parse_images(data)
         data = self._parse_tabviews(data)
         data = self._parse_collapsibles(data)
+        data = self._parse_footnotes(data)
         data = self._parse_links(data)
         data = self._parse_quotes(data)
-        data = self._parse_footnotes(data)
         self.data = data
 
     def _parse_title(self, soup):
@@ -432,13 +433,14 @@ class Page:
         return data
 
     def _parse_tabviews(self, data):
+        soup = bs4.BeautifulSoup(str(data))
         for i in data.select("div.yui-navset"):
-            wraper = self.data.new_tag("div", **{"class": "tabview"})
+            wraper = soup.new_tag("div", **{"class": "tabview"})
             titles = [a.text for a in i.select("ul.yui-nav em")]
             tabs = i.select("div.yui-content > div")
             for k in tabs:
                 k.attrs = {"class": "tabview-tab"}
-                tab_title = self.data.new_tag("div", **{"class": "tab-title"})
+                tab_title = soup.new_tag("div", **{"class": "tab-title"})
                 tab_title.string = titles[tabs.index(k)]
                 k.insert(0, tab_title)
                 wraper.append(k)
@@ -553,6 +555,7 @@ class Page:
 ###############################################################################
 # Methods For Retrieving Certain Pages
 ###############################################################################
+
 
 def get_skips():
     tagged_as_scp = Page.sn.tag("scp")
