@@ -293,6 +293,7 @@ class Page:
     def __init__(self):
         self.url = None
         self.data = None
+        self.images = []
 
     @classmethod
     def from_url(cls, url):
@@ -383,15 +384,16 @@ class Page:
         if not soup.select("#page-content"):
             self.data = None
             return
-        self.data = soup.select("#page-content")[0]
-        for i in self.data.select("div.page-rate-widget-box"):
+        data = soup.select("#page-content")[0]
+        for i in data.select("div.page-rate-widget-box"):
             i.decompose()
-        self._parse_images()
-        self._parse_tabviews()
-        self._parse_collapsibles()
-        self._parse_links()
-        self._parse_quotes()
-        self._parse_footnotes()
+        data = self._parse_images(data)
+        data = self._parse_tabviews(data)
+        data = self._parse_collapsibles(data)
+        data = self._parse_links(data)
+        data = self._parse_quotes(data)
+        data = self._parse_footnotes(data)
+        self.data = data
 
     def _parse_title(self, soup):
         if soup.select("#page-title"):
@@ -403,11 +405,11 @@ class Page:
         #     title = "{}: {}".format(title,
         #                             titles[title.split("-")[1]])
 
-    def _parse_images(self):
-        for i in self.data.select("img"):
+    def _parse_images(self, data):
+        for i in data.select("img"):
             if i.name is None or not i.has_attr("src"):
                 return
-            self.images = getattr(self, images, []).append(i["src"])
+            self.images.append(i["src"])
             # if i["src"] not in images:
             #     #loop through the image's parents, until we find what to cut
             #     for p in i.parents:
@@ -427,9 +429,10 @@ class Page:
             #         self.images.append(i["src"])
             #         page, image_url = i["src"].split("/")[-2:]
             #         i["src"] = "images/{}_{}".format(page, image_url)
+        return data
 
-    def _parse_tabviews(self):
-        for i in self.data.select("div.yui-navset"):
+    def _parse_tabviews(self, data):
+        for i in data.select("div.yui-navset"):
             wraper = self.data.new_tag("div", **{"class": "tabview"})
             titles = [a.text for a in i.select("ul.yui-nav em")]
             tabs = i.select("div.yui-content > div")
@@ -440,9 +443,11 @@ class Page:
                 k.insert(0, tab_title)
                 wraper.append(k)
             i.replace_with(wraper)
+        return data
 
-    def _parse_collapsibles(self):
-        for i in self.data.select("div.collapsible-block"):
+    def _parse_collapsibles(self, data):
+        soup = bs4.BeautifulSoup(str(data))
+        for i in data.select("div.collapsible-block"):
             link_text = i.select("a.collapsible-block-link")[0].text
             content = i.select("div.collapsible-block-content")[0]
             if content.text == "":
@@ -452,32 +457,35 @@ class Page:
                 content.select("div.collapsible-block-unfolded-link"
                                )[0].decompose()
             content["class"] = "collaps-content"
-            soup = bs4.BeautifulSoup(self.soup)
             col = soup.new_tag("div", **{"class": "collapsible"})
             content = content.wrap(col)
             col_title = soup.new_tag("div", **{"class": "collaps-title"})
             col_title.string = link_text
             content.div.insert_before(col_title)
             i.replace_with(content)
+        return data
 
-    def _parse_links(self):
-        for i in self.data.select("a"):
+    def _parse_links(self, data):
+        for i in data.select("a"):
             del(i["href"])
             i.name = "span"
             i["class"] = "link"
+        return data
 
-    def _parse_quotes(self):
-        for i in self.data.select("blockquote"):
+    def _parse_quotes(self, data):
+        for i in data.select("blockquote"):
             i.name = "div"
             i["class"] = "quote"
+        return data
 
-    def _parse_footnotes(self):
-        for i in self.data.select("sup.footnoteref"):
+    def _parse_footnotes(self, data):
+        for i in data.select("sup.footnoteref"):
             i.string = i.a.string
-        for i in self.data.select("sup.footnote-footer"):
+        for i in data.select("sup.footnote-footer"):
             i["class"] = "footnote"
             del(i["id"])
             i.string = "".join([k for k in i.strings])
+        return data
 
     def _parse_authors(self):
         history = bs4.BeautifulSoup(self.history)
@@ -642,10 +650,7 @@ def update(time):
 
 
 def main():
-    url = "http://www.scp-wiki.net/scp-1600"
-    skip = Page.from_url(url)
-    for i in skip.votes:
-        print(i)
-
+    for page in get_skips():
+        print(page.title)
 
 main()
