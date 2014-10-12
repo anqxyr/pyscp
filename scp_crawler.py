@@ -267,12 +267,11 @@ class Snapshot:
                 url = "http://www.scp-wiki.net{}".format(link["href"])
                 self._page_to_db(url)
 
-    def pagedata(self, url_list):
+    def pagedata(self, url):
         """Retrieve PageData from the database"""
-        query = PageData.select().where(PageData.url << url_list)
-        pd = namedtuple("PageData", "url html history votes")
-        for i in query:
-            yield pd(i.url, i.html, i.history, i.votes)
+        data = PageData.get(PageData.url == url)
+        pd = namedtuple("PageData", "html history votes")
+        return pd(data.html, data.history, data.votes)
 
     def tag(self, tag):
         """Retrieve list of pages with the tag from the database"""
@@ -291,28 +290,20 @@ class Page:
     # Constructors
     ###########################################################################
 
-    def __init__(self):
-        self.url = None
+    def __init__(self, url=None):
+        self.url = url
         self.data = None
         self.images = []
 
-    @classmethod
-    def from_url(cls, url):
-        data = list(cls.sn.pagedata([url]))[0]
-        return cls.from_raws(*data)
-
-    @classmethod
-    def from_raws(cls, url, raw_html, raw_history=None, raw_votes=None):
-        page = cls()
-        page.url = url
-        page._parse_html(raw_html)
-        page._raw_html = raw_html
-        if raw_history is not None:
-            page._parse_history(raw_history)
-        if raw_votes is not None:
-            page._parse_votes(raw_votes)
-        page._override()
-        return page
+        if url is not None:
+            pd = self.sn.pagedata(url)
+            self._parse_html(pd.html)
+            self._raw_html = pd.html
+            if pd.history is not None:
+                self._parse_history(pd.history)
+            if pd.votes is not None:
+                self._parse_votes(pd.votes)
+        self._override()
 
     ###########################################################################
     # Misc. Methods
@@ -571,7 +562,7 @@ def get_skips():
         last = block[-1].split("-")[-1]
         block_name = "SCP Database/Articles {}-{}".format(first, last)
         for url in block:
-            p = Page.from_url(url)
+            p = Page(url)
             p.chapter = block_name
             yield p
 
