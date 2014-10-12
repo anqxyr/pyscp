@@ -282,17 +282,37 @@ class Page():
 
     """Scrape and store contents and metadata of a page."""
 
-    def __init__(self, pagedata=None):
-        if pagedata is not None:
-            url, raw_html, raw_history, raw_votes = pagedata
-            self.url = url
-            self._parse_html(raw_html)
-            self._raw_html = raw_html
-            if raw_history is not None:
-                self._parse_history(raw_history)
-            if raw_votes is not None:
-                self._parse_votes(raw_votes)
-        self._override()
+    sn = Snapshot()   # Snapshot instance used to init the pages
+
+    ###########################################################################
+    # Constructors
+    ###########################################################################
+
+    def __init__(self):
+        self.url = None
+        self.data = None
+
+    @classmethod
+    def from_url(cls, url):
+        data = list(cls.sn.pagedata([url]))[0]
+        return cls.from_raws(*data)
+
+    @classmethod
+    def from_raws(cls, url, raw_html, raw_history=None, raw_votes=None):
+        page = cls()
+        page.url = url
+        page._parse_html(raw_html)
+        page._raw_html = raw_html
+        if raw_history is not None:
+            page._parse_history(raw_history)
+        if raw_votes is not None:
+            page._parse_votes(raw_votes)
+        page._override()
+        return page
+
+    ###########################################################################
+    # Misc. Methods
+    ###########################################################################
 
     def _override(self):
         _inrange = lambda x: [Page("{}-{}".format(self.url, n)) for n in x]
@@ -620,8 +640,7 @@ def update(time):
 def main():
     sn = Snapshot()
     url = "http://www.scp-wiki.net/scp-1600"
-    pagedata = sn.pagedata([url])
-    skip = Page(list(pagedata)[0])
+    skip = Page.from_url(url)
     for i in skip.votes:
         print(i)
 
