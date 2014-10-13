@@ -6,9 +6,11 @@
 
 import arrow
 import peewee
+import re
 import scp_crawler
 
 from bs4 import BeautifulSoup
+from collections import Counter
 
 ###############################################################################
 # Global Constants
@@ -53,18 +55,30 @@ class WordStats(BaseModel):
     word = peewee.CharField()
     count = peewee.IntegerField()
 
+
+db.connect()
+db.create_tables([PageStats, VoteStats, WordStats], safe=True)
+
 ###############################################################################
 
 
-def process_page(page):
-    print("Processing {}".format(page.title))
-    gather_page_stats(page)
-    gather_vote_stats(page)
-    gather_word_stats(page)
+def fill_db():
+    PageStats.delete().execute()
+    VoteStats.delete().execute()
+    WordStats.delete().execute()
+    for page in [scp_crawler.Page('http://www.scp-wiki.net/scp-478')]:
+        print("Processing {}".format(page.title))
+        gather_page_stats(page)
+        gather_vote_stats(page)
+        gather_word_stats(page)
+        exit()
 
 
 def gather_page_stats(page):
-    rewr = page.authors[1]
+    try:
+        rewr = page.authors[1]
+    except IndexError:
+        rewr = None
     text = BeautifulSoup(page.data).text
     charcount = len(text)
     wordcount = len(text.split(' '))
@@ -72,17 +86,37 @@ def gather_page_stats(page):
                      author=page.authors[0],
                      rewrite_author=rewr,
                      created=page.history[0].time,
-                     rating=page.rating
-                     comments=page.comments
+                     rating=page.rating,
+                     comments=page.comments,
                      charcount=charcount,
                      wordcount=wordcount,
                      images=len(page.images),
                      revisions=len(page.history))
 
 
+def gather_vote_stats(page):
+    for i in page.votes:
+        if i.vote == '+':
+            vote = 1
+        elif i.vote == '-':
+            vote = -1
+        VoteStats.create(url=page.url, user=i.user, vote=vote)
+
+
+def gather_word_stats(page):
+    text = BeautifulSoup(page.data).text
+    text = text.replace('[DATA EXPUNGED]', 'DATA_EXPUNGED')
+    text = text.replace('[DATA REDACTED]', 'DATA_REDACTED')
+    text = text.replace('’', "'")
+    text = re.sub(r'Site ([\d]+)', r'Site-\1', text)
+    words = re.findall(r"[\w'█_-]+", text)
+    words = [i.lower() for i in words]
+    cn = Counter(words)
+    import pprint
+    pprint.pprint(cn)    
+
 def main():
-    for page in scp_crawler.all_pages():
-        process_page(page)
+    fill_db()
 
 
 main()
