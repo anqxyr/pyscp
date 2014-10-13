@@ -271,13 +271,12 @@ def fill_db():
     VoteStats.delete().execute()
     WordStats.delete().execute()
     Tags.delete().execute()
-    for page in [scp_crawler.Page('http://www.scp-wiki.net/scp-478')]:
+    for page in scp_crawler.get_all():
         print("Processing {}".format(page.title))
         gather_page_stats(page)
         gather_vote_stats(page)
         gather_word_stats(page)
         gather_tags(page)
-        exit()
 
 
 def gather_page_stats(page):
@@ -310,7 +309,8 @@ def gather_vote_stats(page):
         data_dict = {'url': page.url, 'user': i.user, 'vote': vote}
         to_insert.append(data_dict)
     with db.transaction():
-        VoteStats.insert_many(to_insert).execute()
+        for idx in range(0, len(to_insert), 500):
+            VoteStats.insert_many(to_insert[idx:idx + 500]).execute()
 
 
 def gather_word_stats(page):
@@ -327,7 +327,8 @@ def gather_word_stats(page):
         data_dict = {'url': page.url, 'word': k, 'count': v}
         to_insert.append(data_dict)
     with db.transaction():
-        WordStats.insert_many(to_insert).execute()
+        for idx in range(0, len(to_insert), 500):
+            WordStats.insert_many(to_insert[idx:idx + 500]).execute()
 
 
 def gather_tags(page):
