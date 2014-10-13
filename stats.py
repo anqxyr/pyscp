@@ -1,16 +1,59 @@
 #!/usr/bin/env python3
 
+###############################################################################
+# Module Imports
+###############################################################################
+
 import arrow
+import peewee
 import scp_crawler
-import sqlite3
+
 from bs4 import BeautifulSoup
 
+###############################################################################
+# Global Constants
+###############################################################################
 
-conn = sqlite3.connect()
+STATDB = '/home/anqxyr/heap/scp_stats.db'
+
+###############################################################################
+# Database ORM Classes
+###############################################################################
+
+db = peewee.SqliteDatabase(STATDB)
 
 
-class PageData():
-    pass
+class BaseModel(peewee.Model):
+
+    class Meta:
+        database = db
+
+
+class PageStats(BaseModel):
+    url = peewee.CharField(unique=True)
+    author = peewee.CharField()
+    created = peewee.DateTimeField()
+    rating = peewee.IntegerField()
+    comments = peewee.IntegerField()
+    charcount = peewee.IntegerField()
+    wordcount = peewee.IntegerField()
+    images = peewee.IntegerField()
+    revisions = peewee.IntegerField()
+
+
+class VoteStats(BaseModel):
+    url = peewee.CharField()
+    user = peewee.CharField()
+    vote = peewee.IntegerField()
+
+
+class WordStats(BaseModel):
+    url = peewee.CharField()
+    word = peewee.CharField()
+    count = peewee.IntegerField()
+
+###############################################################################
+
 
 
 def process_page(page):
