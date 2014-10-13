@@ -32,6 +32,7 @@ class BaseModel(peewee.Model):
 class PageStats(BaseModel):
     url = peewee.CharField(unique=True)
     author = peewee.CharField()
+    rewrite_author = peewee.CharField(null=True)
     created = peewee.DateTimeField()
     rating = peewee.IntegerField()
     comments = peewee.IntegerField()
@@ -55,25 +56,28 @@ class WordStats(BaseModel):
 ###############################################################################
 
 
-
 def process_page(page):
-    if page.url in [i.url for i in pages]:
-        return
     print("Processing {}".format(page.title))
-    data = PageData()
-    data.url = page.url
-    data.charcount = len(page.data)
-    data.wordcount = len(page.data.split(" "))
-    data.rating = page.rating
-    history_soup = BeautifulSoup(page.history)
-    for row in reversed(history_soup.select("tr")):
-        edit_au, edit_time, desc = (i.text for i in row.select("td")[4:7])
-        data.time = arrow.get(edit_time, "DD MMM YYYY HH:mm").format("YYYY-MM")
-        break
-    data.tags = page.tags
-    pages.append(data)
-    for c in page.list_children():
-        process_page(c)
+    gather_page_stats(page)
+    gather_vote_stats(page)
+    gather_word_stats(page)
+
+
+def gather_page_stats(page):
+    rewr = page.authors[1]
+    text = BeautifulSoup(page.data).text
+    charcount = len(text)
+    wordcount = len(text.split(' '))
+    PageStats.create(url=page.url,
+                     author=page.authors[0],
+                     rewrite_author=rewr,
+                     created=page.history[0].time,
+                     rating=page.rating
+                     comments=page.comments
+                     charcount=charcount,
+                     wordcount=wordcount,
+                     images=len(page.images),
+                     revisions=len(page.history))
 
 
 def main():
