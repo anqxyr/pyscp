@@ -276,7 +276,7 @@ def fill_db():
         gather_page_stats(page)
         gather_vote_stats(page)
         gather_word_stats(page)
-        Tags.create(**{i: True for i in page.tags})
+        gather_tags(page)
         exit()
 
 
@@ -289,7 +289,7 @@ def gather_page_stats(page):
     charcount = len(text)
     wordcount = len(text.split(' '))
     PageStats.create(url=page.url,
-                     author=page.authors[0],
+                     author=page.authors[0].username,
                      rewrite_author=rewr,
                      created=page.history[0].time,
                      rating=page.rating,
@@ -301,12 +301,16 @@ def gather_page_stats(page):
 
 
 def gather_vote_stats(page):
+    to_insert = []
     for i in page.votes:
         if i.vote == '+':
             vote = 1
         elif i.vote == '-':
             vote = -1
-        VoteStats.create(url=page.url, user=i.user, vote=vote)
+        data_dict = {'url': page.url, 'user': i.user, 'vote': vote}
+        to_insert.append(data_dict)
+    with db.transaction():
+        VoteStats.insert_many(to_insert).execute()
 
 
 def gather_word_stats(page):
@@ -318,9 +322,23 @@ def gather_word_stats(page):
     words = re.findall(r"[\w'█_-]+", text)
     words = [i.lower().strip("'") for i in words]
     cn = Counter(words)
+    to_insert = []
     for k, v in cn.items():
-        WordStats.create(url=page.url, word=k, count=v)
+        data_dict = {'url': page.url, 'word': k, 'count': v}
+        to_insert.append(data_dict)
+    with db.transaction():
+        WordStats.insert_many(to_insert).execute()
 
+
+def gather_tags(page):
+    tags = page.tags
+    new_tags = []
+    for tag in tags:
+        tag = tag.replace('-', '_')
+        tag = tag.replace('&', '')
+        tag = tag.replace('2000', '_2000')
+        new_tags.append(tag)
+    Tags.create(url=page.url, **{i: True for i in new_tags})
 
 def main():
     fill_db()
