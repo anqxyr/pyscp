@@ -280,10 +280,16 @@ class Snapshot:
 
     def tag(self, tag):
         """Retrieve list of pages with the tag from the database"""
-        query = TagData.select().where(TagData.tag == tag)
-        for i in query:
+        for i in TagData.select().where(TagData.tag == tag):
             yield i.url
 
+    def rewrite(self, url):
+        rd = namedtuple('RewriteData', 'url author override')
+        try:
+            data = RewriteData.get(RewriteData.url == url)
+            return rd(data.url, data.author, data.override)
+        except RewriteData.DoesNotExist:
+            return False
 
 class Page:
 
@@ -306,6 +312,7 @@ class Page:
             self._raw_html = pd.html
             if pd.history is not None:
                 self._parse_history(pd.history)
+                self.authors = self._meta_authors()
             if pd.votes is not None:
                 self._parse_votes(pd.votes)
         self._override()
@@ -342,7 +349,9 @@ class Page:
         rating_el = soup.select("#pagerate-button span")
         if rating_el:
             self.rating = rating_el[0].text
-        
+        comments = soup.select('#discuss-button')[0].text
+        comments = re.search('[0-9]+', comments).group()
+        self.comments = comments
         self._parse_body(soup)
         self.tags = [a.string for a in soup.select("div.page-tags a")]
         self._parse_title(soup)
@@ -485,16 +494,18 @@ class Page:
             i.string = "".join([k for k in i.strings])
         return data
 
-    def _parse_authors(self):
-        history = bs4.BeautifulSoup(self.history)
-        author = history.select("tr")[-1].select("td")[-3].text
-        if self.url not in rewrites:
-            return {author: "original"}
-        new_author = rewrites[self.url]
-        if new_author[:10] == ":override:":
-            return {new_author[10:]: "original"}
+    def _meta_authors(self):
+        au = namedtuple('author', 'username status')
+        his_author = self.history[0].author
+        rewrite = self.sn.rewrite(self.url)
+        if rewrite:
+            if rewrite.override:
+                return [au(rewrite.author, 'original')]
+            else:
+                return [au(his_author, 'original'),
+                        au(rewrite.author, 'rewrite')]
         else:
-            return {author: "original", new_author: "rewrite"}
+            return [au(his_author, 'original')]
 
     ###########################################################################
 
@@ -520,7 +531,10 @@ class Page:
             return []
         lpages = []
         for url in self.links():
-            p = Page(url)
+            try:
+                p = Page(url)
+            except PageData.DoesNotExist:
+                continue
             if p.data is not None:
                 lpages.append(p)
         if any(i in self.tags for i in ["scp", "splash"]):
@@ -655,7 +669,7 @@ def update(time):
 
 
 def main():
-    for page in get_all():
-        print("{}    ({})".format(page.title, page.url))
+    print(Page('http://www.scp-wiki.net/scp-077').authors)
+
 
 main()
