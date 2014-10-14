@@ -33,15 +33,15 @@ class BaseModel(peewee.Model):
 
 class PageStats(BaseModel):
     url = peewee.CharField(unique=True)
-    author = peewee.CharField()
+    author = peewee.CharField(null=True)
     rewrite_author = peewee.CharField(null=True)
-    created = peewee.DateTimeField()
-    rating = peewee.IntegerField()
-    comments = peewee.IntegerField()
-    charcount = peewee.IntegerField()
-    wordcount = peewee.IntegerField()
-    images = peewee.IntegerField()
-    revisions = peewee.IntegerField()
+    created = peewee.DateTimeField(null=True)
+    rating = peewee.IntegerField(null=True)
+    comments = peewee.IntegerField(null=True)
+    charcount = peewee.IntegerField(null=True)
+    wordcount = peewee.IntegerField(null=True)
+    images = peewee.IntegerField(null=True)
+    revisions = peewee.IntegerField(null=True)
 
 
 class VoteStats(BaseModel):
@@ -272,7 +272,7 @@ def fill_db():
     WordStats.delete().execute()
     Tags.delete().execute()
     for page in scp_crawler.get_all():
-        print("Processing {}".format(page.title))
+        print("Processing {} ({})".format(page.title, page.url))
         gather_page_stats(page)
         gather_vote_stats(page)
         gather_word_stats(page)
@@ -280,17 +280,25 @@ def fill_db():
 
 
 def gather_page_stats(page):
-    try:
-        rewr = page.authors[1]
-    except IndexError:
-        rewr = None
-    text = BeautifulSoup(page.data).text
-    charcount = len(text)
-    wordcount = len(text.split(' '))
+    if page.history:
+        time = page.history[0].time
+        auth = page.authors[0].username
+        try:
+            rewr = page.authors[1].username
+        except:
+            rewr = None
+    else:
+        auth = rewr = time = None
+    if page.data:
+        text = BeautifulSoup(page.data).text
+        charcount = len(text)
+        wordcount = len(text.split(' '))
+    else:
+        charcount = wordcount = None
     PageStats.create(url=page.url,
-                     author=page.authors[0].username,
+                     author=auth,
                      rewrite_author=rewr,
-                     created=page.history[0].time,
+                     created=time,
                      rating=page.rating,
                      comments=page.comments,
                      charcount=charcount,
@@ -314,7 +322,10 @@ def gather_vote_stats(page):
 
 
 def gather_word_stats(page):
-    text = BeautifulSoup(page.data).text
+    try:
+        text = BeautifulSoup(page.data).text
+    except:
+        return
     text = text.replace('[DATA EXPUNGED]', 'DATA_EXPUNGED')
     text = text.replace('[DATA REDACTED]', 'DATA_REDACTED')
     text = text.replace('’', "'")
@@ -342,7 +353,7 @@ def gather_tags(page):
     Tags.create(url=page.url, **{i: True for i in new_tags})
 
 def main():
-    fill_db()
+    #fill_db()
 
 
 main()
