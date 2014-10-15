@@ -8,6 +8,7 @@ import arrow
 import peewee
 import re
 import scp_crawler
+import statistics
 
 from bs4 import BeautifulSoup
 from collections import Counter
@@ -354,6 +355,20 @@ def gather_tags(page):
 
 def main():
     #fill_db()
+    #cn = Counter()
+    n = 0
+    l = []
+    #skips = [i.url for i in Tags.select().where(Tags.tale == True)]
+    query = PageStats.select()#.where(PageStats.url << skips)
+    for i in query:
+        if i.revisions is not None:
+            l.append(i.revisions)
+    #l = list(reversed(sorted(l)))
+    #print(l[:5])
+    print(sum(l))
+    print(statistics.mean(l))
+    print(statistics.stdev(l))
+    
 
 
 main()
