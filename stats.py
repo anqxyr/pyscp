@@ -105,15 +105,15 @@ def gather_page_stats(page):
     else:
         charcount = wordcount = None
     Page.create(url=page.url,
-                     author=auth,
-                     rewrite_author=rewr,
-                     created=time,
-                     rating=page.rating,
-                     comments=page.comments,
-                     charcount=charcount,
-                     wordcount=wordcount,
-                     images=len(page.images),
-                     revisions=len(page.history))
+                author=auth,
+                rewrite_author=rewr,
+                created=time,
+                rating=page.rating,
+                comments=page.comments,
+                charcount=charcount,
+                wordcount=wordcount,
+                images=len(page.images),
+                revisions=len(page.history))
 
 
 def gather_vote_stats(page):
@@ -152,14 +152,11 @@ def gather_word_stats(page):
 
 
 def gather_tags(page):
-    tags = page.tags
-    new_tags = []
-    for tag in tags:
-        tag = tag.replace('-', '_')
-        tag = tag.replace('&', '')
-        tag = tag.replace('2000', '_2000')
-        new_tags.append(tag)
-    Tag.create(url=page.url, **{i: True for i in new_tags})
+    to_insert = []
+    for i in page.tags:
+        data_dict = {'tag': i, 'url': page.url}
+        to_insert.append(data_dict)
+    Tag.insert_many(to_insert).execute()
 
 def main():
     #fill_db()
