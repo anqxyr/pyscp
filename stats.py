@@ -32,7 +32,7 @@ class BaseModel(peewee.Model):
         database = db
 
 
-class PageStats(BaseModel):
+class Page(BaseModel):
     url = peewee.CharField(unique=True)
     author = peewee.CharField(null=True)
     rewrite_author = peewee.CharField(null=True)
@@ -45,19 +45,26 @@ class PageStats(BaseModel):
     revisions = peewee.IntegerField(null=True)
 
 
-class VoteStats(BaseModel):
+class Vote(BaseModel):
     url = peewee.CharField()
     user = peewee.CharField()
     vote = peewee.IntegerField()
 
 
-class WordStats(BaseModel):
+class Word(BaseModel):
     url = peewee.CharField()
     word = peewee.CharField()
     count = peewee.IntegerField()
 
 
-class Tags(BaseModel):
+class Revision(BaseModel):
+    url = peewee.CharField()
+    number = peewee.IntegerField()
+    user = peewee.CharField()
+    time = peewee.CharField()
+    comment = peewee.CharField()
+
+class Tag(BaseModel):
     url = peewee.CharField(unique=True)
     _2000 = peewee.BooleanField(null=True)
     acoustic = peewee.BooleanField(null=True)
@@ -262,16 +269,16 @@ class Tags(BaseModel):
 
 
 db.connect()
-db.create_tables([PageStats, VoteStats, WordStats, Tags], safe=True)
+db.create_tables([Page, Vote, Word, Revision, Tag], safe=True)
 
 ###############################################################################
 
 
 def fill_db():
-    PageStats.delete().execute()
-    VoteStats.delete().execute()
-    WordStats.delete().execute()
-    Tags.delete().execute()
+    Page.delete().execute()
+    Vote.delete().execute()
+    Word.delete().execute()
+    Tag.delete().execute()
     for page in scp_crawler.get_all():
         print("Processing {} ({})".format(page.title, page.url))
         gather_page_stats(page)
@@ -293,10 +300,10 @@ def gather_page_stats(page):
     if page.data:
         text = BeautifulSoup(page.data).text
         charcount = len(text)
-        wordcount = len(text.split(' '))
+        wordcount = len(re.findall(r"[\w'█_-]+", text))
     else:
         charcount = wordcount = None
-    PageStats.create(url=page.url,
+    Page.create(url=page.url,
                      author=auth,
                      rewrite_author=rewr,
                      created=time,
@@ -319,7 +326,7 @@ def gather_vote_stats(page):
         to_insert.append(data_dict)
     with db.transaction():
         for idx in range(0, len(to_insert), 500):
-            VoteStats.insert_many(to_insert[idx:idx + 500]).execute()
+            Vote.insert_many(to_insert[idx:idx + 500]).execute()
 
 
 def gather_word_stats(page):
@@ -340,7 +347,7 @@ def gather_word_stats(page):
         to_insert.append(data_dict)
     with db.transaction():
         for idx in range(0, len(to_insert), 500):
-            WordStats.insert_many(to_insert[idx:idx + 500]).execute()
+            Word.insert_many(to_insert[idx:idx + 500]).execute()
 
 
 def gather_tags(page):
@@ -351,15 +358,16 @@ def gather_tags(page):
         tag = tag.replace('&', '')
         tag = tag.replace('2000', '_2000')
         new_tags.append(tag)
-    Tags.create(url=page.url, **{i: True for i in new_tags})
+    Tag.create(url=page.url, **{i: True for i in new_tags})
 
 def main():
     #fill_db()
+    exit()
     #cn = Counter()
     n = 0
     l = []
     #skips = [i.url for i in Tags.select().where(Tags.tale == True)]
-    query = PageStats.select()#.where(PageStats.url << skips)
+    query = Page.select()#.where(PageStats.url << skips)
     for i in query:
         if i.revisions is not None:
             l.append(i.revisions)
