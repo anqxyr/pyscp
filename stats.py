@@ -4,20 +4,21 @@
 # Module Imports
 ###############################################################################
 
-import arrow
+import datetime
 import peewee
 import re
 import scp_crawler
 import statistics
 
 from bs4 import BeautifulSoup
-from collections import Counter
+from collections import Counter, defaultdict, namedtuple
+from matplotlib import pyplot, dates as mpdates
 
 ###############################################################################
 # Global Constants
 ###############################################################################
 
-STATDB = '/home/anqxyr/heap/scp_stats.db'
+STATDB = '/home/anqxyr/heap/_scp/stats.db'
 
 ###############################################################################
 # Database ORM Classes
@@ -61,8 +62,9 @@ class Revision(BaseModel):
     url = peewee.CharField()
     number = peewee.IntegerField()
     user = peewee.CharField()
-    time = peewee.CharField()
+    time = peewee.DateTimeField()
     comment = peewee.CharField()
+
 
 class Tag(BaseModel):
     tag = peewee.CharField()
@@ -86,6 +88,7 @@ def fill_db():
         gather_vote_stats(page)
         gather_word_stats(page)
         gather_tags(page)
+        gather_revisions(page)
 
 
 def gather_page_stats(page):
@@ -152,29 +155,75 @@ def gather_word_stats(page):
 
 
 def gather_tags(page):
+    if page.tags == []:
+        return
     to_insert = []
     for i in page.tags:
         data_dict = {'tag': i, 'url': page.url}
         to_insert.append(data_dict)
     Tag.insert_many(to_insert).execute()
 
+
+def gather_revisions(page):
+    if page.history == []:
+        return
+    to_insert = []
+    for i in page.history:
+        data_dict = {'url': page.url,
+                     'number': i.number,
+                     'user': i.user,
+                     'time': i.time,
+                     'comment': i.comment}
+        to_insert.append(data_dict)
+    with db.transaction():
+        for idx in range(0, len(to_insert), 500):
+            Revision.insert_many(to_insert[idx:idx + 500]).execute()
+
+
+def get_data(tag=None):
+    cls = Page
+    attr = 'rating'
+    if tag is not None:
+        with_tag = [i.url for i in Tag.select().where(Tag.tag == tag)]
+        query = cls.select().where(cls.url << with_tag)
+    else:
+        query = cls.select()
+    res = defaultdict(list)
+    for i in query:
+        value = getattr(i, attr, None)
+        if value is not None and i.created is not None:
+            time = '{}-{:02d}'.format(i.created.year, i.created.month)
+            res[time].append(value)
+    return res
+
+
+def make_plot():
+    fig = pyplot.figure()
+    pr = namedtuple('PlotParameters', 'tag style')
+    groups = [pr(None, 'b-'), pr('scp', 'r-'), pr('tale', 'g-')]
+    for i in groups:
+        #pyplot.subplot(n)
+        l = get_data(i.tag)
+        dates = sorted(l.keys())
+        converted_dates = [
+            datetime.datetime.strptime(i, '%Y-%m') for i in dates]
+        x_axis = (converted_dates)
+        y_axis = [statistics.mean(v) for k, v in sorted(l.items())]
+        pyplot.plot(x_axis, y_axis, i.style, linewidth=2)
+    ax = pyplot.gcf().axes[0]
+    ax.legend(['Pages', 'Skips', 'Tales'])
+    ax.xaxis.set_label_text('Time')
+    ax.yaxis.set_label_text('Rating (Average)')
+    ax.xaxis.set_major_locator(mpdates.YearLocator())
+    ax.xaxis.set_minor_locator(mpdates.MonthLocator())
+    fig.autofmt_xdate()
+    pyplot.show()
+
+
 def main():
     #fill_db()
-    exit()
-    #cn = Counter()
-    n = 0
-    l = []
-    #skips = [i.url for i in Tags.select().where(Tags.tale == True)]
-    query = Page.select()#.where(PageStats.url << skips)
-    for i in query:
-        if i.revisions is not None:
-            l.append(i.revisions)
-    #l = list(reversed(sorted(l)))
-    #print(l[:5])
-    print(sum(l))
-    print(statistics.mean(l))
-    print(statistics.stdev(l))
-    
+    #exit()
+    make_plot()
 
 
 main()
