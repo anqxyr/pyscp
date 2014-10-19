@@ -182,7 +182,8 @@ def gather_revisions(page):
 
 def get_data(tag=None):
     cls = Page
-    attr = 'rating'
+    x_axis = 'wordcount'
+    y_axis = 'rating'
     if tag is not None:
         with_tag = [i.url for i in Tag.select().where(Tag.tag == tag)]
         query = cls.select().where(cls.url << with_tag)
@@ -190,34 +191,64 @@ def get_data(tag=None):
         query = cls.select()
     res = defaultdict(list)
     for i in query:
-        value = getattr(i, attr, None)
-        if value is not None and i.created is not None:
-            time = '{}-{:02d}'.format(i.created.year, i.created.month)
-            res[time].append(value)
+        xpoint = getattr(i, x_axis, None)
+        if xpoint is not None:
+            value = getattr(i, y_axis, None)
+            if x_axis == 'created':
+                xpoint = '{}-{:02d}'.format(xpoint.year, xpoint.month)
+            if value is not None:
+                res[xpoint].append(value)
     return res
 
 
 def make_plot():
     fig = pyplot.figure()
+    fig.set_size_inches(24, 16)
     pr = namedtuple('PlotParameters', 'tag style')
+    all_dates = ['2008-07', '2008-08', '2008-09', '2008-10', '2008-11',
+        '2008-12', '2009-01', '2009-02', '2009-03', '2009-04', '2009-05',
+        '2009-06', '2009-07', '2009-08', '2009-09', '2009-10', '2009-11',
+        '2009-12', '2010-01', '2010-02', '2010-03', '2010-04', '2010-05',
+        '2010-06', '2010-07', '2010-08', '2010-09', '2010-10', '2010-11',
+        '2010-12', '2011-01', '2011-02', '2011-03', '2011-04', '2011-05',
+        '2011-06', '2011-07', '2011-08', '2011-09', '2011-10', '2011-11',
+        '2011-12', '2012-01', '2012-02', '2012-03', '2012-04', '2012-05',
+        '2012-06', '2012-07', '2012-08', '2012-09', '2012-10', '2012-11',
+        '2012-12', '2013-01', '2013-02', '2013-03', '2013-04', '2013-05',
+        '2013-06', '2013-07', '2013-08', '2013-09', '2013-10', '2013-11',
+        '2013-12', '2014-01', '2014-02', '2014-03', '2014-04', '2014-05',
+        '2014-06', '2014-07', '2014-08', '2014-09']
+    over_time = False
     groups = [pr(None, 'b-'), pr('scp', 'r-'), pr('tale', 'g-')]
+    #groups = [pr('scp', 'r-'), pr('tale', 'g-')]
     for i in groups:
-        #pyplot.subplot(n)
         l = get_data(i.tag)
-        dates = sorted(l.keys())
-        converted_dates = [
-            datetime.datetime.strptime(i, '%Y-%m') for i in dates]
-        x_axis = (converted_dates)
+        if over_time:
+            for j in all_dates:
+                if j not in l.keys():
+                    l[j] = [0]
+            dates = sorted(l.keys())
+            converted_dates = [
+                datetime.datetime.strptime(i, '%Y-%m') for i in dates]
+            x_axis = converted_dates
+        else:
+            for j in range(min(l.keys()), max(l.keys()), 5):
+                if not j in l.keys():
+                    l[j] = [0]
+            x_axis = sorted(l.keys())
         y_axis = [statistics.mean(v) for k, v in sorted(l.items())]
         pyplot.plot(x_axis, y_axis, i.style, linewidth=2)
     ax = pyplot.gcf().axes[0]
     ax.legend(['Pages', 'Skips', 'Tales'])
-    ax.xaxis.set_label_text('Time')
-    ax.yaxis.set_label_text('Rating (Average)')
-    ax.xaxis.set_major_locator(mpdates.YearLocator())
-    ax.xaxis.set_minor_locator(mpdates.MonthLocator())
-    fig.autofmt_xdate()
-    pyplot.show()
+    #ax.legend(['Skips', 'Tales'])
+    ax.xaxis.set_label_text('Revisions')
+    ax.yaxis.set_label_text('Word Count')
+    if over_time:
+        ax.xaxis.set_major_locator(mpdates.YearLocator())
+        ax.xaxis.set_minor_locator(mpdates.MonthLocator())
+        fig.autofmt_xdate()
+    pyplot.savefig("/home/anqxyr/heap/figure_01.png",
+                   dpi=100, bbox_inches='tight')
 
 
 def main():
