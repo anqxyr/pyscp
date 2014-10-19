@@ -4,6 +4,7 @@
 # Module Imports
 ###############################################################################
 
+import csv
 import datetime
 import peewee
 import re
@@ -251,10 +252,59 @@ def make_plot():
                    dpi=100, bbox_inches='tight')
 
 
+def make_user_tables():
+    users = [i.user for i in Vote.select(Vote.user).distinct()]
+    authors = [i.author for i in Page.select(Page.author).distinct()]
+    for i in authors:
+        if i not in users:
+            if not str(i).startswith('Anonymous'):
+                users.append(i)
+    with open('/home/anqxyr/heap/stats.csv', 'w') as F:
+        writer = csv.writer(F)
+        writer.writerow(['USER', 'PAGES CREATED', 'REVISIONS MADE',
+            'WORD COUNT', 'IMAGE COUNT', 'NET AUTHOR RATING', 'TOTAL VOTES',
+            'NET VOTE RATING', '#UPVOTES', '#DOWNVOTES', '%UPVOTES'])
+        N = len(users)
+        for n, i in enumerate(users):
+            print('{}/{}: {}'.format(n, N, i))
+            page_count = Page.select().where(Page.author == i).count()
+            vote_count_up = Vote.select().where(
+                (Vote.user == i) &
+                (Vote.vote == 1)).count()
+            vote_count_down = Vote.select().where(
+                (Vote.user == i) &
+                (Vote.vote == -1)).count()
+            rev_count = Revision.select().where(Revision.user == i).count()
+            wordcount = 0
+            images = 0
+            rating = 0
+            for j in Page.select().where(Page.author == i):
+                if j.wordcount is not None:
+                    wordcount += j.wordcount
+                if j.images is not None:
+                    images += j.images
+                if j.rating is not None:
+                    rating += j.rating
+            total_votes = vote_count_up + vote_count_down
+            net_votes = vote_count_up - vote_count_down
+            if total_votes != 0:
+                upvote_perc = '{:.2f}%'.format(
+                    100 * vote_count_up / total_votes)
+            else:
+                upvote_perc = '0.00%'
+            csvrow = [i, page_count, rev_count, wordcount, images, rating,
+                total_votes, net_votes, vote_count_up, vote_count_down,
+                upvote_perc]
+            writer.writerow(csvrow)
+        
+
+
+
 def main():
     #fill_db()
     #exit()
-    make_plot()
+    #make_plot()
+    make_user_tables()
 
 
 main()
