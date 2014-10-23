@@ -180,74 +180,116 @@ def gather_revisions(page):
         for idx in range(0, len(to_insert), 500):
             Revision.insert_many(to_insert[idx:idx + 500]).execute()
 
+###############################################################################
 
-def get_data(tag=None):
-    cls = Page
-    x_axis = 'wordcount'
-    y_axis = 'rating'
-    if tag is not None:
-        with_tag = [i.url for i in Tag.select().where(Tag.tag == tag)]
-        query = cls.select().where(cls.url << with_tag)
+
+def get_data(tag, method):
+    dates = defaultdict(list)
+    if tag is None:
+        dquer = Page.select()
     else:
-        query = cls.select()
+        tagged = [i.url for i in Tag.select().where(Tag.tag == tag)]
+        dquer = Page.select().where(Page.url << tagged)
+    for i in dquer:
+        if i.created is not None:
+            time = '{}-{:02d}'.format(i.created.year, i.created.month)
+            if time != '2014-10':
+                dates[time].append(i.url)
+    query = Vote.select().where(Vote.user == 'Vivax')
     res = defaultdict(list)
     for i in query:
-        xpoint = getattr(i, x_axis, None)
-        if xpoint is not None:
-            value = getattr(i, y_axis, None)
-            if x_axis == 'created':
-                xpoint = '{}-{:02d}'.format(xpoint.year, xpoint.month)
-            if value is not None:
-                res[xpoint].append(value)
-    return res
+        for k, v in dates.items():
+            if i.url in v:
+                if method:
+                    res[k].append(100 / len(v))
+                else:
+                    res[k].append(i.vote * 100 / len(v))
+                    break
+    return {k: sum(v) for k, v in res.items()}
+
+
+def get_groups():
+    users = [i.user for i in Vote.select(Vote.user).distinct()]
+    authors = [i.author for i in Page.select(Page.author).distinct()]
+    for i in authors:
+        if i not in users:
+            if not str(i).startswith('Anonymous'):
+                users.append(i)
+    groups = defaultdict(list)
+    for i in users:
+        n = Page.select().where(Page.author == i).count()
+        gr_keys = {'0': [0], '1': [1], '2-3': [2, 3], '4-8': range(4, 9),
+                   '9-20': range(9, 21)}
+        for k, v in gr_keys.items():
+            if n in v:
+                groups[k].append(i)
+                break
+        else:
+            groups['21+'].append(i)
+    pr = namedtuple('PlotParameters', 'list style title')
+    return [#pr(groups['0'], 'k', '0 articles'),
+            pr(groups['1'], 'b', '1 article'),
+            pr(groups['2-3'], '#FF7F00', '2 to 3 articles'),
+            pr(groups['4-8'], 'g', '4 to 8 articles'),
+            pr(groups['9-20'], 'm', '9 to 20 articles'),
+            pr(groups['21+'], 'r', 'more than 20 articles')]
 
 
 def make_plot():
     fig = pyplot.figure()
     fig.set_size_inches(24, 16)
-    pr = namedtuple('PlotParameters', 'tag style')
-    all_dates = ['2008-07', '2008-08', '2008-09', '2008-10', '2008-11',
-        '2008-12', '2009-01', '2009-02', '2009-03', '2009-04', '2009-05',
-        '2009-06', '2009-07', '2009-08', '2009-09', '2009-10', '2009-11',
-        '2009-12', '2010-01', '2010-02', '2010-03', '2010-04', '2010-05',
-        '2010-06', '2010-07', '2010-08', '2010-09', '2010-10', '2010-11',
-        '2010-12', '2011-01', '2011-02', '2011-03', '2011-04', '2011-05',
-        '2011-06', '2011-07', '2011-08', '2011-09', '2011-10', '2011-11',
-        '2011-12', '2012-01', '2012-02', '2012-03', '2012-04', '2012-05',
-        '2012-06', '2012-07', '2012-08', '2012-09', '2012-10', '2012-11',
-        '2012-12', '2013-01', '2013-02', '2013-03', '2013-04', '2013-05',
-        '2013-06', '2013-07', '2013-08', '2013-09', '2013-10', '2013-11',
-        '2013-12', '2014-01', '2014-02', '2014-03', '2014-04', '2014-05',
-        '2014-06', '2014-07', '2014-08', '2014-09']
-    over_time = False
-    groups = [pr(None, 'b-'), pr('scp', 'r-'), pr('tale', 'g-')]
-    #groups = [pr('scp', 'r-'), pr('tale', 'g-')]
+    all_dates = [
+        '2008-07', '2008-08', '2008-09', '2008-10', '2008-11', '2008-12',
+        '2009-01', '2009-02', '2009-03', '2009-04', '2009-05', '2009-06',
+        '2009-07', '2009-08', '2009-09', '2009-10', '2009-11', '2009-12',
+        '2010-01', '2010-02', '2010-03', '2010-04', '2010-05', '2010-06',
+        '2010-07', '2010-08', '2010-09', '2010-10', '2010-11', '2010-12',
+        '2011-01', '2011-02', '2011-03', '2011-04', '2011-05', '2011-06',
+        '2011-07', '2011-08', '2011-09', '2011-10', '2011-11', '2011-12',
+        '2012-01', '2012-02', '2012-03', '2012-04', '2012-05', '2012-06',
+        '2012-07', '2012-08', '2012-09', '2012-10', '2012-11', '2012-12',
+        '2013-01', '2013-02', '2013-03', '2013-04', '2013-05', '2013-06',
+        '2013-07', '2013-08', '2013-09', '2013-10', '2013-11', '2013-12',
+        '2014-01', '2014-02', '2014-03', '2014-04', '2014-05', '2014-06',
+        '2014-07', '2014-08', '2014-09']
+    over_time = True
+    pr = namedtuple('PlotParameters', 'tag method style title')
+    groups = [pr(None, False, 'b-', 'Pages (net)'),
+              pr('scp', False, 'r-', 'Skips (net)'),
+              pr('tale', False, 'g-', 'Tales (net)'),
+              pr(None, True, 'b:', 'Pages (%)'),
+              pr('scp', True, 'r:', 'Skips (%)'),
+              pr('tale', True, 'g:', 'Tales (%)'),]
+    #groups = get_groups()
     for i in groups:
-        l = get_data(i.tag)
+        l = get_data(i.tag, i.method)
         if over_time:
             for j in all_dates:
                 if j not in l.keys():
-                    l[j] = [0]
+                    l[j] = 0
             dates = sorted(l.keys())
             converted_dates = [
                 datetime.datetime.strptime(i, '%Y-%m') for i in dates]
             x_axis = converted_dates
         else:
-            for j in range(min(l.keys()), max(l.keys()), 5):
+            for j in range(min(l.keys()), max(l.keys()), 50):
                 if not j in l.keys():
-                    l[j] = [0]
+                    l[j] = 0
             x_axis = sorted(l.keys())
-        y_axis = [statistics.mean(v) for k, v in sorted(l.items())]
+        #x_axis = range(len(l.keys()))
+        y_axis = [v for k, v in sorted(l.items())]
         pyplot.plot(x_axis, y_axis, i.style, linewidth=2)
+    pyplot.plot(converted_dates, [0] * len(all_dates), 'k:', linewidth=.5)
+    pyplot.plot(converted_dates, [100] * len(all_dates), 'k:', linewidth=.5)
     ax = pyplot.gcf().axes[0]
-    ax.legend(['Pages', 'Skips', 'Tales'])
-    #ax.legend(['Skips', 'Tales'])
-    ax.xaxis.set_label_text('Revisions')
-    ax.yaxis.set_label_text('Word Count')
+    ax.legend([i.title for i in groups])
+    ax.xaxis.set_label_text('Vivax')
+    ax.yaxis.set_label_text('Normalized Net Vote / % Pages Voted')
     if over_time:
         ax.xaxis.set_major_locator(mpdates.YearLocator())
         ax.xaxis.set_minor_locator(mpdates.MonthLocator())
         fig.autofmt_xdate()
+    #pyplot.show()
     pyplot.savefig("/home/anqxyr/heap/figure_01.png",
                    dpi=100, bbox_inches='tight')
 
@@ -261,8 +303,9 @@ def make_user_tables():
                 users.append(i)
     with open('/home/anqxyr/heap/stats.csv', 'w') as F:
         writer = csv.writer(F)
-        writer.writerow(['USER', 'PAGES CREATED', 'REVISIONS MADE',
-            'WORD COUNT', 'IMAGE COUNT', 'NET AUTHOR RATING', 'TOTAL VOTES',
+        writer.writerow([
+            'USER', 'PAGES CREATED', 'REVISIONS MADE', 'WORD COUNT',
+            'IMAGE COUNT', 'NET AUTHOR RATING', 'TOTAL VOTES',
             'NET VOTE RATING', '#UPVOTES', '#DOWNVOTES', '%UPVOTES'])
         N = len(users)
         for n, i in enumerate(users):
@@ -292,19 +335,17 @@ def make_user_tables():
                     100 * vote_count_up / total_votes)
             else:
                 upvote_perc = '0.00%'
-            csvrow = [i, page_count, rev_count, wordcount, images, rating,
+            csvrow = [
+                i, page_count, rev_count, wordcount, images, rating,
                 total_votes, net_votes, vote_count_up, vote_count_down,
                 upvote_perc]
             writer.writerow(csvrow)
-        
-
 
 
 def main():
     #fill_db()
-    #exit()
-    #make_plot()
-    make_user_tables()
+    make_plot()
+    #make_user_tables()
 
 
 main()
