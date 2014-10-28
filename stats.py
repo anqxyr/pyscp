@@ -291,57 +291,78 @@ def make_plot():
                    dpi=100, bbox_inches='tight')
 
 
-def make_user_tables():
-    users = [i.user for i in Vote.select(Vote.user).distinct()]
+def make_user_tables(func, only_authors=False):
     authors = [i.author for i in Page.select(Page.author).distinct()]
-    for i in authors:
-        if i not in users:
-            if not str(i).startswith('Anonymous'):
-                users.append(i)
-    with open('/home/anqxyr/heap/stats.csv', 'w') as F:
+    if not only_authors:
+        users = [i.user for i in Vote.select(Vote.user).distinct()]
+        for i in authors:
+            if i not in users and not i.startswith('Anonymous'):
+                    users.append(i)
+    else:
+        users = authors
+    filename = '/home/anqxyr/heap/_scp/{}.csv'.format(func.__name__)
+    with open(filename, 'w') as F:
         writer = csv.writer(F)
-        writer.writerow([
-            'USER', 'PAGES CREATED', 'REVISIONS MADE', 'WORD COUNT',
-            'IMAGE COUNT', 'NET AUTHOR RATING', 'TOTAL VOTES',
-            'NET VOTE RATING', '#UPVOTES', '#DOWNVOTES', '%UPVOTES'])
+        writer.writerow(func())
         N = len(users)
         for n, i in enumerate(users):
             print('{}/{}: {}'.format(n, N, i))
-            page_count = Page.select().where(Page.author == i).count()
-            vote_count_up = Vote.select().where(
-                (Vote.user == i) &
-                (Vote.vote == 1)).count()
-            vote_count_down = Vote.select().where(
-                (Vote.user == i) &
-                (Vote.vote == -1)).count()
-            rev_count = Revision.select().where(Revision.user == i).count()
-            wordcount = 0
-            images = 0
-            rating = 0
-            for j in Page.select().where(Page.author == i):
-                if j.wordcount is not None:
-                    wordcount += j.wordcount
-                if j.images is not None:
-                    images += j.images
-                if j.rating is not None:
-                    rating += j.rating
-            total_votes = vote_count_up + vote_count_down
-            net_votes = vote_count_up - vote_count_down
-            if total_votes != 0:
-                upvote_perc = '{:.2f}%'.format(
-                    100 * vote_count_up / total_votes)
-            else:
-                upvote_perc = '0.00%'
-            csvrow = [
-                i, page_count, rev_count, wordcount, images, rating,
-                total_votes, net_votes, vote_count_up, vote_count_down,
-                upvote_perc]
-            writer.writerow(csvrow)
+            writer.writerow(func(i))
+
+
+def user_genstats(user=None):
+    if user is None:
+        return ['USER', 'REVISIONS MADE', 'TOTAL VOTES', 'NET VOTE RATING',
+                '#UPVOTES', '#DOWNVOTES', '%UPVOTES']
+    vote_count_up = Vote.select().where(
+        (Vote.user == user) &
+        (Vote.vote == 1)).count()
+    vote_count_down = Vote.select().where(
+        (Vote.user == user) &
+        (Vote.vote == -1)).count()
+    rev_count = Revision.select().where(Revision.user == user).count()
+    total_votes = vote_count_up + vote_count_down
+    net_votes = vote_count_up - vote_count_down
+    if total_votes != 0:
+        upvote_perc = '{:.2f}%'.format(
+            100 * vote_count_up / total_votes)
+    else:
+        upvote_perc = '0.00%'
+    return [user, rev_count, total_votes, net_votes, vote_count_up,
+            vote_count_down, upvote_perc]
+
+
+def author_genstats(user=None):
+    if user is None:
+        return ('USER',
+                'PAGES CREATED',
+                'NET AUTHOR RATING',
+                'AVERAGE RATING',
+                'WORD COUNT',
+                'AVERAGE WORD COUNT',
+                'IMAGE COUNT')
+    query = Page.select().where(Page.author == user)
+    pages_created = query.count()
+    net_author_rating = 0
+    word_count = 0
+    image_count = 0
+    for j in query:
+        word_count += j.wordcount if j.wordcount is not None else 0
+        image_count += j.images if j.images is not None else 0
+        net_author_rating += j.rating if j.rating is not None else 0
+    average_rating = net_author_rating / pages_created
+    average_word_count = word_count / pages_created
+    return (user,
+            pages_created,
+            net_author_rating,
+            average_rating,
+            word_count,
+            average_word_count,
+            image_count)
 
 
 def count_words():
     cn = Counter()
-    A = []
     query = Word.select().where(Word.word.contains('amnesia')
                                 | Word.word.contains('amnes'))
     l = query.count() // 100000 + 2
@@ -350,9 +371,9 @@ def count_words():
         for j in query.paginate(i, 100000):
             cn[j.word] += j.count
     for k, v in cn.most_common():
-         print(k, v)
+        print(k, v)
     print('------')
-    
+
 
 def rev_stats():
     pages = {}
@@ -368,7 +389,7 @@ def rev_stats():
 def main():
     #fill_db()
     #make_plot()
-    #make_user_tables()
+    make_user_tables(user_genstats)
     #count_words()
     rev_stats()
 
