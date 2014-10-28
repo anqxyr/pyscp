@@ -184,28 +184,23 @@ def gather_revisions(page):
 
 
 def get_data(tag, method):
-    dates = defaultdict(list)
-    if tag is None:
-        dquer = Page.select()
-    else:
-        tagged = [i.url for i in Tag.select().where(Tag.tag == tag)]
-        dquer = Page.select().where(Page.url << tagged)
-    for i in dquer:
-        if i.created is not None:
-            time = '{}-{:02d}'.format(i.created.year, i.created.month)
-            if time != '2014-10':
-                dates[time].append(i.url)
-    query = Vote.select().where(Vote.user == 'Vivax')
+    # dates = defaultdict(list)
+    # if tag is None:
+    #     dquer = Page.select()
+    # else:
+    #     tagged = [i.url for i in Tag.select().where(Tag.tag == tag)]
+    #     dquer = Page.select().where(Page.url << tagged)
+    # for i in dquer:
+    #     if i.created is not None:
+    #         time = '{}-{:02d}'.format(i.created.year, i.created.month)
+    #         if time != '2014-10':
+    #             dates[time].append(i.url)
+    query = Page.select()
     res = defaultdict(list)
     for i in query:
-        for k, v in dates.items():
-            if i.url in v:
-                if method:
-                    res[k].append(100 / len(v))
-                else:
-                    res[k].append(i.vote * 100 / len(v))
-                    break
-    return {k: sum(v) for k, v in res.items()}
+        if i.created is not None and i.rating is not None:
+            res[i.created.weekday()].append(i.rating)
+    return {k: statistics.mean(v) for k, v in res.items()}
 
 
 def get_groups():
@@ -227,7 +222,7 @@ def get_groups():
         else:
             groups['21+'].append(i)
     pr = namedtuple('PlotParameters', 'list style title')
-    return [#pr(groups['0'], 'k', '0 articles'),
+    return [pr(groups['0'], 'k', '0 articles'),
             pr(groups['1'], 'b', '1 article'),
             pr(groups['2-3'], '#FF7F00', '2 to 3 articles'),
             pr(groups['4-8'], 'g', '4 to 8 articles'),
@@ -252,14 +247,9 @@ def make_plot():
         '2013-07', '2013-08', '2013-09', '2013-10', '2013-11', '2013-12',
         '2014-01', '2014-02', '2014-03', '2014-04', '2014-05', '2014-06',
         '2014-07', '2014-08', '2014-09']
-    over_time = True
+    over_time = False
     pr = namedtuple('PlotParameters', 'tag method style title')
-    groups = [pr(None, False, 'b-', 'Pages (net)'),
-              pr('scp', False, 'r-', 'Skips (net)'),
-              pr('tale', False, 'g-', 'Tales (net)'),
-              pr(None, True, 'b:', 'Pages (%)'),
-              pr('scp', True, 'r:', 'Skips (%)'),
-              pr('tale', True, 'g:', 'Tales (%)'),]
+    groups = [pr(None, False, 'c-', 'Pages (net)')]
     #groups = get_groups()
     for i in groups:
         l = get_data(i.tag, i.method)
@@ -272,19 +262,26 @@ def make_plot():
                 datetime.datetime.strptime(i, '%Y-%m') for i in dates]
             x_axis = converted_dates
         else:
-            for j in range(min(l.keys()), max(l.keys()), 50):
-                if not j in l.keys():
-                    l[j] = 0
+            # for j in range(min(l.keys()), max(l.keys()), 100):
+            #     if not j in l.keys():
+            #         l[j] = 0
             x_axis = sorted(l.keys())
         #x_axis = range(len(l.keys()))
         y_axis = [v for k, v in sorted(l.items())]
         pyplot.plot(x_axis, y_axis, i.style, linewidth=2)
-    pyplot.plot(converted_dates, [0] * len(all_dates), 'k:', linewidth=.5)
-    pyplot.plot(converted_dates, [100] * len(all_dates), 'k:', linewidth=.5)
+    #pyplot.plot(converted_dates, [0] * len(all_dates), 'k:', linewidth=.5)
+    #pyplot.plot(converted_dates, [100] * len(all_dates), 'k:', linewidth=.5)
     ax = pyplot.gcf().axes[0]
-    ax.legend([i.title for i in groups])
-    ax.xaxis.set_label_text('Vivax')
-    ax.yaxis.set_label_text('Normalized Net Vote / % Pages Voted')
+    #ax.legend([i.title for i in groups])
+    ax.set_xticklabels(['Monday', 'Tuesday', 'Wednesday', 'Thursday',
+                        'Friday', 'Saturday', 'Sunday'])
+    #ax.set_xlim(0, 23)
+    #ax.xaxis.set_major_locator(pyplot.MultipleLocator(4))
+    #ax.xaxis.set_minor_locator(pyplot.MultipleLocator(1))
+    ax.xaxis.set_label_text('Day of the Week')
+    ax.yaxis.set_label_text('Average Rating')
+    #ax.set_xscale('log')
+    #ax.set_yscale('log')
     if over_time:
         ax.xaxis.set_major_locator(mpdates.YearLocator())
         ax.xaxis.set_minor_locator(mpdates.MonthLocator())
@@ -342,10 +339,39 @@ def make_user_tables():
             writer.writerow(csvrow)
 
 
+def count_words():
+    cn = Counter()
+    A = []
+    query = Word.select().where(Word.word.contains('amnesia')
+                                | Word.word.contains('amnes'))
+    l = query.count() // 100000 + 2
+    for i in range(1, l):
+        print('Page {} out of {}'.format(i, l))
+        for j in query.paginate(i, 100000):
+            cn[j.word] += j.count
+    for k, v in cn.most_common():
+         print(k, v)
+    print('------')
+    
+
+def rev_stats():
+    pages = {}
+    for i in Page.select():
+        pages[i.url] = i.created
+    n = 0
+    for i in Revision.select():
+        if not i.comment:
+            n += 1
+    print(n)
+
+
 def main():
     #fill_db()
-    make_plot()
+    #make_plot()
     #make_user_tables()
+    #count_words()
+    rev_stats()
 
 
-main()
+if __name__ == "__main__":
+    main()
