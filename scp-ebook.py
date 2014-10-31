@@ -1,14 +1,32 @@
 #!/usr/bin/env python3
 
-from lxml import etree, html
-import os
-import shutil
-import copy
+###############################################################################
+# Module Imports
+###############################################################################
+
+
 import arrow
+import copy
+import natsort
+import os
+import re
 import requests
+import shutil
 import tempfile
 
+from collections import defaultdict
+from lxml import etree, html
 from scp_crawler import Page
+
+###############################################################################
+# Global Constants
+###############################################################################
+
+SAVEPATH = '/home/anqxyr/heap/_scp/ebook/'
+
+###############################################################################
+# Primary Classes
+###############################################################################
 
 
 class Epub():
@@ -19,7 +37,6 @@ class Epub():
 
     def __init__(self, title):
         self.title = title
-        #change to a proper temp dir later on
         self.dir = tempfile.TemporaryDirectory()
         self.templates = {}
         for i in os.listdir("templates"):
@@ -109,6 +126,10 @@ class Epub():
         shutil.make_archive(filename, "zip", self.dir.name)
         shutil.move(filename + ".zip", filename + ".epub")
 
+###############################################################################
+# Page Retrieval Functions
+###############################################################################
+
 
 def get_skips():
     tagged_as_scp = Page.sn.tag("scp")
@@ -154,7 +175,7 @@ def get_hubs():
         if url not in nested_hubs:
             p = Page(url)
             p.chapter = "Canons and Series"
-            yield p    
+            yield p
 
 
 def get_tales():
@@ -164,97 +185,113 @@ def get_tales():
         yield p
 
 
-def main():
-    def make_new_book(title):
-        book = Epub(title)
-        static_pages = []
-        for xf in [i for i in sorted(os.listdir(os.getcwd() + "/pages"))]:
-            p = scp_crawler.Page()
-            p.title = xf[3:-6]
-            with open(os.path.join(os.getcwd() + "/pages", xf)) as F:
-                p.data = F.read()
-            static_pages.append(p)
-        #map(book.add_page, static_pages)
-        [book.add_page(k) for k in static_pages]
-        book.chapters = []
-        return book
+def get_all_in_order():
+    #yield from get_skips()
+    #yield from get_extra_categories()
+    #yield from get_hubs()
+    #yield from get_tales()
+    pass
 
-    def add_attributions(book):
-        attrib = scp_crawler.Page()
-        attrib.title = "Acknowledgments and Attributions"
-        attrib.data = "<div class='attrib'>"
-        for i in sorted(book.allpages, key=lambda k: k["id"]):
-            def add_one(attrib, title, url, authors):
-                attrib.data += \
-                    "<p><b>{}</b> ({}) was written by <b>{}</b>".format(
-                        title, url, " ".join(
-                            k for k, v in authors.items() if v == "original"))
-                for au in (k for k, v in authors.items() if v == "rewrite"):
-                    attrib.data += ", rewritten by <b>{}</b>".format(au)
-                attrib.data += ".</p>"
-            if i["url"] is None:
-                continue
-            add_one(attrib, i["title"], i["url"], i["authors"])
-        for i in book.images:
-            if scp_crawler.images[i] != "PUBLIC DOMAIN":
-                attrib.data += (
-                    "<p>The image {}_{}, which appears on the page <b>{}</b>, "
-                    "is a CC image available at <u>{}</u>.</p>".format(
-                        i.split("/")[-2], i.split("/")[-1], book.images[i],
-                        scp_crawler.images[i]))
-        attrib.data += "</div>"
-        book.add_page(attrib)
+###############################################################################
 
-    def goes_in_book(previous_book, page):
-        #return previous_book.title
 
-        def increment_title(old_title):
-            n = old_title[-1:]
-            n = str(int(n) + 1)
-            return old_title[:-1] + n
-        if ("scp" in page.tags and
-                page.chapter.split("/")[-1] in previous_book.chapters):
+def add_attributions(book):
+    attrib = Page()
+    attrib.title = "Acknowledgments and Attributions"
+    attrib.data = "<div class='attrib'>"
+    for i in sorted(book.allpages, key=lambda k: k["id"]):
+        def add_one(attrib, title, url, authors):
+            attrib.data += \
+                "<p><b>{}</b> ({}) was written by <b>{}</b>".format(
+                    title, url, " ".join(
+                        k for k, v in authors.items() if v == "original"))
+            for au in (k for k, v in authors.items() if v == "rewrite"):
+                attrib.data += ", rewritten by <b>{}</b>".format(au)
+            attrib.data += ".</p>"
+        if i["url"] is None:
+            continue
+        add_one(attrib, i["title"], i["url"], i["authors"])
+    for i in book.images:
+        if scp_crawler.images[i] != "PUBLIC DOMAIN":
+            attrib.data += (
+                "<p>The image {}_{}, which appears on the page <b>{}</b>, "
+                "is a CC image available at <u>{}</u>.</p>".format(
+                    i.split("/")[-2], i.split("/")[-1], book.images[i],
+                    scp_crawler.images[i]))
+    attrib.data += "</div>"
+    book.add_page(attrib)
+
+
+def make_new_book(title):
+    book = Epub(title)
+    static_pages = []
+    for xf in [i for i in sorted(os.listdir(os.getcwd() + "/pages"))]:
+        p = Page()
+        p.title = xf[3:-6]
+        with open(os.path.join(os.getcwd() + "/pages", xf)) as F:
+            p.data = F.read()
+        static_pages.append(p)
+    #map(book.add_page, static_pages)
+    [book.add_page(k) for k in static_pages]
+    book.chapters = []
+    return book
+
+
+def goes_in_book(previous_book, page):
+    #return previous_book.title
+
+    def increment_title(old_title):
+        n = old_title[-1:]
+        n = str(int(n) + 1)
+        return old_title[:-1] + n
+    if ("scp" in page.tags and
+            page.chapter.split("/")[-1] in previous_book.chapters):
+        return previous_book.title
+    elif ((page.chapter == "Canons and Series" or
+           page.chapter == "Assorted Tales") and
+          page.chapter not in previous_book.chapters):
+            return increment_title(previous_book.title)
+    elif len(previous_book.allpages) < 500:
             return previous_book.title
-        elif ((page.chapter == "Canons and Series" or
-               page.chapter == "Assorted Tales") and
-              page.chapter not in previous_book.chapters):
-                return increment_title(previous_book.title)
-        elif len(previous_book.allpages) < 500:
-                return previous_book.title
-        else:
-                return increment_title(previous_book.title)
+    else:
+            return increment_title(previous_book.title)
 
-    def node_with_text(book, text):
-        if text is None:
-            return None
-        return book.toc.xpath('.//navPoint[child::navLabel[child::text[text()='
-                              '"{}"]]]'.format(text))[0]
-    if os.path.exists("{}_lastcreated".format(datadir)):
-        with open("{}_lastcreated".format(datadir)) as F:
-            scp_crawler.update(F.read())
-    with open("{}_lastcreated".format(datadir), "w") as F:
-        F.write(arrow.utcnow().format("YYYY-MM-DDTHH:mm:ss"))
-    book = make_new_book("SCP Foundation: Tome 1")
 
-    for i in scp_crawler.all_pages():
-        book_name = goes_in_book(book, i)
-        if book.title != book_name:
-            add_attributions(book)
-            book.save("/home/anqxyr/heap/_ebook/" + book.title)
-            book = make_new_book(book_name)
-        previous_chapter = None
-        for c in i.chapter.split("/"):
-            if not c in [i["title"] for i in book.allpages]:
-                print(c)
-                p = scp_crawler.Page()
-                p.title = c
-                p.data = "<div class='title2'>{}</div>".format(c)
-                book.add_page(p, node_with_text(book, previous_chapter))
-                book.chapters.append(c)
-            previous_chapter = c
-        book.add_page(i, node_with_text(book, previous_chapter))
-    add_attributions(book)
-    book.save("/home/anqxyr/heap/_ebook/" + book.title)
+def node_with_text(book, text):
+    if text is None:
+        return None
+    return book.toc.xpath('.//navPoint[child::navLabel[child::text[text()='
+                          '"{}"]]]'.format(text))[0]
+
+
+def pick_and_add(books, page):
+    pass
+
+
+def main():
+    books = []
+    for page in get_all_in_order():
+        pick_and_add(books, page)
+        # book_name = goes_in_book(book, i)
+        # if book.title != book_name:
+        #     add_attributions(book)
+        #     book.save("/home/anqxyr/heap/_ebook/" + book.title)
+        #     book = make_new_book(book_name)
+        # previous_chapter = None
+        # for c in i.chapter.split("/"):
+        #     if not c in [i["title"] for i in book.allpages]:
+        #         print(c)
+        #         p = scp_crawler.Page()
+        #         p.title = c
+        #         p.data = "<div class='title2'>{}</div>".format(c)
+        #         book.add_page(p, node_with_text(book, previous_chapter))
+        #         book.chapters.append(c)
+        #     previous_chapter = c
+        # book.add_page(i, node_with_text(book, previous_chapter))
+    for book in books:
+        add_attributions(book)
+        book.save(os.path.join(SAVEPATH, book.title))
     print("done")
+
 
 main()
