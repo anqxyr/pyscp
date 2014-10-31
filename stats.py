@@ -293,11 +293,14 @@ def make_plot():
 
 def make_user_tables(func, only_authors=False):
     authors = [i.author for i in Page.select(Page.author).distinct()]
+    authors = [i for i in authors
+               if i is not None
+               and not i.startswith('Anonymous')]
     if not only_authors:
         users = [i.user for i in Vote.select(Vote.user).distinct()]
         for i in authors:
-            if i not in users and not i.startswith('Anonymous'):
-                    users.append(i)
+            if i not in users:
+                users.append(i)
     else:
         users = authors
     filename = '/home/anqxyr/heap/_scp/{}.csv'.format(func.__name__)
@@ -310,36 +313,42 @@ def make_user_tables(func, only_authors=False):
             writer.writerow(func(i))
 
 
-def user_genstats(user=None):
+def t_user_gen(user=None):
     if user is None:
-        return ['USER', 'REVISIONS MADE', 'TOTAL VOTES', 'NET VOTE RATING',
-                '#UPVOTES', '#DOWNVOTES', '%UPVOTES']
-    vote_count_up = Vote.select().where(
-        (Vote.user == user) &
-        (Vote.vote == 1)).count()
-    vote_count_down = Vote.select().where(
-        (Vote.user == user) &
-        (Vote.vote == -1)).count()
-    rev_count = Revision.select().where(Revision.user == user).count()
-    total_votes = vote_count_up + vote_count_down
-    net_votes = vote_count_up - vote_count_down
+        return ('USER',
+                'REVISIONS MADE',
+                'TOTAL VOTES',
+                'NET VOTE RATING',
+                'UPVOTES',
+                'DOWNVOTES',
+                'UPVOTES PERCENT')
+    query = Vote.select().where(Vote.user == user)
+    upvotes = query.where(Vote.vote == 1).count()
+    downvotes = query.where(Vote.vote == -1).count()
+    revisions_made = Revision.select().where(Revision.user == user).count()
+    total_votes = upvotes + downvotes
+    net_vote_rating = upvotes - downvotes
     if total_votes != 0:
-        upvote_perc = '{:.2f}%'.format(
-            100 * vote_count_up / total_votes)
+        upvotes_percent = '{:.2f}%'.format(100 * upvotes / total_votes)
     else:
-        upvote_perc = '0.00%'
-    return [user, rev_count, total_votes, net_votes, vote_count_up,
-            vote_count_down, upvote_perc]
+        upvotes_percent = '0.00%'
+    return (user,
+            revisions_made,
+            total_votes,
+            net_vote_rating,
+            upvotes,
+            downvotes,
+            upvotes_percent)
 
 
-def author_genstats(user=None):
+def t_author_gen(user=None):
     if user is None:
         return ('USER',
                 'PAGES CREATED',
-                'NET AUTHOR RATING',
-                'AVERAGE RATING',
+                'NET RATING',
+                'AV. RATING',
                 'WORD COUNT',
-                'AVERAGE WORD COUNT',
+                'AV. WORD COUNT',
                 'IMAGE COUNT')
     query = Page.select().where(Page.author == user)
     pages_created = query.count()
@@ -350,8 +359,8 @@ def author_genstats(user=None):
         word_count += j.wordcount if j.wordcount is not None else 0
         image_count += j.images if j.images is not None else 0
         net_author_rating += j.rating if j.rating is not None else 0
-    average_rating = net_author_rating / pages_created
-    average_word_count = word_count / pages_created
+    average_rating = '{:.2f}'.format(net_author_rating / pages_created)
+    average_word_count = '{:.2f}'.format(word_count / pages_created)
     return (user,
             pages_created,
             net_author_rating,
@@ -359,6 +368,138 @@ def author_genstats(user=None):
             word_count,
             average_word_count,
             image_count)
+
+
+def t_user_tags(user=None):
+    tags = [i.tag for i in Tag.select(Tag.tag).distinct()]
+    tags.sort()
+    if user is None:
+        return ('USER',
+                'MOST FAVORITE TAG 1',
+                'MOST FAVORITE TAG 2',
+                'MOST FAVORITE TAG 3',
+                'MOST FAVORITE TAG 4',
+                'MOST FAVORITE TAG 5',
+                'MOST FAVORITE TAG 6',
+                'MOST FAVORITE TAG 7',
+                'MOST FAVORITE TAG 8',
+                'MOST FAVORITE TAG 9',
+                'MOST FAVORITE TAG 10',
+                'LEAST FAVORITE TAG 1',
+                'LEAST FAVORITE TAG 2',
+                'LEAST FAVORITE TAG 3',
+                'LEAST FAVORITE TAG 4',
+                'LEAST FAVORITE TAG 5')
+    votes = {i.url: i.vote for i in Vote.select().where(Vote.user == user)}
+    tmp = Tag.select().where(Tag.url << list(votes.keys()))
+    tagged_as = defaultdict(list)
+    for i in tmp:
+        tagged_as[i.url].append(i.tag)
+    res = Counter()
+    for k, v in votes.items():
+        for j in tagged_as[k]:
+            res[j] += v
+    tup = (user, )
+    for k, v in res.most_common(10):
+        tup += ('{} ({})'.format(k, v), )
+    for k, v in res.most_common()[:-6:-1]:
+        tup += ('{} ({})'.format(k, v), )
+    return tup
+
+
+def t_author_tags(user=None):
+    if user is None:
+        return ('USER',
+                'MOST FAVORITE TAG 1',
+                'MOST FAVORITE TAG 2',
+                'MOST FAVORITE TAG 3',
+                'MOST FAVORITE TAG 4',
+                'MOST FAVORITE TAG 5',
+                'MOST FAVORITE TAG 6',
+                'MOST FAVORITE TAG 7',
+                'MOST FAVORITE TAG 8',
+                'MOST FAVORITE TAG 9',
+                'MOST FAVORITE TAG 10')
+    tags = [i.tag for i in Tag.select(Tag.tag).distinct()]
+    tags.sort()
+    res = Counter()
+    for i in Page.select().where(Page.author == user):
+        for j in Tag.select().where(Tag.url == i.url):
+            res[j.tag] += 1
+    tup = (user, )
+    n = Page.select().where(Page.author == user).count()
+    for k, v in res.most_common(10):
+        tup += ('{} ({} - {:.2f}%)'.format(k, v, 100 * v / n), )
+    return tup
+
+
+def t_votes_per_year(user=None):
+    if user is None:
+        return ('USER',
+                '2008 TOTAL',
+                '2008 NET',
+                '2009 TOTAL',
+                '2009 NET',
+                '2010 TOTAL',
+                '2010 NET',
+                '2011 TOTAL',
+                '2011 NET',
+                '2012 TOTAL',
+                '2012 NET',
+                '2013 TOTAL',
+                '2013 NET',
+                '2014 TOTAL',
+                '2014 NET',)
+    res = defaultdict(list)
+    dates = {i.url: i.created for i in Page.select()}
+    for i in Vote.select().where(Vote.user == user):
+        year = dates[i.url].year
+        res[year].append(i.vote)
+    tup = (user, )
+    for k, v in sorted(res.items()):
+        tup += (len(v), sum(v))
+    return tup
+
+
+WORDFR = Counter()
+
+
+def get_word_freq():
+    query = Word.select()
+    count = query.count()
+    l = count // 100000 + 2
+    for i in range(1, l):
+        print('Page {} out of {}'.format(i, l))
+        for j in query.paginate(i, 100000):
+            WORDFR[j.word] += 100 * j.count / count
+
+
+def t_author_words(user=None):
+    if user is None:
+        return ('USER',
+                'MOST USED WORD 1',
+                'MOST USED WORD 2',
+                'MOST USED WORD 3',
+                'MOST USED WORD 4',
+                'MOST USED WORD 5',
+                'MOST USED WORD 6',
+                'MOST USED WORD 7',
+                'MOST USED WORD 8',
+                'MOST USED WORD 9',
+                'MOST USED WORD 10')
+    if not WORDFR:
+        get_word_freq()
+    pages = [i.url for i in Page.select().where(Page.author == user)]
+    cn = Counter()
+    for i in Word.select().where(Word.url << pages):
+        cn[i.word] += i.count
+    n = sum(cn.values())
+    for k, v in cn.items():
+        cn[k] = (100 * v / n) - WORDFR[k]
+    tup = (user, )
+    for k, v in cn.most_common(10):
+        tup += ('{} ({:+.2f}Δ)'.format(k, v), )
+    return tup
 
 
 def count_words():
@@ -389,9 +530,9 @@ def rev_stats():
 def main():
     #fill_db()
     #make_plot()
-    make_user_tables(user_genstats)
+    make_user_tables(t_author_words, only_authors=True)
     #count_words()
-    rev_stats()
+    #rev_stats()
 
 
 if __name__ == "__main__":
