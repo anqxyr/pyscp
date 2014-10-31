@@ -7,9 +7,8 @@ import copy
 import arrow
 import requests
 import tempfile
-import scp_crawler
 
-datadir = scp_crawler.datadir
+from scp_crawler import Page
 
 
 class Epub():
@@ -109,6 +108,60 @@ class Epub():
         shutil.copy("cover.png", self.dir.name)
         shutil.make_archive(filename, "zip", self.dir.name)
         shutil.move(filename + ".zip", filename + ".epub")
+
+
+def get_skips():
+    tagged_as_scp = Page.sn.tag("scp")
+    mainlist = [i for i in tagged_as_scp if re.search("scp-[0-9]*$", i)]
+    skips = natsort.natsorted(mainlist, signed=False)
+    scp_blocks = defaultdict(list)
+    for url in skips:
+        num = int(url.split("-")[-1])
+        block = num // 100      # should range from 0 to 29
+        scp_blocks[block].append(url)
+    for block in (scp_blocks[i] for i in range(10, 30)):
+        first = block[0].split("-")[-1]
+        last = block[-1].split("-")[-1]
+        block_name = "SCP Database/Articles {}-{}".format(first, last)
+        for url in block:
+            p = Page(url)
+            p.chapter = block_name
+            yield p
+
+
+def get_extra_categories():
+    baseurl = "http://www.scp-wiki.net/proposals-for-scp-001"
+    proposals_hub = Page(baseurl)
+    categories = {
+        "SCP Database/001 Proposals": proposals_hub.links(),
+        "SCP Database/Explained Phenomena": Page.sn.tag("explained"),
+        "SCP Database/Joke Articles": Page.sn.tag("joke")}
+    for k, v in categories.items():
+        for url in v:
+            p = Page(url)
+            p.chapter = k
+            yield p
+
+
+def get_hubs():
+    hubhubs = ["http://www.scp-wiki.net/canon-hub",
+               "http://www.scp-wiki.net/goi-contest-2014",
+               "http://www.scp-wiki.net/acidverse"]
+    nested_hubs = [i.url for k in hubhubs for i in Page(k).children()]
+    hubs = [i for i in Page.sn.tag("hub") if i in Page.sn.tag("tale")
+            or i in Page.sn.tag("goi2014")]
+    for url in hubs:
+        if url not in nested_hubs:
+            p = Page(url)
+            p.chapter = "Canons and Series"
+            yield p    
+
+
+def get_tales():
+    for url in Page.sn.tag("tale"):
+        p = Page(url)
+        p.chapter = "Assorted Tales"
+        yield p
 
 
 def main():

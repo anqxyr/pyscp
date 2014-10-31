@@ -17,7 +17,7 @@ from collections import namedtuple, defaultdict
 # Global Constants
 ###############################################################################
 
-DBPATH = "/home/anqxyr/heap/scp_data.db"
+DBPATH = "/home/anqxyr/heap/_scp/scp-wiki.2014-10-05.db"
 
 ###############################################################################
 # Decorators
@@ -304,7 +304,11 @@ class Page:
     def __init__(self, url=None):
         self.url = url
         self.data = None
+        self.rating = None
         self.images = []
+        self.history = []
+        self.authors = []
+        self.votes = []
 
         if url is not None:
             pd = self.sn.pagedata(url)
@@ -349,9 +353,12 @@ class Page:
         rating_el = soup.select("#pagerate-button span")
         if rating_el:
             self.rating = rating_el[0].text
-        comments = soup.select('#discuss-button')[0].text
-        comments = re.search('[0-9]+', comments).group()
-        self.comments = comments
+        try:
+            comments = soup.select('#discuss-button')[0].text
+            comments = re.search('[0-9]+', comments).group()
+            self.comments = comments
+        except:
+            self.comments = 0
         self._parse_body(soup)
         self.tags = [a.string for a in soup.select("div.page-tags a")]
         self._parse_title(soup)
@@ -365,15 +372,15 @@ class Page:
     def _parse_history(self, raw_history):
         soup = bs4.BeautifulSoup(raw_history)
         history = []
-        Revision = namedtuple('Revision', 'number author time comment')
+        Revision = namedtuple('Revision', 'number user time comment')
         for i in soup.select('tr')[1:]:
             rev_data = i.select('td')
             number = int(rev_data[0].text.strip('.'))
-            author = rev_data[4].text
+            user = rev_data[4].text
             time = arrow.get(rev_data[5].text, 'DD MMM YYYY HH:mm')
             time = time.format('YYYY-MM-DD HH:mm:ss')
             comment = rev_data[6].text
-            history.append(Revision(number, author, time, comment))
+            history.append(Revision(number, user, time, comment))
         self.history = list(reversed(history))
 
     def _parse_votes(self, raw_votes):
@@ -399,7 +406,7 @@ class Page:
         data = self._parse_footnotes(data)
         data = self._parse_links(data)
         data = self._parse_quotes(data)
-        self.data = data
+        self.data = str(data)
 
     def _parse_title(self, soup):
         if soup.select("#page-title"):
@@ -412,10 +419,15 @@ class Page:
         #                             titles[title.split("-")[1]])
 
     def _parse_images(self, data):
-        for i in data.select("img"):
-            if i.name is None or not i.has_attr("src"):
-                return
-            self.images.append(i["src"])
+        for i in data.select('img'):
+            if i.name is None or not i.has_attr('src'):
+                continue
+            heritage = ('http://scp-wiki.wdfiles.com/local--files/'
+                        'component:heritage-rating')
+            avatar = 'http://www.wikidot.com/avatar.php?userid'
+            if i['src'].startswith(heritage) or i['src'].startswith(avatar):
+                continue
+            self.images.append(i['src'])
             # if i["src"] not in images:
             #     #loop through the image's parents, until we find what to cut
             #     for p in i.parents:
@@ -496,7 +508,7 @@ class Page:
 
     def _meta_authors(self):
         au = namedtuple('author', 'username status')
-        his_author = self.history[0].author
+        his_author = self.history[0].user
         rewrite = self.sn.rewrite(self.url)
         if rewrite:
             if rewrite.override:
@@ -572,104 +584,13 @@ def get_all():
     for n in range(1, count // 50 + 2):
         query = PageData.select().order_by(PageData.url).paginate(n, 50)
         for i in query:
-            p = Page()
-            p.url = i.url
-            p._parse_html(i.html)
-            p._raw_html = i.html
-            if i.history is not None:
-                p._parse_history(i.history)
-            if i.votes is not None:
-                p._parse_votes(i.votes)
-            p._override()
-            yield p
-
-
-def get_skips():
-    tagged_as_scp = Page.sn.tag("scp")
-    mainlist = [i for i in tagged_as_scp if re.search("scp-[0-9]*$", i)]
-    skips = natsort.natsorted(mainlist, signed=False)
-    scp_blocks = defaultdict(list)
-    for url in skips:
-        num = int(url.split("-")[-1])
-        block = num // 100      # should range from 0 to 29
-        scp_blocks[block].append(url)
-    for block in (scp_blocks[i] for i in range(10, 30)):
-        first = block[0].split("-")[-1]
-        last = block[-1].split("-")[-1]
-        block_name = "SCP Database/Articles {}-{}".format(first, last)
-        for url in block:
-            p = Page(url)
-            p.chapter = block_name
-            yield p
-    
-
-def _yield_001_proposals():
-    proposals_hub = Page("http://www.scp-wiki.net/proposals-for-scp-001")
-    for url in proposals_hub.links():
-        p = Page(url)
-        p.chapter = "SCP Database/001 Proposals"
-        yield p
-
-
-def _yield_joke_articles():
-    for url in _scrape_tag("joke"):
-        p = Page(url)
-        p.chapter = "SCP Database/Joke Articles"
-        yield p
-
-
-def _yield_ex_articles():
-    for url in _scrape_tag("explained"):
-        p = Page(url)
-        p.chapter = "SCP Database/Explained Phenomena"
-        yield p
-
-
-def _yield_hubs():
-    hubhubs = ["http://www.scp-wiki.net/canon-hub",
-               "http://www.scp-wiki.net/goi-contest-2014",
-               "http://www.scp-wiki.net/acidverse"]
-    nested_hubs = [i.url for k in hubhubs for i in Page(k).children()]
-    hubs = [i for i in _scrape_tag("hub") if i in _scrape_tag("tale")
-            or i in _scrape_tag("goi2014")]
-    for url in hubs:
-        if url not in nested_hubs:
-            p = Page(url)
-            p.chapter = "Canons and Series"
-            yield p
-
-
-def _yield_tales():
-    for url in _scrape_tag("tale"):
-        p = Page(url)
-        p.chapter = "Assorted Tales"
-        yield p
-
-def update(time):
-    page = 1
-    while True:
-        print("downloading recent changes: page {}".format(page))
-        soup = bs4.BeautifulSoup(wikidot_module(
-            name="changes/SiteChangesListModule", page=page, perpage=100,
-            pageid=1926945))
-        for i in soup.select("div.changes-list-item"):
-            rev_time = arrow.get(i.select("span.odate")[0].text,
-                                 "DD MMM YYYY HH:mm")
-            if rev_time.timestamp > arrow.get(time).timestamp:
-                url = i.select("td.title a")[0]["href"]
-                cached_file = datadir + url.replace(
-                    "http://www.scp-wiki.net/", "").replace(
-                    "/", "_").replace(":", "")
-                if os.path.exists(cached_file):
-                    print("deleting outdated cache: {}".format(cached_file))
-                    os.remove(cached_file)
-            else:
-                return
-        page += 1
+            yield Page(i.url)
 
 
 def main():
-    print(Page('http://www.scp-wiki.net/scp-077').authors)
+    #for i in get_all():
+    pass
 
 
-main()
+if __name__ == "__main__":
+    main()
