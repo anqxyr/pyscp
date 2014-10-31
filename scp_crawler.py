@@ -6,12 +6,11 @@
 
 import arrow
 import bs4
-import natsort
 import peewee
 import re
 import requests
 
-from collections import namedtuple, defaultdict
+from collections import namedtuple
 
 ###############################################################################
 # Global Constants
@@ -153,7 +152,10 @@ class Snapshot:
                         if re.search("[SCP]+-[0-9]+", i.text)]
             for i in articles:
                 url = "http://www.scp-wiki.net{}".format(i.a["href"])
-                skip, title = i.text.split(" - ", maxsplit=1)
+                try:
+                    skip, title = i.text.split(" - ", maxsplit=1)
+                except:
+                    skip, title = i.text.split(", ", maxsplit=1)
                 yield {"url": url, "skip": skip, "title": title}
 
     def _scrape_image_whitelist(self):
@@ -230,7 +232,7 @@ class Snapshot:
     def _tag_to_db(self, tag):
         print("saving tag\t\t{}".format(tag))
         tag_data = list(self._scrape_tag(tag))
-        urls = [tag["url"] for tag in tag_data]
+        urls = [i["url"] for i in tag_data]
         TagData.delete().where((TagData.tag == tag) & ~ (TagData.url << urls))
         old_urls = TagData.select(TagData.url)
         new_data = [i for i in tag_data if i["url"] not in old_urls]
@@ -290,6 +292,21 @@ class Snapshot:
             return rd(data.url, data.author, data.override)
         except RewriteData.DoesNotExist:
             return False
+
+    def images(self):
+        images = {}
+        for i in ImageData.select():
+            images[i.image_url] = i.image_source
+        return images
+
+    def title(self, url):
+        try:
+            return TitleData.get(TitleData.url == url).title
+        except TitleData.DoesNotExist:
+            num = re.search('[0-9]+$', url)
+            skip = 'SCP-{}'.format(num)
+            return TitleData.get(TitleData.skip == skip).title
+
 
 class Page:
 
@@ -362,12 +379,11 @@ class Page:
         self._parse_body(soup)
         self.tags = [a.string for a in soup.select("div.page-tags a")]
         self._parse_title(soup)
-        #self._add_title()
-        #add title to the page
-        # if "scp" in tags:
-        #     data = "<p class='scp-title'>{}</p>{}".format(title, data)
-        # else:
-        #     data = "<p class='tale-title'>{}</p>{}".format(title, data)
+        if "scp" in self.tags:
+            title_insert = "<p class='scp-title'>{}</p>{}"
+        else:
+            title_insert = "<p class='tale-title'>{}</p>{}"
+        self.data = title_insert.format(self.title, self.data)
 
     def _parse_history(self, raw_history):
         soup = bs4.BeautifulSoup(raw_history)
@@ -413,40 +429,34 @@ class Page:
             title = soup.select("#page-title")[0].text.strip()
         else:
             title = ""
+        if "scp" in self.tags and re.search("[0-9]+$", self.url):
+            title = "{}: {}".format(title, self.sn.title(self.url))
         self.title = title
-        # if "scp" in self.tags and re.search("scp-[0-9]+$", self.url):
-        #     title = "{}: {}".format(title,
-        #                             titles[title.split("-")[1]])
 
     def _parse_images(self, data):
+        images = self.sn.images()
         for i in data.select('img'):
             if i.name is None or not i.has_attr('src'):
                 continue
-            heritage = ('http://scp-wiki.wdfiles.com/local--files/'
-                        'component:heritage-rating')
-            avatar = 'http://www.wikidot.com/avatar.php?userid'
-            if i['src'].startswith(heritage) or i['src'].startswith(avatar):
-                continue
-            self.images.append(i['src'])
-            # if i["src"] not in images:
-            #     #loop through the image's parents, until we find what to cut
-            #     for p in i.parents:
-            #         # old-style image formatting:
-            #         old_style = bool(p.select("table tr > td > img") and
-            #                          len(p.select("table tr > td")) == 1)
-            #         new_style = bool("class" in p.attrs and
-            #                          "scp-image-block" in p["class"])
-            #         if old_style or new_style:
-            #             p.decompose()
-            #             break
-            #     else:
-            #         # if we couldn't find any parents to remove,
-            #         # just remove the image itself
-            #         i.decompose()
-            # else:
-            #         self.images.append(i["src"])
-            #         page, image_url = i["src"].split("/")[-2:]
-            #         i["src"] = "images/{}_{}".format(page, image_url)
+            if i["src"] not in images:
+                #loop through the image's parents, until we find what to cut
+                for p in i.parents:
+                    # old-style image formatting:
+                    old_style = bool(p.select("table tr td img") and
+                                     len(p.select("table tr td")) == 1)
+                    new_style = bool("class" in p.attrs and
+                                     "scp-image-block" in p["class"])
+                    if old_style or new_style:
+                        p.decompose()
+                        break
+                else:
+                    # if we couldn't find any parents to remove,
+                    # just remove the image itself
+                    i.decompose()
+            else:
+                    self.images.append(i["src"])
+                    page, image_url = i["src"].split("/")[-2:]
+                    i["src"] = "images/{}_{}".format(page, image_url)
         return data
 
     def _parse_tabviews(self, data):
@@ -588,7 +598,6 @@ def get_all():
 
 
 def main():
-    #for i in get_all():
     pass
 
 
