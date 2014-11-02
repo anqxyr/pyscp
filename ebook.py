@@ -16,7 +16,7 @@ import tempfile
 
 from collections import defaultdict, namedtuple, OrderedDict
 from lxml import etree, html
-from scp_crawler import Page
+from crawler import Page
 
 ###############################################################################
 # Global Constants
