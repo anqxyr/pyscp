@@ -8,7 +8,7 @@ import csv
 import datetime
 import peewee
 import re
-import scp_crawler
+import crawler
 import statistics
 
 from bs4 import BeautifulSoup
@@ -83,7 +83,7 @@ def fill_db():
     Vote.delete().execute()
     Word.delete().execute()
     Tag.delete().execute()
-    for page in scp_crawler.get_all():
+    for page in crawler.get_all():
         print("Processing {} ({})".format(page.title, page.url))
         gather_page_stats(page)
         gather_vote_stats(page)
