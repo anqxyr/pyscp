@@ -16,7 +16,7 @@ from collections import namedtuple
 # Global Constants
 ###############################################################################
 
-DBPATH = "/home/anqxyr/heap/_scp/scp-wiki.2014-10-05.db"
+DBPATH = "/home/anqxyr/heap/_scp/scp-wiki.2014-11-01.db"
 
 ###############################################################################
 # Decorators
@@ -52,6 +52,7 @@ class TitleData(BaseModel):
 class ImageData(BaseModel):
     image_url = peewee.CharField(unique=True)
     image_source = peewee.CharField()
+    image_data = peewee.BlobField()
     # for future use:
     #image_status = peewee.CharField()
 
@@ -164,7 +165,10 @@ class Snapshot:
         for i in soup.select("tr")[1:]:
             image_url = i.select("td")[0].text
             image_source = i.select("td")[1].text
-            yield {"image_url": image_url, "image_source": image_source}
+            image_data = self.req.get(image_url).content
+            yield {"image_url": image_url,
+                   "image_source": image_source,
+                   "image_data": image_data}
 
     def _scrape_rewrites(self):
         url = "http://05command.wikidot.com/alexandra-rewrite"
@@ -263,7 +267,7 @@ class Snapshot:
         soup = bs4.BeautifulSoup(self.req.get(baseurl).text)
         counter = soup.select("div.pager span.pager-no")[0].text
         last_page = int(counter.split(" ")[-1])
-        for index in reversed(range(1, last_page + 1)):
+        for index in range(1, last_page + 1):
             data = self.req.get(baseurl.format(index))
             soup = bs4.BeautifulSoup(data.text)
             new_pages = soup.select("div.list-pages-item a")
@@ -295,15 +299,16 @@ class Snapshot:
 
     def images(self):
         images = {}
+        im = namedtuple('Image', 'source data')
         for i in ImageData.select():
-            images[i.image_url] = i.image_source
+            images[i.image_url] = im(i.image_source, i.image_data)
         return images
 
     def title(self, url):
         try:
             return TitleData.get(TitleData.url == url).title
         except TitleData.DoesNotExist:
-            num = re.search('[0-9]+$', url)
+            num = re.search('[0-9]+$', url).group(0)
             skip = 'SCP-{}'.format(num)
             return TitleData.get(TitleData.skip == skip).title
 
@@ -416,12 +421,12 @@ class Page:
         data = soup.select("#page-content")[0]
         for i in data.select("div.page-rate-widget-box"):
             i.decompose()
-        data = self._parse_images(data)
         data = self._parse_tabviews(data)
         data = self._parse_collapsibles(data)
         data = self._parse_footnotes(data)
         data = self._parse_links(data)
         data = self._parse_quotes(data)
+        data = self._parse_images(data)
         self.data = str(data)
 
     def _parse_title(self, soup):
@@ -429,7 +434,7 @@ class Page:
             title = soup.select("#page-title")[0].text.strip()
         else:
             title = ""
-        if "scp" in self.tags and re.search("[0-9]+$", self.url):
+        if "scp" in self.tags and re.search("[scp]+-[0-9]+$", self.url):
             title = "{}: {}".format(title, self.sn.title(self.url))
         self.title = title
 
@@ -551,10 +556,17 @@ class Page:
     def children(self):
         if not hasattr(self, "tags"):
             return []
+        if not any(i in self.tags for i in [
+                'scp', 'hub', 'goi2014', 'splash']):
+            return []
         lpages = []
         for url in self.links():
             try:
                 p = Page(url)
+                try:
+                    p.chapters = self.chapters
+                except AttributeError:
+                    pass
             except PageData.DoesNotExist:
                 continue
             if p.data is not None:
@@ -598,6 +610,7 @@ def get_all():
 
 
 def main():
+    #Snapshot().take()
     pass
 
 

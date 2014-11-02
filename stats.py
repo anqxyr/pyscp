@@ -530,9 +530,11 @@ def rev_stats():
 def main():
     #fill_db()
     #make_plot()
-    make_user_tables(t_author_words, only_authors=True)
+    #make_user_tables(t_author_words, only_authors=True)
     #count_words()
     #rev_stats()
+    for i in Word.select().where(Word.word.regexp('.{100,1000}')):
+        print('{} ({})'.format(i.word, i.url))
 
 
 if __name__ == "__main__":
