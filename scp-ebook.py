@@ -14,7 +14,7 @@ import requests
 import shutil
 import tempfile
 
-from collections import defaultdict, namedtuple
+from collections import defaultdict, namedtuple, OrderedDict
 from lxml import etree, html
 from scp_crawler import Page
 
@@ -24,6 +24,9 @@ from scp_crawler import Page
 
 SAVEPATH = '/home/anqxyr/heap/_scp/ebook/'
 STATICDATA = os.path.dirname(os.path.abspath(__file__))
+# pick from 'COMPLETE', 'TOMES', and 'DIGEST'
+BOOKTYPE = 'DIGEST'
+DIGESTMONTH = '2014-10'
 
 ###############################################################################
 # Primary Classes
@@ -49,9 +52,12 @@ class Epub():
         self.toc.xpath("/*/*[2]/*")[0].text = title
         self.images = {}
 
-    def add_page(self, page, parent=None):
+    def add_page(self, page, parent=None, node=None):
         #each page can only appear once in the book
-        if page.url in Epub.allpages_global or page.data is None:
+        duplicate = page.url in Epub.allpages_global
+        empty = page.data is None
+        negative = page.rating is not None and int(page.rating) < 0
+        if duplicate or empty or negative:
             return
         epub_page = copy.deepcopy(self.templates["page"])
         #XPath expressions are pre-generated with etree.getpath
@@ -65,26 +71,37 @@ class Epub():
         for i in page.images:
             self.images[i] = page.title
         #add the page to the list of all pages in the book
-        pi = namedtuple('PageInfo', 'url title id authors')
-        self.pageinfo.append(pi(page.url, page.title, uid, page.authors))
+        pi = namedtuple('PageInfo', 'url title id authors chapter')
+        try:
+            chap = page.chapters[0]
+        except:
+            chap = None
+        if chap in ['SCP Database', 'Assorted Tales']:
+            chap = page.chapters[1]
+        self.pageinfo.append(pi(page.url,
+                                page.title,
+                                uid,
+                                page.authors,
+                                chap))
         if page.url is not None:
             self.allpages_global.append(page.url)
-        self.add_to_toc(parent, page, uid)
-        for i in page.children():
-            self.add_page(i, page.title)
-
-    def add_to_toc(self, parent, page, uid):
-        if parent is None:
+        if parent is None and node is None:
             node = self.toc.xpath("/*/*[3]")[0]
-        else:
+        elif node is None:
             node = self.toc.xpath(
                 './/navPoint[child::navLabel[child::text[text()="{}"]]]'
                 .format(parent))[0]
+        new_node = self.add_to_toc(node, page, uid)
+        for i in page.children():
+            self.add_page(i, node=new_node)
+
+    def add_to_toc(self, node, page, uid):
         navpoint = etree.SubElement(node, "navPoint", id=uid, playOrder=
                                     str(len(self.pageinfo)))
         navlabel = etree.SubElement(navpoint, "navLabel")
         etree.SubElement(navlabel, "text").text = page.title
         etree.SubElement(navpoint, "content", src="{}.xhtml".format(uid))
+        return navpoint
 
     def save(self, filename):
         self.toc.write(
@@ -110,7 +127,7 @@ class Epub():
             path = "_".join([i.split("/")[-2], i.split("/")[-1]])
             print("downloading image: {}".format(i))
             with open(os.path.join(imagedir, path), "wb") as F:
-                shutil.copyfileobj(requests.get(i, stream=True).raw, F)
+                F.write(Page.sn.images()[i].data)
         spine.write(self.dir.name + "/content.opf", xml_declaration=True,
                     encoding="utf-8", pretty_print=True)
         #other necessary files
@@ -140,7 +157,7 @@ def get_skips():
         num = int(url.split("-")[-1])
         block = num // 100      # should range from 0 to 29
         scp_blocks[block].append(url)
-    for block in (scp_blocks[i] for i in range(4, 5)):
+    for block in (scp_blocks[i] for i in range(30)):
         first = block[0].split("-")[-1]
         last = block[-1].split("-")[-1]
         block_name = 'SCP Database/Articles {}-{}'.format(first, last)
@@ -151,13 +168,13 @@ def get_skips():
 
 
 def get_extra_categories():
-    baseurl = "http://www.scp-wiki.net/proposals-for-scp-001"
+    baseurl = 'http://www.scp-wiki.net/scp-001'
     proposals_hub = Page(baseurl)
-    categories = {
-        "SCP Database/001 Proposals": proposals_hub.links(),
-        "SCP Database/Explained Phenomena": Page.sn.tag("explained"),
-        "SCP Database/Joke Articles": Page.sn.tag("joke")}
-    for k, v in categories.items():
+    categories = (
+        ("SCP Database/001 Proposals", proposals_hub.links()),
+        ("SCP Database/Explained Phenomena", Page.sn.tag("explained")),
+        ("SCP Database/Joke Articles", Page.sn.tag("joke")))
+    for k, v in categories:
         for url in v:
             p = Page(url)
             p.chapters = k.split('/')
@@ -181,43 +198,61 @@ def get_hubs():
 def get_tales():
     for url in Page.sn.tag("tale"):
         p = Page(url)
-        p.chapters = ['Assorted Tales']
-        yield p
+        first_letter = [i for i in p.title.upper()
+                        if re.match('[0-9A-Z]', i)][0]
+        groups = ['0-9', 'A-D', 'E-H', 'I-L', 'M-P', 'Q-T', 'U-Z']
+        for i in groups:
+            if re.match('[{}]'.format(i), first_letter):
+                p.chapters = ['Assorted Tales', 'Tales {}'.format(i)]
+                yield p
+                break
 
 
 def get_all_in_order():
     yield from get_skips()
-    #yield from get_extra_categories()
-    #yield from get_hubs()
-    #yield from get_tales()
+    yield from get_extra_categories()
+    yield from get_hubs()
+    yield from get_tales()
     pass
 
 ###############################################################################
 
 
 def add_attributions(book):
-    attrib = Page()
-    attrib.title = "Acknowledgments and Attributions"
-    attrib.data = "<div class='attrib'>"
+    atrb_main = Page()
+    atrb_main.title = 'Acknowledgments and Attributions'
+    atrb_main.data = ("<div class='title2'>"
+                      "Acknowledgments and Attributions</div>")
+    book.add_page(atrb_main)
+    atrb_pages = OrderedDict()
     for i in sorted(book.pageinfo, key=lambda k: k.id):
         if i.url is None:
             continue
-        attr = '<p><b>{}</b> ({}) was written by <b>{}</b>'
-        attr = attr.format(i.title, i.url, i.authors[0].username)
-        attrib.data += attr
+        atrb = '<p><b>{}</b> ({}) was written by <b>{}</b>'
+        atrb = atrb.format(i.title, i.url, i.authors[0].username)
+        if not i.chapter in atrb_pages:
+            atrb_pages[i.chapter] = "<div class='attrib'>"
+        atrb_pages[i.chapter] += atrb
         for au in (j.username for j in i.authors if j.status == 'rewrite'):
-            attrib.data += ', rewritten by <b>{}</b>'.format(au)
-        attrib.data += '.</p>'
+            atrb_pages[i.chapter] += ', rewritten by <b>{}</b>'.format(au)
+        atrb_pages[i.chapter] += '.</p>'
     images = Page.sn.images()
+    if book.images:
+        atrb_pages['Images'] = "<div class='attrib'>"
     for i in book.images:
-        if images[i] != 'PUBLIC DOMAIN':
-            attr = ('<p>The image {}_{}, which appears on the page <b>{}</b>, '
+        source = images[i].source
+        if source != 'PUBLIC DOMAIN':
+            atrb = ('<p>The image {}_{}, which appears on the page <b>{}</b>, '
                     'is a CC image available at <u>{}</u>.</p>')
-            attr = attr.format(i.split("/")[-2], i.split("/")[-1],
-                               book.images[i], images[i])
-            attrib.data += attr
-    attrib.data += "</div>"
-    book.add_page(attrib)
+            atrb = atrb.format(i.split("/")[-2], i.split("/")[-1],
+                               book.images[i], source)
+            atrb_pages['Images'] += atrb
+    for k, v in atrb_pages.items():
+        v += "</div>"
+        p = Page()
+        p.title = k
+        p.data = v
+        book.add_page(p, parent='Acknowledgments and Attributions')
 
 
 def new_book(title):
@@ -231,26 +266,6 @@ def new_book(title):
         book.add_page(p)
     book.chapters = []   # ?
     return book
-
-
-def goes_in_book(previous_book, page):
-    #return previous_book.title
-
-    def increment_title(old_title):
-        n = old_title[-1:]
-        n = str(int(n) + 1)
-        return old_title[:-1] + n
-    if ("scp" in page.tags and
-            page.chapter.split("/")[-1] in previous_book.chapters):
-        return previous_book.title
-    elif ((page.chapter == "Canons and Series" or
-           page.chapter == "Assorted Tales") and
-          page.chapter not in previous_book.chapters):
-            return increment_title(previous_book.title)
-    elif len(previous_book.pageinfo) < 500:
-            return previous_book.title
-    else:
-            return increment_title(previous_book.title)
 
 
 def check_chapters(book, chapters):
@@ -269,11 +284,59 @@ def check_chapters(book, chapters):
 
 
 def pick_and_add(books, page):
+    if BOOKTYPE == 'COMPLETE':
+        add_complete(books, page)
+    elif BOOKTYPE == 'DIGEST':
+        add_digest(books, page)
+    elif BOOKTYPE == 'TOMES':
+        add_tomes(books, page)
+    else:
+        raise Exception('Unsupported book type.')
+
+
+def add_complete(books, page):
     if not books:
-        books.append(new_book('SCP Foundation: The Complete Collection'))
+        title = 'SCP Foundation: The Complete Collection'
+        books.append(new_book(title))
     last_book = books[-1]
     check_chapters(last_book, page.chapters)
     last_book.add_page(page, parent=page.chapters[-1])
+
+
+def add_digest(books, page):
+    digest_date = arrow.get(DIGESTMONTH, 'YYYY-MM')
+    page_date = arrow.get(page.history[0].time)
+    if (page_date.year != digest_date.year or
+            page_date.month != digest_date.month):
+        return
+    if not books:
+        title = 'SCP Foundation Monthly Digest: {}'
+        title = title.format(digest_date.format('MMMM YYYY'))
+        books.append(new_book(title))
+    last_book = books[-1]
+    check_chapters(last_book, page.chapters)
+    last_book.add_page(page, parent=page.chapters[-1])
+
+
+def add_tomes(books, page):
+    if not books:
+        title = 'SCP Foundation: Tome 1'
+        books.append(new_book(title))
+    last_book = books[-1]
+    chap = page.chapters[-1]
+    scp = 'scp' in page.tags and chap in last_book.chapters
+    tale = chap.startswith('Tales') and chap in last_book.chapters
+    too_short = len(last_book.pageinfo) < 500
+    switch = (page.chapters[0] in ['Canons and Series', 'Assorted Tales'] and
+              page.chapters[0] not in last_book.chapters)
+    if scp or tale or (too_short and not switch):
+        cur_book = last_book
+    else:
+        new_title = 'SCP Foundation: Tome {}'.format(len(books) + 1)
+        cur_book = new_book(new_title)
+        books.append(cur_book)
+    check_chapters(cur_book, page.chapters)
+    cur_book.add_page(page, parent=page.chapters[-1])
 
 
 def main():
