@@ -42,27 +42,32 @@ def module(name, pageid, **kwargs):
 def auth(username, password):
     payload = {'login': username,
                'password': password,
-               'originSiteId': '699677',
                'action': 'Login2Action',
                'event': 'login'}
     url = 'https://www.wikidot.com/default--flow/login__LoginPopupScreen'
     req.post(url, data=payload)
 
 
-def edit_page(url, content):
-    page_id = '24075979'
-    params = {'mode': 'page',
-              'wiki_page': 'page1'}
-    lock = module('edit/PageEditModule', page_id, **params)
-    import pprint
-    pprint.pprint(lock)
-    print(lock['lock_id'])
-    print(lock['lock_secret'])
-    exit()
-    payload = {'source': 'it works!',
-               'comments': 'yay'}
-    post = module('Empty', page_id, **payload)
-    print(post)
+def get_meta(url):
+    # TODO: actually write the method; add sql cache
+    return '24075979'
+
+
+def edit_page(url, content, comments=None, title=None):
+    page_id, old_title = get_meta(url)
+    if title is None:
+        title = old_title
+    lock = module('edit/PageEditModule', page_id, mode='page')
+    params = {'source': content,
+              'comments': comments,
+              'title': title,
+              'lock_id': lock['lock_id'],
+              'lock_secret': lock['lock_secret'],
+              'revision_id': lock['page_revision_id'],
+              'action': 'WikiPageAction',
+              'event': 'savePage',
+              'wiki_page': url.split('/')[-1]}
+    module('Empty', page_id, **params)
 
 ###############################################################################
 
@@ -71,6 +76,8 @@ def main():
     pasw = '2A![]M/r}%t?,"GWQ.eH#uaukC3}#.*#uv=yd23NvkpuLgN:kPOBARb}:^IDT?%j'
     auth(username='anqxyr',
          password=pasw)
+    #x = module('viewsource/ViewSourceModule', '24075979')
+    #print(x)
     edit_page(None, None)
 
 
