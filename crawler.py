@@ -11,6 +11,7 @@ import re
 import requests
 
 from collections import namedtuple
+from wikidot import WikidotConnector
 
 ###############################################################################
 # Global Constants
@@ -90,35 +91,11 @@ class Snapshot:
         db.create_tables([PageData, TitleData, ImageData, RewriteData,
                           TagData, SnapshotInfo], safe=True)
         self.db = db
+        self.wiki = WikidotConnector('http://www.scp-wiki.net')
 
     ###########################################################################
     # Scraping Methods
     ###########################################################################
-
-    def _wikidot_module(self, module_name, res_index, res_per_page, pageid):
-        """Retrieve data from the specified wikidot module."""
-        headers = {
-            "Content-Type": "application/x-www-form-urlencoded;",
-            "Cookie": "wikidot_token7=123456;"}
-        payload = {
-            "page_id": pageid,
-            "pageId": pageid,  # fuck wikidot
-            "moduleName": module_name,
-            "page": res_index,
-            "perpage": res_per_page,
-            "wikidot_token7": "123456"}
-        data = self.req.post(
-            "http://www.scp-wiki.net/ajax-module-connector.php",
-            data=payload,
-            headers=headers)
-        try:
-            return data.json()["body"]
-        except Exception as e:
-            print(module_name)
-            print(data.json())
-            print(payload)
-            print(e)
-            exit()
 
     def _scrape_html(self, url):
         data = self.req.get(url)
@@ -128,17 +105,15 @@ class Snapshot:
             return None
 
     def _scrape_history(self, pageid):
-        return self._wikidot_module(
-            module_name="history/PageRevisionListModule",
-            res_index=1,
-            res_per_page=1000000,
-            pageid=pageid)
+        return self.wiki.module(
+            name="history/PageRevisionListModule",
+            pageid=pageid,
+            page=1,
+            perpage=1000000)
 
     def _scrape_votes(self, pageid):
-        return self._wikidot_module(
-            module_name="pagerate/WhoRatedPageModule",
-            res_index=None,
-            res_per_page=None,
+        return self.wiki.module(
+            name="pagerate/WhoRatedPageModule",
             pageid=pageid)
 
     def _scrape_scp_titles(self):
