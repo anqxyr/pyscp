@@ -6,8 +6,6 @@
 
 import requests
 
-from collections import namedtuple
-
 ###############################################################################
 
 
@@ -47,12 +45,12 @@ class WikidotConnector:
         url = 'https://www.wikidot.com/default--flow/login__LoginPopupScreen'
         self.req.post(url, data=payload)
 
-    def edit_page(self, page_id, wiki_page, data):
+    def edit_page(self, page_id, wiki_page, title, source, comments=None):
         lock = self.module('edit/PageEditModule', page_id, mode='page')
         params = {
-            'source': data.source,
-            'comments': data.comments,
-            'title': data.title,
+            'source': source,
+            'comments': comments,
+            'title': title,
             'lock_id': lock['lock_id'],
             'lock_secret': lock['lock_secret'],
             'revision_id': lock['page_revision_id'],
@@ -61,6 +59,16 @@ class WikidotConnector:
             'wiki_page': wiki_page}
         self.module('Empty', page_id, **params)
 
+    def new_comment(self, thread_id, source, title=None, parent_id=None):
+        params = {
+            'threadId': thread_id,
+            'parentId': parent_id,
+            'title': title,
+            'source': source,
+            'action': 'ForumAction',
+            'event': 'savePost'}
+        self.module('Empty', None, **params)
+
 ###############################################################################
 
 
@@ -68,9 +76,7 @@ def main():
     wiki = WikidotConnector('http://testwiki2.wikidot.com')
     pasw = '2A![]M/r}%t?,"GWQ.eH#uaukC3}#.*#uv=yd23NvkpuLgN:kPOBARb}:^IDT?%j'
     wiki.auth(username='anqxyr', password=pasw)
-    edit = namedtuple('PageEditData', 'title source comments')
-    e = edit('I am the Title, █████', 'no source here', None)
-    wiki.edit_page('24075979', 'page1', e)
+    wiki.new_comment('1051279', "this is a robot's comment")
 
 
 if __name__ == "__main__":
