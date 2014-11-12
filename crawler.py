@@ -78,6 +78,125 @@ class SnapshotInfo(BaseModel):
 ###############################################################################
 
 
+class WikidotConnector:
+
+    def __init__(self, site):
+        if site[-1] != '/':
+            site += '/'
+        self.site = site
+        req = requests.Session()
+        req.mount(site, requests.adapters.HTTPAdapter(max_retries=5))
+        self.req = req
+        db.connect()
+        db.create_tables([Cache], safe=True)
+        Cache.delete().execute()
+
+    ###########################################################################
+    # Helper Methods
+    ###########################################################################
+
+    def _pageid(self, url):
+        html = self.get_html(url)
+        pageid = re.search("pageId = ([^;]*);", html)
+        if pageid is not None:
+            pageid = pageid.group(1)
+        return pageid
+
+    def _module(self, name, pageid, **kwargs):
+        """Retrieve data from the specified wikidot module."""
+        headers = {'Content-Type': 'application/x-www-form-urlencoded;'}
+        payload = {
+            'page_id': pageid,
+            'pageId': pageid,  # fuck wikidot
+            'moduleName': name,
+            'wikidot_token7': '123456'}
+        cookies = {'wikidot_token7': '123456'}
+        for i in self.req.cookies:
+            cookies[i.name] = i.value
+        for k, v in kwargs.items():
+            payload[k] = v
+        data = self.req.post(self.site + 'ajax-module-connector.php',
+                             data=payload, headers=headers, cookies=cookies)
+        return data.json()
+
+    ###########################################################################
+    # Public Methods
+    ###########################################################################
+
+    def get_html(self, url):
+        try:
+            html = Cache.get(Cache.url == url).html
+        except Cache.DoesNotExist:
+            data = self.req.get(url)
+            if data.status_code != 404:
+                html = data.text
+            else:
+                html = None
+            Cache.create(url=url, html=html)
+        return html
+
+    def get_history(self, url):
+        pageid = self._pageid(url)
+        if pageid is None:
+            return None
+        return self._module('history/PageRevisionListModule', pageid,
+                            page=1, perpage=1000000)['body']
+
+    def get_votes(self, url):
+        pageid = self._pageid(url)
+        if pageid is None:
+            return None
+        return self._module('pagerate/WhoRatedPageModule', pageid)['body']
+
+    def get_title(self, url):
+        html = self.get_html(url)
+        if html is None:
+            return None
+        soup = BeautifulSoup(html)
+        if soup.select('#page-title'):
+            title = soup.select('#page-title')[0].text.strip()
+        else:
+            title = ''
+        return title
+
+    def auth(self, username, password):
+        payload = {
+            'login': username,
+            'password': password,
+            'action': 'Login2Action',
+            'event': 'login'}
+        url = 'https://www.wikidot.com/default--flow/login__LoginPopupScreen'
+        self.req.post(url, data=payload)
+
+    def edit_page(self, url, source, title=None, comments=None):
+        wiki_page = url.split('/')[-1]
+        pageid = self._pageid(url)
+        if title is None:
+            title = self.get_title(url)
+        lock = self._module('edit/PageEditModule', pageid, mode='page')
+        params = {
+            'source': source,
+            'comments': comments,
+            'title': title,
+            'lock_id': lock['lock_id'],
+            'lock_secret': lock['lock_secret'],
+            'revision_id': lock['page_revision_id'],
+            'action': 'WikiPageAction',
+            'event': 'savePage',
+            'wiki_page': wiki_page}
+        self._module('Empty', pageid, **params)
+
+    def new_comment(self, url, source, title=None):
+        params = {
+            'threadId': thread_id,
+            'parentId': parent_id,
+            'title': title,
+            'source': source,
+            'action': 'ForumAction',
+            'event': 'savePost'}
+        self.module('Empty', None, **params)
+
+
 class Snapshot:
 
     RTAGS = ["scp", "tale", "hub", "joke", "explained", "goi-format"]
@@ -96,25 +215,6 @@ class Snapshot:
     ###########################################################################
     # Scraping Methods
     ###########################################################################
-
-    def _scrape_html(self, url):
-        data = self.req.get(url)
-        if data.status_code != 404:
-            return data.text
-        else:
-            return None
-
-    def _scrape_history(self, pageid):
-        return self.wiki.module(
-            name="history/PageRevisionListModule",
-            pageid=pageid,
-            page=1,
-            perpage=1000000)
-
-    def _scrape_votes(self, pageid):
-        return self.wiki.module(
-            name="pagerate/WhoRatedPageModule",
-            pageid=pageid)
 
     def _scrape_scp_titles(self):
         """Yield tuples of SCP articles' titles"""
@@ -585,8 +685,15 @@ def get_all():
 
 
 def main():
-    #Snapshot().take()
-    pass
+    test_url = 'http://testwiki2.wikidot.com/page1'
+    wiki_url = '/'.join(test_url.split('/')[:-1])
+    wiki = WikidotConnector(wiki_url)
+    pasw = '2A![]M/r}%t?,"GWQ.eH#uaukC3}#.*#uv=yd23NvkpuLgN:kPOBARb}:^IDT?%j'
+    wiki.auth(username='anqxyr', password=pasw)
+    wiki.edit_page(test_url,
+                   'this is page was edit by a robot',
+                   title='I am a Title too')
+
 
 
 if __name__ == "__main__":
