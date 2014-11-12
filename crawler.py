@@ -11,7 +11,6 @@ import re
 import requests
 
 from collections import namedtuple
-from wikidot import WikidotConnector
 
 ###############################################################################
 # Global Constants
@@ -87,20 +86,10 @@ class WikidotConnector:
         req = requests.Session()
         req.mount(site, requests.adapters.HTTPAdapter(max_retries=5))
         self.req = req
-        db.connect()
-        db.create_tables([Cache], safe=True)
-        Cache.delete().execute()
 
     ###########################################################################
     # Helper Methods
     ###########################################################################
-
-    def _pageid(self, url):
-        html = self.get_html(url)
-        pageid = re.search("pageId = ([^;]*);", html)
-        if pageid is not None:
-            pageid = pageid.group(1)
-        return pageid
 
     def _module(self, name, pageid, **kwargs):
         """Retrieve data from the specified wikidot module."""
@@ -120,44 +109,41 @@ class WikidotConnector:
         return data.json()
 
     ###########################################################################
-    # Public Methods
+    # Read-only Methods
     ###########################################################################
 
     def get_html(self, url):
-        try:
-            html = Cache.get(Cache.url == url).html
-        except Cache.DoesNotExist:
-            data = self.req.get(url)
-            if data.status_code != 404:
-                html = data.text
-            else:
-                html = None
-            Cache.create(url=url, html=html)
-        return html
-
-    def get_history(self, url):
-        pageid = self._pageid(url)
-        if pageid is None:
-            return None
-        return self._module('history/PageRevisionListModule', pageid,
-                            page=1, perpage=1000000)['body']
-
-    def get_votes(self, url):
-        pageid = self._pageid(url)
-        if pageid is None:
-            return None
-        return self._module('pagerate/WhoRatedPageModule', pageid)['body']
-
-    def get_title(self, url):
-        html = self.get_html(url)
-        if html is None:
-            return None
-        soup = BeautifulSoup(html)
-        if soup.select('#page-title'):
-            title = soup.select('#page-title')[0].text.strip()
+        data = self.req.get(url)
+        if data.status_code != 404:
+            return data.text
         else:
-            title = ''
-        return title
+            return None
+
+    def get_pageid(self, html):
+        pageid = re.search("pageId = ([^;]*);", html)
+        if pageid is not None:
+            pageid = pageid.group(1)
+        return pageid
+
+    def get_history(self, pageid):
+        if pageid is None:
+            return None
+        return self._module(
+            name='history/PageRevisionListModule',
+            pageid=pageid,
+            page=1,
+            perpage=1000000)['body']
+
+    def get_votes(self, pageid):
+        if pageid is None:
+            return None
+        return self._module(
+            name='pagerate/WhoRatedPageModule',
+            pageid=pageid)['body']
+
+    ###########################################################################
+    # Active Methods
+    ###########################################################################
 
     def auth(self, username, password):
         payload = {
@@ -168,11 +154,8 @@ class WikidotConnector:
         url = 'https://www.wikidot.com/default--flow/login__LoginPopupScreen'
         self.req.post(url, data=payload)
 
-    def edit_page(self, url, source, title=None, comments=None):
+    def edit_page(self, pageid, url, source, title, comments=None):
         wiki_page = url.split('/')[-1]
-        pageid = self._pageid(url)
-        if title is None:
-            title = self.get_title(url)
         lock = self._module('edit/PageEditModule', pageid, mode='page')
         params = {
             'source': source,
@@ -186,15 +169,15 @@ class WikidotConnector:
             'wiki_page': wiki_page}
         self._module('Empty', pageid, **params)
 
-    def new_comment(self, url, source, title=None):
+    def new_comment(self, thread_id, source, title=None):
         params = {
             'threadId': thread_id,
-            'parentId': parent_id,
+            'parentId': None,
             'title': title,
             'source': source,
             'action': 'ForumAction',
             'event': 'savePost'}
-        self.module('Empty', None, **params)
+        self._module('Empty', None, **params)
 
 
 class Snapshot:
@@ -202,10 +185,6 @@ class Snapshot:
     RTAGS = ["scp", "tale", "hub", "joke", "explained", "goi-format"]
 
     def __init__(self):
-        req = requests.Session()
-        req.mount("http://www.scp-wiki.net/",
-                  requests.adapters.HTTPAdapter(max_retries=5))
-        self.req = req
         db.connect()
         db.create_tables([PageData, TitleData, ImageData, RewriteData,
                           TagData, SnapshotInfo], safe=True)
@@ -693,7 +672,6 @@ def main():
     wiki.edit_page(test_url,
                    'this is page was edit by a robot',
                    title='I am a Title too')
-
 
 
 if __name__ == "__main__":
