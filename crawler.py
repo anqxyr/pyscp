@@ -5,18 +5,18 @@
 ###############################################################################
 
 import arrow
-import bs4
 import peewee
 import re
 import requests
 
+from bs4 import BeautifulSoup
 from collections import namedtuple
 
 ###############################################################################
 # Global Constants
 ###############################################################################
 
-DBPATH = "/home/anqxyr/heap/_scp/scp-wiki.2014-11-01.db"
+DBPATH = "/home/anqxyr/heap/_scp/scp-wiki.2014-11-11.db"
 
 ###############################################################################
 # Decorators
@@ -112,20 +112,20 @@ class WikidotConnector:
     # Read-only Methods
     ###########################################################################
 
-    def get_html(self, url):
+    def html(self, url):
         data = self.req.get(url)
         if data.status_code != 404:
             return data.text
         else:
             return None
 
-    def get_pageid(self, html):
+    def pageid(self, html):
         pageid = re.search("pageId = ([^;]*);", html)
         if pageid is not None:
             pageid = pageid.group(1)
         return pageid
 
-    def get_history(self, pageid):
+    def history(self, pageid):
         if pageid is None:
             return None
         return self._module(
@@ -134,7 +134,7 @@ class WikidotConnector:
             page=1,
             perpage=1000000)['body']
 
-    def get_votes(self, pageid):
+    def votes(self, pageid):
         if pageid is None:
             return None
         return self._module(
@@ -154,7 +154,7 @@ class WikidotConnector:
         url = 'https://www.wikidot.com/default--flow/login__LoginPopupScreen'
         self.req.post(url, data=payload)
 
-    def edit_page(self, pageid, url, source, title, comments=None):
+    def edit(self, pageid, url, source, title, comments=None):
         wiki_page = url.split('/')[-1]
         lock = self._module('edit/PageEditModule', pageid, mode='page')
         params = {
@@ -169,7 +169,7 @@ class WikidotConnector:
             'wiki_page': wiki_page}
         self._module('Empty', pageid, **params)
 
-    def new_comment(self, thread_id, source, title=None):
+    def comment(self, thread_id, source, title=None):
         params = {
             'threadId': thread_id,
             'parentId': None,
@@ -202,7 +202,7 @@ class Snapshot:
             "http://www.scp-wiki.net/scp-series-2",
             "http://www.scp-wiki.net/scp-series-3"]
         for url in series_urls:
-            soup = bs4.BeautifulSoup(self.req.get(url).text)
+            soup = BeautifulSoup(self.wiki.html(url))
             articles = [i for i in soup.select("ul > li")
                         if re.search("[SCP]+-[0-9]+", i.text)]
             for i in articles:
@@ -215,18 +215,23 @@ class Snapshot:
 
     def _scrape_image_whitelist(self):
         url = "http://scpsandbox2.wikidot.com/ebook-image-whitelist"
-        soup = bs4.BeautifulSoup(self.req.get(url).text)
+        req = requests.Session()
+        req.mount('http://', requests.adapters.HTTPAdapter(max_retries=5))
+        soup = BeautifulSoup(req.get(url).text)
         for i in soup.select("tr")[1:]:
             image_url = i.select("td")[0].text
             image_source = i.select("td")[1].text
-            image_data = self.req.get(image_url).content
+            image_data = req.get(image_url).content
             yield {"image_url": image_url,
                    "image_source": image_source,
                    "image_data": image_data}
 
     def _scrape_rewrites(self):
         url = "http://05command.wikidot.com/alexandra-rewrite"
-        soup = bs4.BeautifulSoup(self.req.get(url).text)
+        req = requests.Session()
+        site = 'http://05command.wikidot.com'
+        req.mount(site, requests.adapters.HTTPAdapter(max_retries=5))
+        soup = BeautifulSoup(req.get(url).text)
         for i in soup.select("tr")[1:]:
             url = "http://www.scp-wiki.net/{}".format(i.select("td")[0].text)
             author = i.select("td")[1].text
@@ -239,7 +244,7 @@ class Snapshot:
 
     def _scrape_tag(self, tag):
         url = "http://www.scp-wiki.net/system:page-tags/tag/{}".format(tag)
-        soup = bs4.BeautifulSoup(self.req.get(url).text)
+        soup = BeautifulSoup(self.wiki.html(url))
         for i in soup.select("div.pages-list-item a"):
             url = "http://www.scp-wiki.net{}".format(i["href"])
             yield {"tag": tag, "url": url}
@@ -254,18 +259,13 @@ class Snapshot:
             db_page = PageData.get(PageData.url == url)
         except PageData.DoesNotExist:
             db_page = PageData(url=url)
-        html = self._scrape_html(url)
+        html = self.wiki.html(url)
         # this will break if html is None
         # however html should never be None with the current code
         # so I'll leave it as is to signal bad pages on the site
-        pageid = re.search("pageId = ([^;]*);", html)
-        if pageid is None:
-            history = None
-            votes = None
-        else:
-            pageid = pageid.group(1)
-            history = self._scrape_history(pageid)
-            votes = self._scrape_votes(pageid)
+        pageid = self.wiki.pageid(html)
+        history = self.wiki.history(pageid)
+        votes = self.wiki.votes(pageid)
         db_page.html = html
         db_page.history = history
         db_page.votes = votes
@@ -318,12 +318,11 @@ class Snapshot:
         for tag in Snapshot.RTAGS:
             self._tag_to_db(tag)
         baseurl = "http://www.scp-wiki.net/system:list-all-pages/p/{}"
-        soup = bs4.BeautifulSoup(self.req.get(baseurl).text)
+        soup = BeautifulSoup(self.wiki.html(baseurl))
         counter = soup.select("div.pager span.pager-no")[0].text
         last_page = int(counter.split(" ")[-1])
         for index in range(1, last_page + 1):
-            data = self.req.get(baseurl.format(index))
-            soup = bs4.BeautifulSoup(data.text)
+            soup = BeautifulSoup(self.wiki.html(baseurl.format(index)))
             new_pages = soup.select("div.list-pages-item a")
             for link in new_pages:
                 url = "http://www.scp-wiki.net{}".format(link["href"])
@@ -425,7 +424,7 @@ class Page:
 
     def _parse_html(self, raw_html):
         '''Retrieve title, data, and tags'''
-        soup = bs4.BeautifulSoup(raw_html)
+        soup = BeautifulSoup(raw_html)
         rating_el = soup.select("#pagerate-button span")
         if rating_el:
             self.rating = rating_el[0].text
@@ -445,7 +444,7 @@ class Page:
         self.data = title_insert.format(self.title, self.data)
 
     def _parse_history(self, raw_history):
-        soup = bs4.BeautifulSoup(raw_history)
+        soup = BeautifulSoup(raw_history)
         history = []
         Revision = namedtuple('Revision', 'number user time comment')
         for i in soup.select('tr')[1:]:
@@ -459,7 +458,7 @@ class Page:
         self.history = list(reversed(history))
 
     def _parse_votes(self, raw_votes):
-        soup = bs4.BeautifulSoup(raw_votes)
+        soup = BeautifulSoup(raw_votes)
         votes = []
         VoteData = namedtuple('VoteData', 'user vote')
         for i in soup.select('span.printuser'):
@@ -519,7 +518,7 @@ class Page:
         return data
 
     def _parse_tabviews(self, data):
-        soup = bs4.BeautifulSoup(str(data))
+        soup = BeautifulSoup(str(data))
         for i in data.select("div.yui-navset"):
             wraper = soup.new_tag("div", **{"class": "tabview"})
             titles = [a.text for a in i.select("ul.yui-nav em")]
@@ -534,7 +533,7 @@ class Page:
         return data
 
     def _parse_collapsibles(self, data):
-        soup = bs4.BeautifulSoup(str(data))
+        soup = BeautifulSoup(str(data))
         for i in data.select("div.collapsible-block"):
             link_text = i.select("a.collapsible-block-link")[0].text
             content = i.select("div.collapsible-block-content")[0]
@@ -594,7 +593,7 @@ class Page:
         if self._raw_html is None:
             return []
         links = []
-        soup = bs4.BeautifulSoup(self._raw_html)
+        soup = BeautifulSoup(self._raw_html)
         for a in soup.select("#page-content a"):
             if not a.has_attr("href") or a["href"][0] != "/":
                 continue
@@ -637,7 +636,7 @@ class Page:
             def backlinks(page, child):
                 if page.url in child.links():
                     return True
-                soup = bs4.BeautifulSoup(child._raw_html)
+                soup = BeautifulSoup(child._raw_html)
                 if soup.select("#breadcrumbs a"):
                     crumb = soup.select("#breadcrumbs a")[-1]
                     crumb = "http://www.scp-wiki.net{}".format(crumb["href"])
@@ -664,14 +663,15 @@ def get_all():
 
 
 def main():
-    test_url = 'http://testwiki2.wikidot.com/page1'
-    wiki_url = '/'.join(test_url.split('/')[:-1])
-    wiki = WikidotConnector(wiki_url)
-    pasw = '2A![]M/r}%t?,"GWQ.eH#uaukC3}#.*#uv=yd23NvkpuLgN:kPOBARb}:^IDT?%j'
-    wiki.auth(username='anqxyr', password=pasw)
-    wiki.edit_page(test_url,
-                   'this is page was edit by a robot',
-                   title='I am a Title too')
+    # test_url = 'http://testwiki2.wikidot.com/page1'
+    # wiki_url = '/'.join(test_url.split('/')[:-1])
+    # wiki = WikidotConnector(wiki_url)
+    # pasw = '2A![]M/r}%t?,"GWQ.eH#uaukC3}#.*#uv=yd23NvkpuLgN:kPOBARb}:^IDT?%j'
+    # wiki.auth(username='anqxyr', password=pasw)
+    # wiki.edit_page(test_url,
+    #                'this is page was edit by a robot',
+    #                title='I am a Title too')
+    Snapshot().take()
 
 
 if __name__ == "__main__":
