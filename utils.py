@@ -16,6 +16,7 @@ from crawler import *
 
 DBPATH = "/home/anqxyr/heap/_scp/images.db"
 WIKI = WikidotConnector('http://www.scp-wiki.net')
+#WIKI = WikidotConnector('http://scpsandbox2.wikidot.com')
 
 ###############################################################################
 # Database ORM Classes
@@ -100,45 +101,61 @@ def add_page_info_to_db(url, html):
 
 
 def convert_image_formatting(url):
-    #html = WIKI.html(url)
-    #pageid = WIKI.pageid(html)
-    #source = WIKI.source(pageid)
     source = Image.get(Image.page_url == url).page_source
+    test_source = convert_source(source)
+    if source == test_source:
+        return False
+    html = WIKI.html(url)
+    pageid = WIKI.pageid(html)
+    source = WIKI.source(pageid)
     new_source = convert_source(source)
-    return new_source
-
-FLAG = False
+    if source == new_source:
+        return False
+    title = WIKI.title(html)
+    comment = 'updated image formatting'
+    try:
+        WIKI.edit(pageid, url, new_source, title, comment)
+        print('page edited: {}'.format(url))
+    except:
+        print('Failed to edit the page: {}'.format(url))
+    return True
 
 
 def convert_source(source):
-    if not FLAG:
-        print(source)
-    r = (r'\[\[div style="float:right; margin:0 2em 1em 2em;'
-         ' width:([0-9]+)px; border:0;"\]\]\n'
-         '\|\|\|\| \[\[image ([\w./_:%-]+?) width="([0-9]+)px"\]\] \|\|\n'
-         '\|\|\|\|~\s*([\w^█ \':,/.-]+?)\s*\|?\|\|\n'
-         '\[\[/div\]\]')
-    old_style = re.compile(r, re.MULTILINE | re.DOTALL)
-    image = old_style.search(source)
-    if not FLAG:
-        print(image)
-        if image is not None:
-            print(image.group(0))
-            print(image.groups())
-    if image is None:
-        return False
-    size1, im_url, size2, caption = image.groups()
-    caption = caption.strip('^')
-    if size1 != size2:
-        print('Size mismatch')
-        return False
-    if size1 == '300':
-        size = ''
-    else:
-        size = '|width={}px'.format(size1)
-    repl = '[[include component:image-block name={}|caption={}{}]]'
-    repl = repl.format(im_url, caption, size)
-    new_source = old_style.sub(repl, source)
+    r_div_margin = 'margin:0 2em 1em 2em;'
+    r_div_float = 'float:(left|right);'
+    r_div_width = 'width:([0-9]+)px;'
+    r_div_open = (r'\[\[div style="{} {} {} border:0;"\]\]\n'
+                  .format(r_div_float, r_div_margin, r_div_width))
+    r_image_width = '(width=)?"([0-9]+)px"?'
+    r_image_link = '(link=)?"?([^"]+)?'
+    r_image_code = (r'\|+\s*\[\[image ({}) {}{}\s?"?\]\]\s\|+\n'
+                    .format('{}', r_image_width, r_image_link))
+    r_caption = r'\|+~\s*({})\s*\|+\n'
+    r_div_close = r'\[\[/div\]\]'
+    r = r_div_open + r_image_code + r_caption + r_div_close
+    image = re.compile(r.format(r'[^\s]+', r'[^\n]+?'), re.MULTILINE)
+    new_source = source
+    for match in image.finditer(source):
+        align, size1, im_url, _, size2, _, link, caption = match.groups()
+        if link is not None:
+            return source
+        caption = caption.strip()
+        caption = caption.strip('^')
+        if size1 != size2:
+            print('Size mismatch')
+            return source
+        if size1 == '300':
+            size = ''
+        else:
+            size = '|width={}px'.format(size1)
+        if align == 'right':
+            component = 'component:image-block'
+        elif align == 'left':
+            component = 'component:image-block-left'
+        repl = '[[include {} name={}|caption={}{}]]'
+        repl = repl.format(component, im_url, caption, size)
+        new_source = re.sub(r.format(im_url, r'[^\n]+?'), repl, new_source)
     return new_source
 
 
@@ -147,22 +164,21 @@ def convert_source(source):
 
 def main():
     #fill_db()
-    if FLAG:
-        urls = []
-        t = 0
-        f = 0
-        for i in Image.select().where(Image.is_new_style == False):
-            if i.page_url not in urls:
-                urls.append(i.page_url)
-        for i in urls:
-            if not convert_image_formatting(i):
-                print(i)
-                f += 1
-            else:
-                t += 1
-        print(t, f)
-    else:
-        convert_image_formatting('http://www.scp-wiki.net/scp-956')
+    # by the time this is on githab, I will have changed the password already
+    # so don't bother trying
+    pasw = '2A![]M/r}%t?,"GWQ.eH#uaukC3}#.*#uv=yd23NvkpuLgN:kPOBARb}:^IDT?%j'
+    WIKI.auth(username='anqxyr', password=pasw)
+    urls = []
+    for i in Image.select().where(Image.is_new_style == False):
+        if i.page_url not in urls:
+            urls.append(i.page_url)
+    n = 0
+    for i in urls:
+        edited = convert_image_formatting(i)
+        if edited:
+            n += 1
+        if n > 20:
+            exit()
 
 
 if __name__ == "__main__":
