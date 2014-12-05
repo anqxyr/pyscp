@@ -15,7 +15,7 @@ from crawler import *
 ###############################################################################
 
 DBPATH = "/home/anqxyr/heap/_scp/images.db"
-WIKI = WikidotConnector('http://www.scp-wiki.net')
+WIKI = WikidotConnector('http://scp-wiki.wikidot.com')
 #WIKI = WikidotConnector('http://scpsandbox2.wikidot.com')
 
 ###############################################################################
@@ -100,15 +100,28 @@ def add_page_info_to_db(url, html):
 ###############################################################################
 
 
+def convert_all():
+    # by the time this is on githab, I will have changed the password already
+    # so don't bother trying
+    pasw = '2A![]M/r}%t?,"GWQ.eH#uaukC3}#.*#uv=yd23NvkpuLgN:kPOBARb}:^IDT?%j'
+    WIKI.auth(username='anqxyr', password=pasw)
+    urls = []
+    for i in Image.select().where(Image.is_new_style == False):
+        if i.page_url not in urls:
+            urls.append(i.page_url)
+    n = 0
+    for i in urls:
+        edited = convert_image_formatting(i)
+        if edited:
+            n += 1
+
+
 def convert_image_formatting(url):
-    source = Image.get(Image.page_url == url).page_source
-    test_source = convert_source(source)
-    if source == test_source:
-        return False
+    url = url.replace('http://www.scp-wiki.net', 'http://scp-wiki.wikidot.com')
     html = WIKI.html(url)
     pageid = WIKI.pageid(html)
     source = WIKI.source(pageid)
-    new_source = convert_source(source)
+    new_source = convert_source(source, url)
     if source == new_source:
         return False
     title = WIKI.title(html)
@@ -116,12 +129,13 @@ def convert_image_formatting(url):
     try:
         WIKI.edit(pageid, url, new_source, title, comment)
         print('page edited: {}'.format(url))
-    except:
-        print('Failed to edit the page: {}'.format(url))
+    except Exception:
+        #print(e)
+        print('ERROR: Failed to edit the page: {}'.format(url))
     return True
 
 
-def convert_source(source):
+def convert_source(source, url):
     r_div_margin = 'margin:0 2em 1em 2em;'
     r_div_float = 'float:(left|right);'
     r_div_width = 'width:([0-9]+)px;'
@@ -143,43 +157,33 @@ def convert_source(source):
         caption = caption.strip()
         caption = caption.strip('^')
         if size1 != size2:
-            print('Size mismatch')
-            return source
+            print('WARNING: size mismatch: {}'.format(url))
         if size1 == '300':
             size = ''
         else:
-            size = '|width={}px'.format(size1)
+            size = '|width={}px'.format(size2)
         if align == 'right':
             component = 'component:image-block'
         elif align == 'left':
             component = 'component:image-block-left'
-        repl = '[[include {} name={}|caption={}{}]]'
+        repl = '[[include {} name={}|caption={}{}]]\n'
         repl = repl.format(component, im_url, caption, size)
         new_source = re.sub(r.format(im_url, r'[^\n]+?'), repl, new_source)
     return new_source
 
+###############################################################################
+
+
+def check_formatting_errors():
+    pass
 
 ###############################################################################
 
 
 def main():
     #fill_db()
-    # by the time this is on githab, I will have changed the password already
-    # so don't bother trying
-    pasw = '2A![]M/r}%t?,"GWQ.eH#uaukC3}#.*#uv=yd23NvkpuLgN:kPOBARb}:^IDT?%j'
-    WIKI.auth(username='anqxyr', password=pasw)
-    urls = []
-    for i in Image.select().where(Image.is_new_style == False):
-        if i.page_url not in urls:
-            urls.append(i.page_url)
-    n = 0
-    for i in urls:
-        edited = convert_image_formatting(i)
-        if edited:
-            n += 1
-        if n > 20:
-            exit()
-
+    check_formatting_errors()
+    
 
 if __name__ == "__main__":
     main()
