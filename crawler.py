@@ -16,7 +16,7 @@ from collections import namedtuple
 # Global Constants
 ###############################################################################
 
-DBPATH = "/home/anqxyr/heap/_scp/scp-wiki.2014-11-11.db"
+DBPATH = "/home/anqxyr/heap/_scp/scp-wiki.2014-12-01.db"
 
 ###############################################################################
 # Decorators
@@ -125,6 +125,14 @@ class WikidotConnector:
             pageid = pageid.group(1)
         return pageid
 
+    def title(self, html):
+        soup = BeautifulSoup(html)
+        if soup.select("#page-title"):
+            title = soup.select("#page-title")[0].text.strip()
+        else:
+            title = ""
+        return title
+
     def history(self, pageid):
         if pageid is None:
             return None
@@ -140,6 +148,16 @@ class WikidotConnector:
         return self._module(
             name='pagerate/WhoRatedPageModule',
             pageid=pageid)['body']
+
+    def source(self, pageid):
+        if pageid is None:
+            return None
+        html = self._module(
+            name='viewsource/ViewSourceModule',
+            pageid=pageid)['body']
+        source = BeautifulSoup(html).text
+        source = source[11:].strip()
+        return source
 
     ###########################################################################
     # Active Methods
@@ -321,7 +339,7 @@ class Snapshot:
         soup = BeautifulSoup(self.wiki.html(baseurl))
         counter = soup.select("div.pager span.pager-no")[0].text
         last_page = int(counter.split(" ")[-1])
-        for index in range(1, last_page + 1):
+        for index in reversed(range(1, last_page + 1)):
             soup = BeautifulSoup(self.wiki.html(baseurl.format(index)))
             new_pages = soup.select("div.list-pages-item a")
             for link in new_pages:
@@ -672,6 +690,7 @@ def main():
     #                'this is page was edit by a robot',
     #                title='I am a Title too')
     Snapshot().take()
+    pass
 
 
 if __name__ == "__main__":
