@@ -109,6 +109,22 @@ class WikidotConnector:
         return data.json()
 
     ###########################################################################
+    # Site-wide Methods
+    ###########################################################################
+
+    def list_all_pages(self):
+        baseurl = '{}system:list-all-pages/p/{}'.format(self.site, '{}')
+        soup = BeautifulSoup(self.html(baseurl))
+        counter = soup.select('div.pager span.pager-no')[0].text
+        last_page = int(counter.split(' ')[-1])
+        for index in range(1, last_page + 1):
+            soup = BeautifulSoup(self.html(baseurl.format(index)))
+            pages = soup.select('div.list-pages-item a')
+            for link in pages:
+                url = self.site.rstrip('/') + link["href"]
+                yield url
+
+    ###########################################################################
     # Read-only Methods
     ###########################################################################
 
@@ -200,7 +216,7 @@ class WikidotConnector:
 
 class Snapshot:
 
-    RTAGS = ["scp", "tale", "hub", "joke", "explained", "goi-format"]
+    RTAGS = ['scp', 'tale', 'hub', 'joke', 'explained', 'goi-format']
 
     def __init__(self):
         db.connect()
@@ -335,16 +351,8 @@ class Snapshot:
         self._meta_tables()
         for tag in Snapshot.RTAGS:
             self._tag_to_db(tag)
-        baseurl = "http://www.scp-wiki.net/system:list-all-pages/p/{}"
-        soup = BeautifulSoup(self.wiki.html(baseurl))
-        counter = soup.select("div.pager span.pager-no")[0].text
-        last_page = int(counter.split(" ")[-1])
-        for index in reversed(range(1, last_page + 1)):
-            soup = BeautifulSoup(self.wiki.html(baseurl.format(index)))
-            new_pages = soup.select("div.list-pages-item a")
-            for link in new_pages:
-                url = "http://www.scp-wiki.net{}".format(link["href"])
-                self._page_to_db(url)
+        for url in self.wiki.list_all_pages():
+            self._page_to_db(url)
 
     def pagedata(self, url):
         """Retrieve PageData from the database"""
