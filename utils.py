@@ -175,7 +175,27 @@ def convert_source(source, url):
 
 
 def check_formatting_errors():
-    pass
+    for page in get_all():
+        for entry in page.history:
+            if (entry.user == 'anqxyr' and
+                    entry.comment == 'updated image formatting'):
+                #print(page.url)
+                break
+        else:
+            continue
+        soup = BeautifulSoup(page._raw_html)
+        if not soup.select('#page-content'):
+            continue
+        text = soup.select('#page-content')[0].text
+        chars = ['html', '[[', ']]', '*', '~']
+        msg = ''
+        for i in chars:
+            if i in text:
+                msg += (' {};'.format(i))
+        if(soup.select('blockquote')):
+            msg += (' quote;')
+        if msg:
+            print('{}: {}'.format(page.url, msg))
 
 ###############################################################################
 
@@ -183,7 +203,7 @@ def check_formatting_errors():
 def main():
     #fill_db()
     check_formatting_errors()
-    
+
 
 if __name__ == "__main__":
     main()
