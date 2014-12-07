@@ -36,20 +36,20 @@ class BaseModel(peewee.Model):
         database = db
 
 
-class PageData(BaseModel):
+class DBPage(BaseModel):
     url = peewee.CharField(unique=True)
     html = peewee.TextField()
     history = peewee.TextField(null=True)
     votes = peewee.TextField(null=True)
 
 
-class TitleData(BaseModel):
+class DBTitle(BaseModel):
     url = peewee.CharField(unique=True)
     skip = peewee.CharField()
     title = peewee.CharField()
 
 
-class ImageData(BaseModel):
+class DBImage(BaseModel):
     image_url = peewee.CharField(unique=True)
     image_source = peewee.CharField()
     image_data = peewee.BlobField()
@@ -57,18 +57,18 @@ class ImageData(BaseModel):
     #image_status = peewee.CharField()
 
 
-class RewriteData(BaseModel):
+class DBRewrite(BaseModel):
     url = peewee.CharField(unique=True)
     author = peewee.CharField()
     override = peewee.BooleanField()
 
 
-class TagData(BaseModel):
+class DBTag(BaseModel):
     tag = peewee.CharField(index=True)
     url = peewee.CharField()
 
 
-class SnapshotInfo(BaseModel):
+class DBInfo(BaseModel):
     time_created = peewee.DateTimeField()
     time_updated = peewee.DateTimeField(null=True)
 
@@ -220,8 +220,8 @@ class Snapshot:
 
     def __init__(self):
         db.connect()
-        db.create_tables([PageData, TitleData, ImageData, RewriteData,
-                          TagData, SnapshotInfo], safe=True)
+        db.create_tables([DBPage, DBTitle, DBImage, DBRewrite,
+                          DBTag, DBInfo], safe=True)
         self.db = db
         self.wiki = WikidotConnector('http://www.scp-wiki.net')
 
@@ -290,9 +290,9 @@ class Snapshot:
     def _page_to_db(self, url):
         print("saving\t\t\t{}".format(url))
         try:
-            db_page = PageData.get(PageData.url == url)
-        except PageData.DoesNotExist:
-            db_page = PageData(url=url)
+            page = DBPage.get(DBPage.url == url)
+        except DBPage.DoesNotExist:
+            page = DBPage(url=url)
         html = self.wiki.html(url)
         # this will break if html is None
         # however html should never be None with the current code
@@ -300,43 +300,43 @@ class Snapshot:
         pageid = self.wiki.pageid(html)
         history = self.wiki.history(pageid)
         votes = self.wiki.votes(pageid)
-        db_page.html = html
-        db_page.history = history
-        db_page.votes = votes
-        db_page.save()
+        page.html = html
+        page.history = history
+        page.votes = votes
+        page.save()
 
     def _meta_tables(self):
         print("collecting metadata")
-        TitleData.delete().execute()
-        ImageData.delete().execute()
-        RewriteData.delete().execute()
+        DBTitle.delete().execute()
+        DBImage.delete().execute()
+        DBRewrite.delete().execute()
         with db.transaction():
             titles = list(self._scrape_scp_titles())
             for idx in range(0, len(titles), 500):
-                TitleData.insert_many(titles[idx:idx + 500]).execute()
+                DBTitle.insert_many(titles[idx:idx + 500]).execute()
             images = list(self._scrape_image_whitelist())
             for idx in range(0, len(images), 500):
-                ImageData.insert_many(images[idx:idx + 500]).execute()
+                DBImage.insert_many(images[idx:idx + 500]).execute()
             rewrites = list(self._scrape_rewrites())
             for idx in range(0, len(rewrites), 500):
-                RewriteData.insert_many(rewrites[idx:idx + 500]).execute()
+                DBRewrite.insert_many(rewrites[idx:idx + 500]).execute()
 
     def _tag_to_db(self, tag):
         print("saving tag\t\t{}".format(tag))
         tag_data = list(self._scrape_tag(tag))
         urls = [i["url"] for i in tag_data]
-        TagData.delete().where((TagData.tag == tag) & ~ (TagData.url << urls))
-        old_urls = TagData.select(TagData.url)
+        DBTag.delete().where((DBTag.tag == tag) & ~ (DBTag.url << urls))
+        old_urls = DBTag.select(DBTag.url)
         new_data = [i for i in tag_data if i["url"] not in old_urls]
         with db.transaction():
             for idx in range(0, len(new_data), 500):
-                TagData.insert_many(new_data[idx:idx + 500]).execute()
+                DBTag.insert_many(new_data[idx:idx + 500]).execute()
 
     def _update_info(self, action):
         try:
-            info_row = SnapshotInfo.get()
-        except SnapshotInfo.DoesNotExist:
-            info_row = SnapshotInfo()
+            info_row = DBInfo.get()
+        except DBInfo.DoesNotExist:
+            info_row = DBInfo()
         if action == "created":
             time = arrow.utcnow().format("YYYY-MM-DD HH:mm:ss")
             info_row.time_created = time
@@ -357,39 +357,39 @@ class Snapshot:
     def pagedata(self, url):
         """Retrieve PageData from the database"""
         try:
-            data = PageData.get(PageData.url == url)
-        except PageData.DoesNotExist as e:
+            data = DBPage.get(DBPage.url == url)
+        except DBPage.DoesNotExist as e:
             raise e
         pd = namedtuple("PageData", "html history votes")
         return pd(data.html, data.history, data.votes)
 
     def tag(self, tag):
         """Retrieve list of pages with the tag from the database"""
-        for i in TagData.select().where(TagData.tag == tag):
+        for i in DBTag.select().where(DBTag.tag == tag):
             yield i.url
 
     def rewrite(self, url):
-        rd = namedtuple('RewriteData', 'url author override')
+        rd = namedtuple('DBRewrite', 'url author override')
         try:
-            data = RewriteData.get(RewriteData.url == url)
+            data = DBRewrite.get(DBRewrite.url == url)
             return rd(data.url, data.author, data.override)
-        except RewriteData.DoesNotExist:
+        except DBRewrite.DoesNotExist:
             return False
 
     def images(self):
         images = {}
         im = namedtuple('Image', 'source data')
-        for i in ImageData.select():
+        for i in DBImage.select():
             images[i.image_url] = im(i.image_source, i.image_data)
         return images
 
     def title(self, url):
         try:
-            return TitleData.get(TitleData.url == url).title
-        except TitleData.DoesNotExist:
+            return DBTitle.get(DBTitle.url == url).title
+        except DBTitle.DoesNotExist:
             num = re.search('[0-9]+$', url).group(0)
             skip = 'SCP-{}'.format(num)
-            return TitleData.get(TitleData.skip == skip).title
+            return DBTitle.get(DBTitle.skip == skip).title
 
 
 class Page:
@@ -646,7 +646,7 @@ class Page:
                     p.chapters = self.chapters
                 except AttributeError:
                     pass
-            except PageData.DoesNotExist:
+            except DBPage.DoesNotExist:
                 continue
             if p.data is not None:
                 lpages.append(p)
@@ -681,9 +681,9 @@ class Page:
 
 
 def get_all():
-    count = PageData.select().count()
+    count = DBPage.select().count()
     for n in range(1, count // 50 + 2):
-        query = PageData.select().order_by(PageData.url).paginate(n, 50)
+        query = DBPage.select().order_by(DBPage.url).paginate(n, 50)
         for i in query:
             yield Page(i.url)
 
@@ -697,7 +697,7 @@ def main():
     # wiki.edit_page(test_url,
     #                'this is page was edit by a robot',
     #                title='I am a Title too')
-    Snapshot().take()
+    #Snapshot().take()
     pass
 
 
