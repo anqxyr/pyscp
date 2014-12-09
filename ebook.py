@@ -218,30 +218,6 @@ class EbookPage(Page):
             title_insert = "<p class='tale-title'>{}</p>{}"
         self.data = title_insert.format(self.title, self.data)
 
-    def _parse_history(self, raw_history):
-        soup = BeautifulSoup(raw_history)
-        history = []
-        Revision = namedtuple('Revision', 'number user time comment')
-        for i in soup.select('tr')[1:]:
-            rev_data = i.select('td')
-            number = int(rev_data[0].text.strip('.'))
-            user = rev_data[4].text
-            time = arrow.get(rev_data[5].text, 'DD MMM YYYY HH:mm')
-            time = time.format('YYYY-MM-DD HH:mm:ss')
-            comment = rev_data[6].text
-            history.append(Revision(number, user, time, comment))
-        self.history = list(reversed(history))
-
-    def _parse_votes(self, raw_votes):
-        soup = BeautifulSoup(raw_votes)
-        votes = []
-        VoteData = namedtuple('VoteData', 'user vote')
-        for i in soup.select('span.printuser'):
-            user = i.text
-            vote = i.next_sibling.next_sibling.text.strip()
-            votes.append(VoteData(user, vote))
-        self.votes = votes
-
     def _parse_body(self, soup):
         if not soup.select("#page-content"):
             self.data = None
