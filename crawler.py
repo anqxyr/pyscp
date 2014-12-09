@@ -125,15 +125,65 @@ class WikidotConnector:
                 yield url
 
     ###########################################################################
-    # Read-only Methods
+    # Page Interface Methods
     ###########################################################################
 
-    def html(self, url):
+    def get_page_html(self, url):
         data = self.req.get(url)
         if data.status_code != 404:
             return data.text
         else:
             return None
+
+    def get_page_history(self, pageid):
+        if pageid is None:
+            return None
+        data = self._module(
+            name='history/PageRevisionListModule',
+            pageid=pageid,
+            page=1,
+            perpage=1000000)['body']
+        soup = BeautifulSoup(data)
+        history = []
+        Revision = namedtuple('Revision', 'number user time comment')
+        for i in soup.select('tr')[1:]:
+            rev_data = i.select('td')
+            number = int(rev_data[0].text.strip('.'))
+            user = rev_data[4].text
+            time = arrow.get(rev_data[5].text, 'DD MMM YYYY HH:mm')
+            time = time.format('YYYY-MM-DD HH:mm:ss')
+            comment = rev_data[6].text
+            history.append(Revision(number, user, time, comment))
+        return list(reversed(history))
+
+    def get_page_votes(self, pageid):
+        if pageid is None:
+            return None
+        data = self._module(
+            name='pagerate/WhoRatedPageModule',
+            pageid=pageid)['body']
+        soup = BeautifulSoup(data)
+        votes = []
+        Vote = namedtuple('Vote', 'user vote')
+        for i in soup.select('span.printuser'):
+            user = i.text
+            vote = i.next_sibling.next_sibling.text.strip()
+            votes.append(Vote(user, vote))
+        return votes
+
+    def get_page_source(self, pageid):
+        if pageid is None:
+            return None
+        html = self._module(
+            name='viewsource/ViewSourceModule',
+            pageid=pageid)['body']
+        source = BeautifulSoup(html).text
+        source = source[11:].strip()
+        return source
+
+    ###########################################################################
+    # Read-only Methods
+    ###########################################################################
 
     def pageid(self, html):
         pageid = re.search("pageId = ([^;]*);", html)
@@ -148,32 +198,6 @@ class WikidotConnector:
         else:
             title = ""
         return title
-
-    def history(self, pageid):
-        if pageid is None:
-            return None
-        return self._module(
-            name='history/PageRevisionListModule',
-            pageid=pageid,
-            page=1,
-            perpage=1000000)['body']
-
-    def votes(self, pageid):
-        if pageid is None:
-            return None
-        return self._module(
-            name='pagerate/WhoRatedPageModule',
-            pageid=pageid)['body']
-
-    def source(self, pageid):
-        if pageid is None:
-            return None
-        html = self._module(
-            name='viewsource/ViewSourceModule',
-            pageid=pageid)['body']
-        source = BeautifulSoup(html).text
-        source = source[11:].strip()
-        return source
 
     ###########################################################################
     # Active Methods
@@ -404,7 +428,7 @@ class Page:
 
     def __init__(self, url=None):
         self.url = url
-    
+
     ###########################################################################
 
     def links(self):
