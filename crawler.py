@@ -120,6 +120,24 @@ class WikidotConnector:
                              data=payload, headers=headers, cookies=cookies)
         return data.json()
 
+    def _parse_forum_thread_page(self, page_html):
+        soup = BeautifulSoup(page_html)
+        Post = namedtuple('Post', 'id title content user time parent')
+        for e in soup.select('div.post'):
+            post_id = e['id'].split('-')[1]
+            title = e.select('div.title')[0].text.strip()
+            content = e.select('div.content')[0]
+            user = e.select('span.printuser')[0].text
+            unix_time = e.select('span.odate')[0]['class'][1].split('_')[1]
+            time = arrow.get(unix_time).format('YYYY-MM-DD HH:mm:ss')
+            granpa = e.parent.parent
+            if 'class' in granpa.attrs and 'post-container' in granpa['class']:
+                parent = granpa.select('div.post')[0]['id'].split('-')[1]
+            else:
+                parent = None
+            p = Post(post_id, title, content, user, time, parent)
+            yield p
+
     ###########################################################################
     # Site-wide Methods
     ###########################################################################
@@ -197,6 +215,32 @@ class WikidotConnector:
     # Read-only Methods
     ###########################################################################
 
+    def get_forum_thread(self, url):
+        thread_id = re.search(r'/forum/t-([0-9]+)/', url).group(1)
+        data = self._module(
+            name='forum/ForumViewThreadPostsModule',
+            t=thread_id,
+            pageid=None,
+            pageNo='1')['body']
+        soup = BeautifulSoup(data)
+        try:
+            pager = soup.select('span.pager-no')[0].text
+            num_of_pages = int(pager.split(' of ')[1])
+        except IndexError:
+            num_of_pages = 1
+        comments = []
+        for post in self._parse_forum_thread_page(data):
+            comments.append(post)
+        for n in range(2, num_of_pages + 1):
+            data = self._module(
+                name='forum/ForumViewThreadPostsModule',
+                t=thread_id,
+                pageid=None,
+                pageNo='1')['body']
+            for post in self._parse_forum_thread_page(data):
+                comments.append(post)
+        return comments
+
     def pageid(self, html):
         pageid = re.search("pageId = ([^;]*);", html)
         if pageid is not None:
@@ -256,8 +300,8 @@ class Snapshot:
 
     def __init__(self):
         db.connect()
-        db.create_tables([DBPage, DBTitle, DBImage, DBRewrite,
-                          DBTag, DBInfo], safe=True)
+        db.create_tables([DBPage, DBTitle, DBImageInfo, DBAuthorOverride,
+                          DBTagPoint, DBInfo], safe=True)
         self.db = db
         self.wiki = WikidotConnector('http://www.scp-wiki.net')
 
@@ -344,29 +388,30 @@ class Snapshot:
     def _meta_tables(self):
         print("collecting metadata")
         DBTitle.delete().execute()
-        DBImage.delete().execute()
-        DBRewrite.delete().execute()
+        DBImageInfo.delete().execute()
+        DBAuthorOverride.delete().execute()
         with db.transaction():
             titles = list(self._scrape_scp_titles())
             for idx in range(0, len(titles), 500):
                 DBTitle.insert_many(titles[idx:idx + 500]).execute()
             images = list(self._scrape_image_whitelist())
             for idx in range(0, len(images), 500):
-                DBImage.insert_many(images[idx:idx + 500]).execute()
+                DBImageInfo.insert_many(images[idx:idx + 500]).execute()
             rewrites = list(self._scrape_rewrites())
             for idx in range(0, len(rewrites), 500):
-                DBRewrite.insert_many(rewrites[idx:idx + 500]).execute()
+                DBAuthorOverride.insert_many(rewrites[idx:idx + 500]).execute()
 
     def _tag_to_db(self, tag):
         print("saving tag\t\t{}".format(tag))
         tag_data = list(self._scrape_tag(tag))
         urls = [i["url"] for i in tag_data]
-        DBTag.delete().where((DBTag.tag == tag) & ~ (DBTag.url << urls))
-        old_urls = DBTag.select(DBTag.url)
+        DBTagPoint.delete().where(
+            (DBTagPoint.tag == tag) & ~ (DBTagPoint.url << urls))
+        old_urls = DBTagPoint.select(DBTagPoint.url)
         new_data = [i for i in tag_data if i["url"] not in old_urls]
         with db.transaction():
             for idx in range(0, len(new_data), 500):
-                DBTag.insert_many(new_data[idx:idx + 500]).execute()
+                DBTagPoint.insert_many(new_data[idx:idx + 500]).execute()
 
     def _update_info(self, action):
         try:
@@ -401,21 +446,21 @@ class Snapshot:
 
     def tag(self, tag):
         """Retrieve list of pages with the tag from the database"""
-        for i in DBTag.select().where(DBTag.tag == tag):
+        for i in DBTagPoint.select().where(DBTagPoint.tag == tag):
             yield i.url
 
     def rewrite(self, url):
-        rd = namedtuple('DBRewrite', 'url author override')
+        rd = namedtuple('DBAuthorOverride', 'url author override')
         try:
-            data = DBRewrite.get(DBRewrite.url == url)
+            data = DBAuthorOverride.get(DBAuthorOverride.url == url)
             return rd(data.url, data.author, data.override)
-        except DBRewrite.DoesNotExist:
+        except DBAuthorOverride.DoesNotExist:
             return False
 
     def images(self):
         images = {}
         im = namedtuple('Image', 'source data')
-        for i in DBImage.select():
+        for i in DBImageInfo.select():
             images[i.image_url] = im(i.image_source, i.image_data)
         return images
 
@@ -526,6 +571,11 @@ def main():
     #                'this is page was edit by a robot',
     #                title='I am a Title too')
     #Snapshot().take()
+    wiki = WikidotConnector('http://www.scp-wiki.net')
+    thr = 'http://www.scp-wiki.net/forum/t-466570/scp-1600'
+    data = wiki.get_forum_thread(thr)
+    for i in data:
+        print(i.id, i.title, i.user)
     pass
 
 
