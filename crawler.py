@@ -39,8 +39,20 @@ class BaseModel(peewee.Model):
 class DBPage(BaseModel):
     url = peewee.CharField(unique=True)
     html = peewee.TextField()
-    history = peewee.TextField(null=True)
-    votes = peewee.TextField(null=True)
+
+
+class DBRevision(BaseModel):
+    url = peewee.CharField()
+    number = peewee.IntegerField()
+    user = peewee.CharField()
+    time = peewee.DateTimeField()
+    comment = peewee.CharField()
+
+
+class DBVote(BaseModel):
+    url = peewee.CharField()
+    user = peewee.CharField()
+    vote = peewee.IntegerField()
 
 
 class DBTitle(BaseModel):
@@ -49,7 +61,7 @@ class DBTitle(BaseModel):
     title = peewee.CharField()
 
 
-class DBImage(BaseModel):
+class DBImageInfo(BaseModel):
     image_url = peewee.CharField(unique=True)
     image_source = peewee.CharField()
     image_data = peewee.BlobField()
@@ -57,13 +69,13 @@ class DBImage(BaseModel):
     #image_status = peewee.CharField()
 
 
-class DBRewrite(BaseModel):
+class DBAuthorOverride(BaseModel):
     url = peewee.CharField(unique=True)
     author = peewee.CharField()
     override = peewee.BooleanField()
 
 
-class DBTag(BaseModel):
+class DBTagPoint(BaseModel):
     tag = peewee.CharField(index=True)
     url = peewee.CharField()
 
