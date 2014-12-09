@@ -55,6 +55,16 @@ class DBVote(BaseModel):
     vote = peewee.IntegerField()
 
 
+class DBForumPost(BaseModel):
+    thread_id = peewee.IntegerField()
+    title = peewee.CharField()
+    content = peewee.TextField()
+    user = peewee.CharField()
+    time = peewee.DateTimeField()
+    parent = peewee.CharField(null=True)
+    'id title content user time parent'
+
+
 class DBTitle(BaseModel):
     url = peewee.CharField(unique=True)
     skip = peewee.CharField()
@@ -130,29 +140,13 @@ class WikidotConnector:
             user = e.select('span.printuser')[0].text
             unix_time = e.select('span.odate')[0]['class'][1].split('_')[1]
             time = arrow.get(unix_time).format('YYYY-MM-DD HH:mm:ss')
-            granpa = e.parent.parentId
+            granpa = e.parent.parent
             if 'class' in granpa.attrs and 'post-container' in granpa['class']:
                 parent = granpa.select('div.post')[0]['id'].split('-')[1]
             else:
                 parent = None
             p = Post(post_id, title, content, user, time, parent)
             yield p
-
-    ###########################################################################
-    # Site-wide Methods
-    ###########################################################################
-
-    def list_all_pages(self):
-        baseurl = '{}system:list-all-pages/p/{}'.format(self.site, '{}')
-        soup = BeautifulSoup(self.html(baseurl))
-        counter = soup.select('div.pager span.pager-no')[0].text
-        last_page = int(counter.split(' ')[-1])
-        for index in range(1, last_page + 1):
-            soup = BeautifulSoup(self.html(baseurl.format(index)))
-            pages = soup.select('div.list-pages-item a')
-            for link in pages:
-                url = self.site.rstrip('/') + link["href"]
-                yield url
 
     ###########################################################################
     # Page Interface Methods
@@ -215,13 +209,24 @@ class WikidotConnector:
     # Read-only Methods
     ###########################################################################
 
-    def get_forum_thread(self, url):
-        thread_id = re.search(r'/forum/t-([0-9]+)/', url).group(1)
+    def list_all_pages(self):
+        baseurl = '{}system:list-all-pages/p/{}'.format(self.site, '{}')
+        soup = BeautifulSoup(self.html(baseurl))
+        counter = soup.select('div.pager span.pager-no')[0].text
+        last_page = int(counter.split(' ')[-1])
+        for index in range(1, last_page + 1):
+            soup = BeautifulSoup(self.html(baseurl.format(index)))
+            pages = soup.select('div.list-pages-item a')
+            for link in pages:
+                url = self.site.rstrip('/') + link["href"]
+                yield url
+
+    def get_forum_thread(self, thread_id):
         data = self._module(
             name='forum/ForumViewThreadPostsModule',
             t=thread_id,
             pageid=None,
-            pageNo='1')['body']
+            pageNo=1)['body']
         soup = BeautifulSoup(data)
         try:
             pager = soup.select('span.pager-no')[0].text
@@ -236,7 +241,7 @@ class WikidotConnector:
                 name='forum/ForumViewThreadPostsModule',
                 t=thread_id,
                 pageid=None,
-                pageNo='1')['body']
+                pageNo=n)['body']
             for post in self._parse_forum_thread_page(data):
                 comments.append(post)
         return comments
@@ -573,10 +578,9 @@ def main():
     #Snapshot().take()
     wiki = WikidotConnector('http://www.scp-wiki.net')
     url = 'http://www.scp-wiki.net/scp-1600'
-    pageid = wiki.pageid(wiki.get_page_html(url))
-    data = wiki.get_page_history(pageid)
+    data = wiki.get_forum_thread(466570)
     for i in data:
-        print(i)
+        print(i.title, i.id, i.user, i.time)
     pass
 
 
