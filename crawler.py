@@ -130,7 +130,7 @@ class WikidotConnector:
             user = e.select('span.printuser')[0].text
             unix_time = e.select('span.odate')[0]['class'][1].split('_')[1]
             time = arrow.get(unix_time).format('YYYY-MM-DD HH:mm:ss')
-            granpa = e.parent.parent
+            granpa = e.parent.parentId
             if 'class' in granpa.attrs and 'post-container' in granpa['class']:
                 parent = granpa.select('div.post')[0]['id'].split('-')[1]
             else:
@@ -180,8 +180,8 @@ class WikidotConnector:
             rev_data = i.select('td')
             number = int(rev_data[0].text.strip('.'))
             user = rev_data[4].text
-            time = arrow.get(rev_data[5].text, 'DD MMM YYYY HH:mm')
-            time = time.format('YYYY-MM-DD HH:mm:ss')
+            unix_time = rev_data[5].span['class'][1].split('_')[1]
+            time = arrow.get(unix_time).format('YYYY-MM-DD HH:mm:ss')
             comment = rev_data[6].text
             history.append(Revision(number, user, time, comment))
         return list(reversed(history))
@@ -572,10 +572,11 @@ def main():
     #                title='I am a Title too')
     #Snapshot().take()
     wiki = WikidotConnector('http://www.scp-wiki.net')
-    thr = 'http://www.scp-wiki.net/forum/t-466570/scp-1600'
-    data = wiki.get_forum_thread(thr)
+    url = 'http://www.scp-wiki.net/scp-1600'
+    pageid = wiki.pageid(wiki.get_page_html(url))
+    data = wiki.get_page_history(pageid)
     for i in data:
-        print(i.id, i.title, i.user)
+        print(i)
     pass
 
 
