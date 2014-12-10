@@ -16,7 +16,7 @@ from collections import namedtuple
 # Global Constants
 ###############################################################################
 
-DBPATH = "/home/anqxyr/heap/_scp/scp-wiki.2014-12-01.db"
+DBPATH = "/home/anqxyr/heap/_scp/scp-wiki.2014-12-10.db"
 
 ###############################################################################
 # Decorators
@@ -37,8 +37,10 @@ class BaseModel(peewee.Model):
 
 
 class DBPage(BaseModel):
+    pageid = peewee.IntegerField(primary_key=True)
     url = peewee.CharField(unique=True)
     html = peewee.TextField()
+    thread_id = peewee.IntegerField()
 
 
 class DBRevision(BaseModel):
@@ -56,13 +58,13 @@ class DBVote(BaseModel):
 
 
 class DBForumPost(BaseModel):
+    post_id = peewee.IntegerField(primary_key=True)
     thread_id = peewee.IntegerField()
     title = peewee.CharField()
     content = peewee.TextField()
     user = peewee.CharField()
     time = peewee.DateTimeField()
     parent = peewee.CharField(null=True)
-    'id title content user time parent'
 
 
 class DBTitle(BaseModel):
@@ -132,7 +134,6 @@ class WikidotConnector:
 
     def _parse_forum_thread_page(self, page_html):
         soup = BeautifulSoup(page_html)
-        Post = namedtuple('Post', 'id title content user time parent')
         for e in soup.select('div.post'):
             post_id = e['id'].split('-')[1]
             title = e.select('div.title')[0].text.strip()
@@ -145,8 +146,13 @@ class WikidotConnector:
                 parent = granpa.select('div.post')[0]['id'].split('-')[1]
             else:
                 parent = None
-            p = Post(post_id, title, content, user, time, parent)
-            yield p
+            yield {
+                'post_id': post_id,
+                'title': title,
+                'content': content,
+                'user': user,
+                'time': time,
+                'parent': parent}
 
     ###########################################################################
     # Page Interface Methods
@@ -168,8 +174,6 @@ class WikidotConnector:
             page=1,
             perpage=1000000)['body']
         soup = BeautifulSoup(data)
-        history = []
-        Revision = namedtuple('Revision', 'number user time comment')
         for i in soup.select('tr')[1:]:
             rev_data = i.select('td')
             number = int(rev_data[0].text.strip('.'))
@@ -177,8 +181,10 @@ class WikidotConnector:
             unix_time = rev_data[5].span['class'][1].split('_')[1]
             time = arrow.get(unix_time).format('YYYY-MM-DD HH:mm:ss')
             comment = rev_data[6].text
-            history.append(Revision(number, user, time, comment))
-        return list(reversed(history))
+            yield {'number': number,
+                   'user': user,
+                   'time': time,
+                   'comment': comment}
 
     def get_page_votes(self, pageid):
         if pageid is None:
@@ -187,13 +193,10 @@ class WikidotConnector:
             name='pagerate/WhoRatedPageModule',
             pageid=pageid)['body']
         soup = BeautifulSoup(data)
-        votes = []
-        Vote = namedtuple('Vote', 'user vote')
         for i in soup.select('span.printuser'):
             user = i.text
             vote = i.next_sibling.next_sibling.text.strip()
-            votes.append(Vote(user, vote))
-        return votes
+            yield {'user': user, 'vote': vote}
 
     def get_page_source(self, pageid):
         if pageid is None:
@@ -206,16 +209,40 @@ class WikidotConnector:
         return source
 
     ###########################################################################
+    # Helper Methods
+    ###########################################################################
+
+    def parse_pageid(self, html):
+        pageid = re.search("pageId = ([^;]*);", html)
+        if pageid is not None:
+            pageid = pageid.group(1)
+        return pageid
+
+    def parse_page_title(self, html):
+        soup = BeautifulSoup(html)
+        if soup.select("#page-title"):
+            title = soup.select("#page-title")[0].text.strip()
+        else:
+            title = ""
+        return title
+
+    def parse_discussion_id(self, html):
+        soup = BeautifulSoup(html)
+        link = soup.select('#discuss-button')[0]['href']
+        thread_id = re.search(r'/forum/t-([0-9]+)/', link).group(1)
+        return thread_id
+
+    ###########################################################################
     # Read-only Methods
     ###########################################################################
 
     def list_all_pages(self):
         baseurl = '{}system:list-all-pages/p/{}'.format(self.site, '{}')
-        soup = BeautifulSoup(self.html(baseurl))
+        soup = BeautifulSoup(self.get_page_html(baseurl))
         counter = soup.select('div.pager span.pager-no')[0].text
         last_page = int(counter.split(' ')[-1])
         for index in range(1, last_page + 1):
-            soup = BeautifulSoup(self.html(baseurl.format(index)))
+            soup = BeautifulSoup(self.get_page_html(baseurl.format(index)))
             pages = soup.select('div.list-pages-item a')
             for link in pages:
                 url = self.site.rstrip('/') + link["href"]
@@ -233,9 +260,9 @@ class WikidotConnector:
             num_of_pages = int(pager.split(' of ')[1])
         except IndexError:
             num_of_pages = 1
-        comments = []
         for post in self._parse_forum_thread_page(data):
-            comments.append(post)
+            post['thread_id'] = thread_id
+            yield post
         for n in range(2, num_of_pages + 1):
             data = self._module(
                 name='forum/ForumViewThreadPostsModule',
@@ -243,22 +270,8 @@ class WikidotConnector:
                 pageid=None,
                 pageNo=n)['body']
             for post in self._parse_forum_thread_page(data):
-                comments.append(post)
-        return comments
-
-    def pageid(self, html):
-        pageid = re.search("pageId = ([^;]*);", html)
-        if pageid is not None:
-            pageid = pageid.group(1)
-        return pageid
-
-    def title(self, html):
-        soup = BeautifulSoup(html)
-        if soup.select("#page-title"):
-            title = soup.select("#page-title")[0].text.strip()
-        else:
-            title = ""
-        return title
+                post['thread_id'] = thread_id
+                yield post
 
     ###########################################################################
     # Active Methods
@@ -305,8 +318,16 @@ class Snapshot:
 
     def __init__(self):
         db.connect()
-        db.create_tables([DBPage, DBTitle, DBImageInfo, DBAuthorOverride,
-                          DBTagPoint, DBInfo], safe=True)
+        db.create_tables([
+            DBPage,
+            DBRevision,
+            DBVote,
+            DBForumPost,
+            DBTitle,
+            DBImageInfo,
+            DBAuthorOverride,
+            DBTagPoint,
+            DBInfo], safe=True)
         self.db = db
         self.wiki = WikidotConnector('http://www.scp-wiki.net')
 
@@ -321,7 +342,7 @@ class Snapshot:
             "http://www.scp-wiki.net/scp-series-2",
             "http://www.scp-wiki.net/scp-series-3"]
         for url in series_urls:
-            soup = BeautifulSoup(self.wiki.html(url))
+            soup = BeautifulSoup(self.wiki.get_page_html(url))
             articles = [i for i in soup.select("ul > li")
                         if re.search("[SCP]+-[0-9]+", i.text)]
             for i in articles:
@@ -363,7 +384,7 @@ class Snapshot:
 
     def _scrape_tag(self, tag):
         url = "http://www.scp-wiki.net/system:page-tags/tag/{}".format(tag)
-        soup = BeautifulSoup(self.wiki.html(url))
+        soup = BeautifulSoup(self.wiki.get_page_html(url))
         for i in soup.select("div.pages-list-item a"):
             url = "http://www.scp-wiki.net{}".format(i["href"])
             yield {"tag": tag, "url": url}
@@ -372,39 +393,43 @@ class Snapshot:
     # Database Methods
     ###########################################################################
 
+    def _insert_many(self, *tuples):
+        with db.transaction():
+            for table, data in tuples:
+                data = list(data)
+                for idx in range(0, len(data), 500):
+                    table.insert_many(data[idx:idx + 500]).execute()
+
     def _page_to_db(self, url):
         print("saving\t\t\t{}".format(url))
-        try:
-            page = DBPage.get(DBPage.url == url)
-        except DBPage.DoesNotExist:
-            page = DBPage(url=url)
-        html = self.wiki.html(url)
-        # this will break if html is None
-        # however html should never be None with the current code
-        # so I'll leave it as is to signal bad pages on the site
-        pageid = self.wiki.pageid(html)
-        history = self.wiki.history(pageid)
-        votes = self.wiki.votes(pageid)
-        page.html = html
-        page.history = history
-        page.votes = votes
-        page.save()
+        html = self.wiki.get_page_html(url)
+        pageid = self.wiki.parse_pageid(html)
+        thread_id = self.wiki.parse_discussion_id(html)
+        DBPage.create(pageid=pageid, url=url, html=html, thread_id=thread_id)
+        history = list(self.wiki.get_page_history(pageid))
+        for i in history:
+            i['url'] = url
+        votes = self.wiki.get_page_votes(pageid)
+        for i in votes:
+            i['url'] = url
+        comments = self.wiki.get_forum_thread(thread_id)
+        self._insert_many(
+            (DBRevision, history),
+            (DBVote, votes),
+            (DBForumPost, comments))
 
     def _meta_tables(self):
         print("collecting metadata")
         DBTitle.delete().execute()
         DBImageInfo.delete().execute()
         DBAuthorOverride.delete().execute()
-        with db.transaction():
-            titles = list(self._scrape_scp_titles())
-            for idx in range(0, len(titles), 500):
-                DBTitle.insert_many(titles[idx:idx + 500]).execute()
-            images = list(self._scrape_image_whitelist())
-            for idx in range(0, len(images), 500):
-                DBImageInfo.insert_many(images[idx:idx + 500]).execute()
-            rewrites = list(self._scrape_rewrites())
-            for idx in range(0, len(rewrites), 500):
-                DBAuthorOverride.insert_many(rewrites[idx:idx + 500]).execute()
+        titles = list(self._scrape_scp_titles())
+        images = list(self._scrape_image_whitelist())
+        rewrites = list(self._scrape_rewrites())
+        self._insert_many(
+            (DBTitle, titles),
+            (DBImageInfo, images),
+            (DBAuthorOverride, rewrites))
 
     def _tag_to_db(self, tag):
         print("saving tag\t\t{}".format(tag))
@@ -414,9 +439,7 @@ class Snapshot:
             (DBTagPoint.tag == tag) & ~ (DBTagPoint.url << urls))
         old_urls = DBTagPoint.select(DBTagPoint.url)
         new_data = [i for i in tag_data if i["url"] not in old_urls]
-        with db.transaction():
-            for idx in range(0, len(new_data), 500):
-                DBTagPoint.insert_many(new_data[idx:idx + 500]).execute()
+        self._insert_many((DBTagPoint, new_data))
 
     def _update_info(self, action):
         try:
@@ -567,20 +590,7 @@ def get_all():
 
 
 def main():
-    # test_url = 'http://testwiki2.wikidot.com/page1'
-    # wiki_url = '/'.join(test_url.split('/')[:-1])
-    # wiki = WikidotConnector(wiki_url)
-    # pasw = '2A![]M/r}%t?,"GWQ.eH#uaukC3}#.*#uv=yd23NvkpuLgN:kPOBARb}:^IDT?%j'
-    # wiki.auth(username='anqxyr', password=pasw)
-    # wiki.edit_page(test_url,
-    #                'this is page was edit by a robot',
-    #                title='I am a Title too')
-    #Snapshot().take()
-    wiki = WikidotConnector('http://www.scp-wiki.net')
-    url = 'http://www.scp-wiki.net/scp-1600'
-    data = wiki.get_forum_thread(466570)
-    for i in data:
-        print(i.title, i.id, i.user, i.time)
+    Snapshot().take()
     pass
 
 
