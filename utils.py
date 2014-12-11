@@ -15,8 +15,9 @@ from crawler import *
 ###############################################################################
 
 DBPATH = "/home/anqxyr/heap/_scp/images.db"
-WIKI = WikidotConnector('http://scp-wiki.wikidot.com')
-#WIKI = WikidotConnector('http://scpsandbox2.wikidot.com')
+#WIKI = WikidotConnector('http://testwiki2.wikidot.com')
+#WIKI = WikidotConnector('http://scp-wiki.wikidot.com')
+WIKI = WikidotConnector('http://scpsandbox2.wikidot.com')
 
 ###############################################################################
 # Database ORM Classes
@@ -198,11 +199,60 @@ def check_formatting_errors():
             print('{}: {}'.format(page.url, msg))
 
 ###############################################################################
+# Tales Tagging Project
+###############################################################################
+
+
+def tag_all_tales():
+    url = "http://www.scp-wiki.net/system:page-tags/tag/tale"
+    soup = BeautifulSoup(WIKI.get_page_html(url))
+    n = 0
+    for i in soup.select("div.pages-list-item a"):
+        url = "http://www.scp-wiki.net{}".format(i["href"])
+        tag_one_tale(url)
+        n += 1
+        if n > 20:
+            return
+
+
+def tag_one_tale(url):
+    url = url.replace('http://www.scp-wiki.net', 'http://scp-wiki.wikidot.com')
+    html = WIKI.get_page_html(url)
+    pageid = WIKI.parse_pageid(html)
+    soup = BeautifulSoup(html)
+    old_tags = [a.string for a in soup.select("div.page-tags a")]
+    history = WIKI.get_page_history(pageid)
+    for i in reversed(list(history)):
+        if i['number'] == 0:
+            if i['user'] == '(account deleted)':
+                hidden_tag = '_del'
+            else:
+                hidden_tag = '_{}'.format(i['user'][0])
+            break
+    if not re.match(r'_[a-z]+', hidden_tag):
+        print('{:<80} non-alphabetic'.format(url))
+        return
+    if hidden_tag in old_tags:
+        print('{:<80} already tagged'.format(url))
+        return
+    new_tags = list(old_tags)
+    new_tags.append(hidden_tag)
+    #WIKI.set_page_tags(pageid, new_tags)
+    new_html = WIKI.get_page_html(url)
+    soup = BeautifulSoup(new_html)
+    final_tags = [a.string for a in soup.select("div.page-tags a")]
+    if final_tags == new_tags:
+        print('{:<80} success'.format(url))
+    else:
+        print('{:<80} failed'.format(url))
+
 
 
 def main():
     #fill_db()
-    check_formatting_errors()
+    pasw = '2A![]M/r}%t?,"GWQ.eH#uaukC3}#.*#uv=yd23NvkpuLgN:kPOBARb}:^IDT?%j'
+    WIKI.auth(username='anqxyr', password=pasw)
+    tag_one_tale('http://scpsandbox2.wikidot.com/anqxyr')
 
 
 if __name__ == "__main__":
