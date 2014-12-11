@@ -311,6 +311,13 @@ class WikidotConnector:
             'event': 'savePost'}
         self._module('Empty', None, **params)
 
+    def set_page_tags(self, pageid, tags):
+        params = {
+            'tags': '+'.join(tags),
+            'action': 'WikiPageAction',
+            'event': 'saveTags'}
+        self._module('Empty', pageid, **params)
+
 
 class Snapshot:
 
