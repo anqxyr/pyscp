@@ -16,7 +16,7 @@ from collections import namedtuple
 # Global Constants
 ###############################################################################
 
-DBPATH = "/home/anqxyr/heap/_scp/scp-wiki.2014-12-10.db"
+DBPATH = "/home/anqxyr/heap/_scp/scp-wiki.2014-12-13.db"
 
 ###############################################################################
 # Decorators
@@ -40,7 +40,7 @@ class DBPage(BaseModel):
     pageid = peewee.IntegerField(primary_key=True)
     url = peewee.CharField(unique=True)
     html = peewee.TextField()
-    thread_id = peewee.IntegerField()
+    thread_id = peewee.IntegerField(null=True)
 
 
 class DBRevision(BaseModel):
@@ -160,7 +160,7 @@ class WikidotConnector:
 
     def get_page_html(self, url):
         data = self.req.get(url)
-        if data.status_code != 404:
+        if data.status_code == 200:
             return data.text
         else:
             return None
@@ -193,9 +193,14 @@ class WikidotConnector:
             name='pagerate/WhoRatedPageModule',
             pageid=pageid)['body']
         soup = BeautifulSoup(data)
+        #print(soup.prettify())
         for i in soup.select('span.printuser'):
             user = i.text
             vote = i.next_sibling.next_sibling.text.strip()
+            if vote == '+':
+                vote = 1
+            else:
+                vote = -1
             yield {'user': user, 'vote': vote}
 
     def get_page_source(self, pageid):
@@ -228,9 +233,11 @@ class WikidotConnector:
 
     def parse_discussion_id(self, html):
         soup = BeautifulSoup(html)
-        link = soup.select('#discuss-button')[0]['href']
-        thread_id = re.search(r'/forum/t-([0-9]+)/', link).group(1)
-        return thread_id
+        try:
+            link = soup.select('#discuss-button')[0]['href']
+            return re.search(r'/forum/t-([0-9]+)/', link).group(1)
+        except (IndexError, AttributeError):
+            return None
 
     ###########################################################################
     # Read-only Methods
@@ -249,6 +256,8 @@ class WikidotConnector:
                 yield url
 
     def get_forum_thread(self, thread_id):
+        if thread_id is None:
+            return None
         data = self._module(
             name='forum/ForumViewThreadPostsModule',
             t=thread_id,
@@ -313,7 +322,7 @@ class WikidotConnector:
 
     def set_page_tags(self, pageid, tags):
         params = {
-            'tags': '+'.join(tags),
+            'tags': ' '.join(tags),
             'action': 'WikiPageAction',
             'event': 'saveTags'}
         self._module('Empty', pageid, **params)
@@ -410,13 +419,19 @@ class Snapshot:
     def _page_to_db(self, url):
         print("saving\t\t\t{}".format(url))
         html = self.wiki.get_page_html(url)
+        if html is None:
+            return
         pageid = self.wiki.parse_pageid(html)
         thread_id = self.wiki.parse_discussion_id(html)
-        DBPage.create(pageid=pageid, url=url, html=html, thread_id=thread_id)
+        #DBPage.create(
+        #    pageid=pageid,
+        #    url=url,
+        #    html=html,
+        #    thread_id=thread_id)
         history = list(self.wiki.get_page_history(pageid))
         for i in history:
             i['url'] = url
-        votes = self.wiki.get_page_votes(pageid)
+        votes = list(self.wiki.get_page_votes(pageid))
         for i in votes:
             i['url'] = url
         comments = self.wiki.get_forum_thread(thread_id)
@@ -459,16 +474,30 @@ class Snapshot:
         info_row.save()
 
     ###########################################################################
+    # Page Interface
+    ###########################################################################
+
+    def get_page_html(self, url):
+        try:
+            return DBPage.get(DBPage.url == url).html
+        except DBPage.DoesNotExist:
+            return None
+
+    ###########################################################################
     # Public Methods
     ###########################################################################
 
     def take(self):
         self._update_info("created")
+        for url in self.wiki.list_all_pages():
+            try:
+                self._page_to_db(url)
+            except Exception as e:
+                print('Error: failed to save page: {}'.format(url))
+                print(e)
         self._meta_tables()
         for tag in Snapshot.RTAGS:
             self._tag_to_db(tag)
-        for url in self.wiki.list_all_pages():
-            self._page_to_db(url)
 
     def pagedata(self, url):
         """Retrieve PageData from the database"""
@@ -522,6 +551,11 @@ class Page:
         self.url = url
 
     ###########################################################################
+    # Properties
+    ###########################################################################
+
+    def html(self):
+        return self.sn.get_page_html(self.url)
 
     def links(self):
         if self._raw_html is None:
@@ -597,7 +631,7 @@ def get_all():
 
 
 def main():
-    Snapshot().take()
+    #Snapshot().take()
     pass
 
 
