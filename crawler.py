@@ -99,10 +99,12 @@ class WikidotConnector:
             unix_time = rev_data[5].span['class'][1].split('_')[1]
             time = arrow.get(unix_time).format('YYYY-MM-DD HH:mm:ss')
             comment = rev_data[6].text
-            yield {'number': number,
-                   'user': user,
-                   'time': time,
-                   'comment': comment}
+            yield {
+                'pageid': pageid,
+                'number': number,
+                'user': user,
+                'time': time,
+                'comment': comment}
 
     def get_page_votes(self, pageid):
         if pageid is None:
@@ -111,7 +113,6 @@ class WikidotConnector:
             name='pagerate/WhoRatedPageModule',
             pageid=pageid)['body']
         soup = BeautifulSoup(data)
-        #print(soup.prettify())
         for i in soup.select('span.printuser'):
             user = i.text
             vote = i.next_sibling.next_sibling.text.strip()
@@ -119,7 +120,7 @@ class WikidotConnector:
                 vote = 1
             else:
                 vote = -1
-            yield {'user': user, 'vote': vote}
+            yield {'pageid': pageid, 'user': user, 'vote': vote}
 
     def get_page_source(self, pageid):
         if pageid is None:
@@ -248,46 +249,16 @@ class WikidotConnector:
 
 class Snapshot:
 
-    RTAGS = ['scp', 'tale', 'hub', 'joke', 'explained', 'goi-format']
-
-    def __init__(self):
-        db.connect()
-        db.create_tables([
-            DBPage,
-            DBRevision,
-            DBVote,
-            DBForumPost,
-            DBTitle,
-            DBImageInfo,
-            DBAuthorOverride,
-            DBTagPoint,
-            DBInfo], safe=True)
-        self.db = db
+    def __init__(self, dbpath):
+        orm.connect(dbpath)
+        self.db = orm.db
         self.wiki = WikidotConnector('http://www.scp-wiki.net')
 
     ###########################################################################
     # Scraping Methods
     ###########################################################################
 
-    def _scrape_scp_titles(self):
-        """Yield tuples of SCP articles' titles"""
-        series_urls = [
-            "http://www.scp-wiki.net/scp-series",
-            "http://www.scp-wiki.net/scp-series-2",
-            "http://www.scp-wiki.net/scp-series-3"]
-        for url in series_urls:
-            soup = BeautifulSoup(self.wiki.get_page_html(url))
-            articles = [i for i in soup.select("ul > li")
-                        if re.search("[SCP]+-[0-9]+", i.text)]
-            for i in articles:
-                url = "http://www.scp-wiki.net{}".format(i.a["href"])
-                try:
-                    skip, title = i.text.split(" - ", maxsplit=1)
-                except:
-                    skip, title = i.text.split(", ", maxsplit=1)
-                yield {"url": url, "skip": skip, "title": title}
-
-    def _scrape_image_whitelist(self):
+    def _scrape_images(self):
         url = "http://scpsandbox2.wikidot.com/ebook-image-whitelist"
         req = requests.Session()
         req.mount('http://', requests.adapters.HTTPAdapter(max_retries=5))
@@ -300,7 +271,7 @@ class Snapshot:
                    "image_source": image_source,
                    "image_data": image_data}
 
-    def _scrape_rewrites(self):
+    def _scrape_authors(self):
         url = "http://05command.wikidot.com/alexandra-rewrite"
         req = requests.Session()
         site = 'http://05command.wikidot.com'
@@ -316,80 +287,50 @@ class Snapshot:
                 override = False
             yield {"url": url, "author": author, "override": override}
 
-    def _scrape_tag(self, tag):
-        url = "http://www.scp-wiki.net/system:page-tags/tag/{}".format(tag)
-        soup = BeautifulSoup(self.wiki.get_page_html(url))
-        for i in soup.select("div.pages-list-item a"):
-            url = "http://www.scp-wiki.net{}".format(i["href"])
-            yield {"tag": tag, "url": url}
-
     ###########################################################################
     # Database Methods
     ###########################################################################
 
     def _insert_many(self, *tuples):
-        with db.transaction():
+        with self.db.transaction():
             for table, data in tuples:
                 data = list(data)
                 for idx in range(0, len(data), 500):
                     table.insert_many(data[idx:idx + 500]).execute()
 
-    def _page_to_db(self, url):
+    def _save_page_to_db(self, url):
         print("saving\t\t\t{}".format(url))
         html = self.wiki.get_page_html(url)
         if html is None:
             return
         pageid = self.wiki.parse_pageid(html)
         thread_id = self.wiki.parse_discussion_id(html)
-        #DBPage.create(
-        #    pageid=pageid,
-        #    url=url,
-        #    html=html,
-        #    thread_id=thread_id)
-        history = list(self.wiki.get_page_history(pageid))
-        for i in history:
-            i['url'] = url
-        votes = list(self.wiki.get_page_votes(pageid))
-        for i in votes:
-            i['url'] = url
+        orm.Page.create(
+            pageid=pageid,
+            url=url,
+            html=html,
+            thread_id=thread_id)
+        history = self.wiki.get_page_history(pageid)
+        votes = self.wiki.get_page_votes(pageid)
         comments = self.wiki.get_forum_thread(thread_id)
+        tags = [
+            {'tag': i, 'url': url}
+            for i in [
+                a.string for a in
+                BeautifulSoup(html).select("div.page-tags a")]]
         self._insert_many(
-            (DBRevision, history),
-            (DBVote, votes),
-            (DBForumPost, comments))
+            (orm.Revision, history),
+            (orm.Vote, votes),
+            (orm.ForumPost, comments),
+            (orm.Tag, tags))
 
-    def _meta_tables(self):
+    def _save_metadata_to_db(self):
         print("collecting metadata")
-        DBTitle.delete().execute()
-        DBImageInfo.delete().execute()
-        DBAuthorOverride.delete().execute()
-        titles = list(self._scrape_scp_titles())
-        images = list(self._scrape_image_whitelist())
-        rewrites = list(self._scrape_rewrites())
+        images = self._scrape_images()
+        authors = self._scrape_rewrites()
         self._insert_many(
-            (DBTitle, titles),
-            (DBImageInfo, images),
-            (DBAuthorOverride, rewrites))
-
-    def _tag_to_db(self, tag):
-        print("saving tag\t\t{}".format(tag))
-        tag_data = list(self._scrape_tag(tag))
-        urls = [i["url"] for i in tag_data]
-        DBTagPoint.delete().where(
-            (DBTagPoint.tag == tag) & ~ (DBTagPoint.url << urls))
-        old_urls = DBTagPoint.select(DBTagPoint.url)
-        new_data = [i for i in tag_data if i["url"] not in old_urls]
-        self._insert_many((DBTagPoint, new_data))
-
-    def _update_info(self, action):
-        try:
-            info_row = DBInfo.get()
-        except DBInfo.DoesNotExist:
-            info_row = DBInfo()
-        if action == "created":
-            time = arrow.utcnow().format("YYYY-MM-DD HH:mm:ss")
-            info_row.time_created = time
-        info_row.save()
+            (orm.Image, images),
+            (orm.Author, authors))
 
     ###########################################################################
     # Page Interface
@@ -397,34 +338,39 @@ class Snapshot:
 
     def get_page_html(self, url):
         try:
-            return DBPage.get(DBPage.url == url).html
-        except DBPage.DoesNotExist:
+            return orm.Page.get(orm.Page.url == url).html
+        except orm.Page.DoesNotExist:
             return None
 
-    def get_page_history(self, url):
-        Rev = namedtuple('Revision', 'number user time comment')
-        query = (DBRevision.select()
-                 .where(DBRevision.url == url)
-                 .order_by(DBRevision.number))
+    def get_page_history(self, pageid):
+        query = (orm.Revision.select()
+                 .where(orm.Revision.pageid == pageid)
+                 .order_by(orm.Revision.number))
         for i in query:
-            yield Rev(i.number, i.user, i.time, i.comment)
+            yield {
+                'pageid': pageid,
+                'number': i.number,
+                'user': i.user,
+                'time': i.time,
+                'comment': i.comment}
 
-    def get_page_votes(self, url):
-        Vote = namedtuple('Vote', 'user vote')
-        for i in DBVote.select().where(DBVote.url == url):
-            yield Vote(i.user, i.vote)
+    def get_page_votes(self, pageid):
+        for i in orm.Vote.select().where(orm.Vote.pageid == pageid):
+            yield {'pageid': pageid, 'user': i.user, 'vote': i.vote}
 
-    def get_page_comments(self, url):
-        try:
-            thread_id = DBPage.get(DBPage.url == url).thread_id
-        except DBPage.DoesNotExist:
-            return None
-        Post = namedtuple('ForumPost', 'id user time title content parent')
-        query = (DBForumPost.select()
-                 .where(DBForumPost.thread_id == thread_id)
-                 .order_by(DBForumPost.post_id))
+    def get_forum_thread(self, thread_id):
+        query = (orm.ForumPost.select()
+                 .where(orm.ForumPost.thread_id == thread_id)
+                 .order_by(orm.ForumPost.post_id))
         for i in query:
-            yield Post(i.post_id, i.user, i.time, i.title, i.content, i.parent)
+            yield {
+                'thread_id': thread_id,
+                'post_id': i.post_id,
+                'title': i.title,
+                'content': i.content,
+                'user': i.user,
+                'time': i.time,
+                'parent': i.parent}
 
     ###########################################################################
     # Public Methods
