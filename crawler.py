@@ -249,8 +249,8 @@ class WikidotConnector:
 
 class Snapshot:
 
-    def __init__(self, dbpath):
-        orm.connect(dbpath)
+    def __init__(self, dbname):
+        orm.connect(dbname)
         self.db = orm.db
         self.wiki = WikidotConnector('http://www.scp-wiki.net')
 
@@ -377,44 +377,42 @@ class Snapshot:
     ###########################################################################
 
     def take(self):
-        self._update_info("created")
         for url in self.wiki.list_all_pages():
             try:
-                self._page_to_db(url)
+                self._save_page_to_db(url)
             except Exception as e:
                 print('Error: failed to save page: {}'.format(url))
                 print(e)
-        self._meta_tables()
-        for tag in Snapshot.RTAGS:
-            self._tag_to_db(tag)
+        self._save_metadata_to_db()
 
-    def tag(self, tag):
+    def get_tag(self, tag):
         """Retrieve list of pages with the tag from the database"""
-        for i in DBTagPoint.select().where(DBTagPoint.tag == tag):
+        for i in orm.Tag.select().where(orm.Tag.tag == tag):
             yield i.url
 
-    def rewrite(self, url):
+    def get_author(self, url):
         rd = namedtuple('DBAuthorOverride', 'url author override')
         try:
-            data = DBAuthorOverride.get(DBAuthorOverride.url == url)
+            data = orm.Author.get(orm.Author.url == url)
             return rd(data.url, data.author, data.override)
-        except DBAuthorOverride.DoesNotExist:
+        except orm.Author.DoesNotExist:
             return False
 
-    def images(self):
+    def get_images(self):
         images = {}
         im = namedtuple('Image', 'source data')
-        for i in DBImageInfo.select():
+        for i in orm.Image.select():
             images[i.image_url] = im(i.image_source, i.image_data)
         return images
 
-    def title(self, url):
-        try:
-            return DBTitle.get(DBTitle.url == url).title
-        except DBTitle.DoesNotExist:
-            num = re.search('[0-9]+$', url).group(0)
-            skip = 'SCP-{}'.format(num)
-            return DBTitle.get(DBTitle.skip == skip).title
+    def list_all_pages(self):
+        count = orm.Page.select().count()
+        for n in range(1, count // 50 + 2):
+            query = orm.Page.select(
+                orm.Page.url).order_by(
+                orm.Page.url).paginate(n, 50)
+            for i in query:
+                yield Page(i.url)
 
 
 class Page:
@@ -488,7 +486,7 @@ class Page:
                     p.chapters = self.chapters
                 except AttributeError:
                     pass
-            except DBPage.DoesNotExist:
+            except orm.Page.DoesNotExist:
                 continue
             if p.data is not None:
                 lpages.append(p)
@@ -522,19 +520,9 @@ class Page:
 ###############################################################################
 
 
-def get_all():
-    count = DBPage.select().count()
-    for n in range(1, count // 50 + 2):
-        query = DBPage.select().order_by(DBPage.url).paginate(n, 50)
-        for i in query:
-            yield Page(i.url)
-
-
 def main():
-    data = Page('http://www.scp-wiki.net/scp-1600').comments
-    import pprint
-    pprint.pprint(data)
-    #Snapshot().take()
+    dbname = arrow.now().format('YYYY-MM-DD') + '.db'
+    Snapshot(dbname).take()
     pass
 
 
