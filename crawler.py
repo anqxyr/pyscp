@@ -5,96 +5,14 @@
 ###############################################################################
 
 import arrow
-import peewee
+import orm
 import re
 import requests
 
 from bs4 import BeautifulSoup
+from cached_property import cached_property
 from collections import namedtuple
 
-###############################################################################
-# Global Constants
-###############################################################################
-
-DBPATH = "/home/anqxyr/heap/_scp/scp-wiki.2014-12-13.db"
-
-###############################################################################
-# Decorators
-###############################################################################
-
-
-###############################################################################
-# Database ORM Classes
-###############################################################################
-
-db = peewee.SqliteDatabase(DBPATH)
-
-
-class BaseModel(peewee.Model):
-
-    class Meta:
-        database = db
-
-
-class DBPage(BaseModel):
-    pageid = peewee.IntegerField(primary_key=True)
-    url = peewee.CharField(unique=True)
-    html = peewee.TextField()
-    thread_id = peewee.IntegerField(null=True)
-
-
-class DBRevision(BaseModel):
-    url = peewee.CharField()
-    number = peewee.IntegerField()
-    user = peewee.CharField()
-    time = peewee.DateTimeField()
-    comment = peewee.CharField()
-
-
-class DBVote(BaseModel):
-    url = peewee.CharField()
-    user = peewee.CharField()
-    vote = peewee.IntegerField()
-
-
-class DBForumPost(BaseModel):
-    post_id = peewee.IntegerField(primary_key=True)
-    thread_id = peewee.IntegerField()
-    title = peewee.CharField()
-    content = peewee.TextField()
-    user = peewee.CharField()
-    time = peewee.DateTimeField()
-    parent = peewee.CharField(null=True)
-
-
-class DBTitle(BaseModel):
-    url = peewee.CharField(unique=True)
-    skip = peewee.CharField()
-    title = peewee.CharField()
-
-
-class DBImageInfo(BaseModel):
-    image_url = peewee.CharField(unique=True)
-    image_source = peewee.CharField()
-    image_data = peewee.BlobField()
-    # for future use:
-    #image_status = peewee.CharField()
-
-
-class DBAuthorOverride(BaseModel):
-    url = peewee.CharField(unique=True)
-    author = peewee.CharField()
-    override = peewee.BooleanField()
-
-
-class DBTagPoint(BaseModel):
-    tag = peewee.CharField(index=True)
-    url = peewee.CharField()
-
-
-class DBInfo(BaseModel):
-    time_created = peewee.DateTimeField()
-    time_updated = peewee.DateTimeField(null=True)
 
 ###############################################################################
 # Primary Classes
@@ -112,7 +30,7 @@ class WikidotConnector:
         self.req = req
 
     ###########################################################################
-    # Helper Methods
+    # Internal Methods
     ###########################################################################
 
     def _module(self, name, pageid, **kwargs):
@@ -295,7 +213,7 @@ class WikidotConnector:
         url = 'https://www.wikidot.com/default--flow/login__LoginPopupScreen'
         self.req.post(url, data=payload)
 
-    def edit(self, pageid, url, source, title, comments=None):
+    def edit_page(self, pageid, url, source, title, comments=None):
         wiki_page = url.split('/')[-1]
         lock = self._module('edit/PageEditModule', pageid, mode='page')
         params = {
@@ -310,7 +228,7 @@ class WikidotConnector:
             'wiki_page': wiki_page}
         self._module('Empty', pageid, **params)
 
-    def comment(self, thread_id, source, title=None):
+    def post_in_thread(self, thread_id, source, title=None):
         params = {
             'threadId': thread_id,
             'parentId': None,
@@ -483,6 +401,31 @@ class Snapshot:
         except DBPage.DoesNotExist:
             return None
 
+    def get_page_history(self, url):
+        Rev = namedtuple('Revision', 'number user time comment')
+        query = (DBRevision.select()
+                 .where(DBRevision.url == url)
+                 .order_by(DBRevision.number))
+        for i in query:
+            yield Rev(i.number, i.user, i.time, i.comment)
+
+    def get_page_votes(self, url):
+        Vote = namedtuple('Vote', 'user vote')
+        for i in DBVote.select().where(DBVote.url == url):
+            yield Vote(i.user, i.vote)
+
+    def get_page_comments(self, url):
+        try:
+            thread_id = DBPage.get(DBPage.url == url).thread_id
+        except DBPage.DoesNotExist:
+            return None
+        Post = namedtuple('ForumPost', 'id user time title content parent')
+        query = (DBForumPost.select()
+                 .where(DBForumPost.thread_id == thread_id)
+                 .order_by(DBForumPost.post_id))
+        for i in query:
+            yield Post(i.post_id, i.user, i.time, i.title, i.content, i.parent)
+
     ###########################################################################
     # Public Methods
     ###########################################################################
@@ -498,15 +441,6 @@ class Snapshot:
         self._meta_tables()
         for tag in Snapshot.RTAGS:
             self._tag_to_db(tag)
-
-    def pagedata(self, url):
-        """Retrieve PageData from the database"""
-        try:
-            data = DBPage.get(DBPage.url == url)
-        except DBPage.DoesNotExist as e:
-            raise e
-        pd = namedtuple("PageData", "html history votes")
-        return pd(data.html, data.history, data.votes)
 
     def tag(self, tag):
         """Retrieve list of pages with the tag from the database"""
@@ -554,9 +488,28 @@ class Page:
     # Properties
     ###########################################################################
 
+    @cached_property
     def html(self):
         return self.sn.get_page_html(self.url)
 
+    @cached_property
+    def history(self):
+        # TODO: change to pageid
+        return list(self.sn.get_page_history(self.url))
+
+    @cached_property
+    def votes(self):
+        return list(self.sn.get_page_votes(self.url))
+
+    @cached_property
+    def rating(self):
+        return sum(i.vote for i in self.votes)
+
+    @cached_property
+    def comments(self):
+        return list(self.sn.get_page_comments(self.url))
+
+    @cached_property
     def links(self):
         if self._raw_html is None:
             return []
@@ -574,6 +527,7 @@ class Page:
             links.append(url)
         return links
 
+    @cached_property
     def children(self):
         if not hasattr(self, "tags"):
             return []
@@ -631,6 +585,9 @@ def get_all():
 
 
 def main():
+    data = Page('http://www.scp-wiki.net/scp-1600').comments
+    import pprint
+    pprint.pprint(data)
     #Snapshot().take()
     pass
 
