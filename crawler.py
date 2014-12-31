@@ -6,13 +6,14 @@
 
 import arrow
 import orm
+import queue
 import re
 import requests
+import threading
 
 from bs4 import BeautifulSoup
 from cached_property import cached_property
 from collections import namedtuple
-
 
 ###############################################################################
 # Primary Classes
@@ -92,6 +93,7 @@ class WikidotConnector:
             page=1,
             perpage=1000000)['body']
         soup = BeautifulSoup(data)
+        history = []
         for i in soup.select('tr')[1:]:
             rev_data = i.select('td')
             number = int(rev_data[0].text.strip('.'))
@@ -99,12 +101,13 @@ class WikidotConnector:
             unix_time = rev_data[5].span['class'][1].split('_')[1]
             time = arrow.get(unix_time).format('YYYY-MM-DD HH:mm:ss')
             comment = rev_data[6].text
-            yield {
+            history.append({
                 'pageid': pageid,
                 'number': number,
                 'user': user,
                 'time': time,
-                'comment': comment}
+                'comment': comment})
+        return history
 
     def get_page_votes(self, pageid):
         if pageid is None:
@@ -113,6 +116,7 @@ class WikidotConnector:
             name='pagerate/WhoRatedPageModule',
             pageid=pageid)['body']
         soup = BeautifulSoup(data)
+        votes = []
         for i in soup.select('span.printuser'):
             user = i.text
             vote = i.next_sibling.next_sibling.text.strip()
@@ -120,7 +124,8 @@ class WikidotConnector:
                 vote = 1
             else:
                 vote = -1
-            yield {'pageid': pageid, 'user': user, 'vote': vote}
+            votes.append({'pageid': pageid, 'user': user, 'vote': vote})
+        return votes
 
     def get_page_source(self, pageid):
         if pageid is None:
@@ -191,6 +196,7 @@ class WikidotConnector:
         for post in self._parse_forum_thread_page(data):
             post['thread_id'] = thread_id
             yield post
+        posts = []
         for n in range(2, num_of_pages + 1):
             data = self._module(
                 name='forum/ForumViewThreadPostsModule',
@@ -199,7 +205,8 @@ class WikidotConnector:
                 pageNo=n)['body']
             for post in self._parse_forum_thread_page(data):
                 post['thread_id'] = thread_id
-                yield post
+                posts.append(post)
+        return posts
 
     ###########################################################################
     # Active Methods
@@ -249,9 +256,11 @@ class WikidotConnector:
 
 class Snapshot:
 
-    def __init__(self, dbname):
+    def __init__(self, dbname, thread_limit=10):
         orm.connect(dbname)
         self.db = orm.db
+        self.thread_limit = thread_limit
+        self.queue = queue.Queue()
         self.wiki = WikidotConnector('http://www.scp-wiki.net')
 
     ###########################################################################
@@ -267,9 +276,9 @@ class Snapshot:
             image_url = i.select("td")[0].text
             image_source = i.select("td")[1].text
             image_data = req.get(image_url).content
-            yield {"image_url": image_url,
-                   "image_source": image_source,
-                   "image_data": image_data}
+            yield {"url": image_url,
+                   "source": image_source,
+                   "data": image_data}
 
     def _scrape_authors(self):
         url = "http://05command.wikidot.com/alexandra-rewrite"
@@ -291,46 +300,85 @@ class Snapshot:
     # Database Methods
     ###########################################################################
 
-    def _insert_many(self, *tuples):
-        with self.db.transaction():
-            for table, data in tuples:
-                data = list(data)
-                for idx in range(0, len(data), 500):
-                    table.insert_many(data[idx:idx + 500]).execute()
+    def _insert_many(self, table, data):
+        data = list(data)
+        for idx in range(0, len(data), 500):
+            with self.db.transaction():
+                table.insert_many(data[idx:idx + 500]).execute()
 
-    def _save_page_to_db(self, url):
+    def _save_page_to_db(self, url, include_comments):
         print("saving\t\t\t{}".format(url))
         html = self.wiki.get_page_html(url)
         if html is None:
             return
         pageid = self.wiki.parse_pageid(html)
         thread_id = self.wiki.parse_discussion_id(html)
-        orm.Page.create(
-            pageid=pageid,
-            url=url,
-            html=html,
-            thread_id=thread_id)
+        self.queue.put({'func': orm.Page.create,
+                        'args': (),
+                        'kwargs': {
+                            'pageid': pageid,
+                            'url': url,
+                            'html': html,
+                            'thread_id': thread_id}})
+        return
         history = self.wiki.get_page_history(pageid)
+        self.queue.put({'func': self._insert_many,
+                        'args': (orm.Revision, history),
+                        'kwargs': {}})
         votes = self.wiki.get_page_votes(pageid)
-        comments = self.wiki.get_forum_thread(thread_id)
+        self.queue.put({'func': self._insert_many,
+                        'args': (orm.Vote, votes),
+                        'kwargs': {}})
+        if include_comments:
+            comments = self.wiki.get_forum_thread(thread_id)
+            self.queue.put({'func': self._insert_many,
+                            'args': (orm.ForumPost, comments),
+                            'kwargs': {}})
         tags = [
             {'tag': i, 'url': url}
             for i in [
                 a.string for a in
                 BeautifulSoup(html).select("div.page-tags a")]]
-        self._insert_many(
-            (orm.Revision, history),
-            (orm.Vote, votes),
-            (orm.ForumPost, comments),
-            (orm.Tag, tags))
+        self.queue.put({'func': self._insert_many,
+                        'args': (orm.Tag, tags),
+                        'kwargs': {}})
 
-    def _save_metadata_to_db(self):
-        print("collecting metadata")
-        images = self._scrape_images()
-        authors = self._scrape_rewrites()
-        self._insert_many(
-            (orm.Image, images),
-            (orm.Author, authors))
+    ###########################################################################
+    # Threading Methods
+    ###########################################################################
+    # Since most of the time taken by snapshot creation is spent waiting for
+    # responses from wikidot servers to http get/post requests, it's possible
+    # to speed up this process by scraping several pages simultaneously in
+    # parallel threads.
+    # However, concurrent writes to the database are either impossible, in
+    # case of sqlite, or may cause unobvious issues later on. As such, after
+    # scraping the data, we will delegate saving it to the database to another
+    # thread, which will perform all write operations sequentially.
+    ###########################################################################
+
+    def _threaded_save(self, urls, include_comments):
+        for url in urls:
+            try:
+                self._save_page_to_db(url, include_comments)
+            except Exception as e:
+                print('Error: failed to save page: {}'.format(url))
+                #raise e
+                print(e)
+
+    def _process_queue(self):
+        n = 0
+        while True:
+            item = self.queue.get()
+            func = item['func']
+            args = item['args']
+            kwargs = item['kwargs']
+            print('processing queue item #{}'.format(n))
+            try:
+                func(*args, **kwargs)
+            except Exception as e:
+                print(e)
+            self.queue.task_done()
+            n += 1
 
     ###########################################################################
     # Page Interface
@@ -376,14 +424,28 @@ class Snapshot:
     # Public Methods
     ###########################################################################
 
-    def take(self):
-        for url in self.wiki.list_all_pages():
-            try:
-                self._save_page_to_db(url)
-            except Exception as e:
-                print('Error: failed to save page: {}'.format(url))
-                print(e)
-        self._save_metadata_to_db()
+    def take(self, include_comments=False):
+        orm.purge()
+        all_pages = list(self.wiki.list_all_pages())
+        self.threads = []
+        for i in range(self.thread_limit):
+            new_thread = threading.Thread(
+                target=self._threaded_save,
+                args=(
+                    all_pages[i::self.thread_limit],
+                    include_comments))
+            new_thread.start()
+            self.threads.append(new_thread)
+        db_writer = threading.Thread(target=self._process_queue)
+        db_writer.daemon = True
+        db_writer.start()
+        for thread in self.threads:
+            thread.join()
+        print(arrow.now())
+        self.queue.join()
+        print("collecting metadata")
+        self._insert_many(orm.Image, self._scrape_images())
+        self._insert_many(orm.Author, self._scrape_authors())
 
     def get_tag(self, tag):
         """Retrieve list of pages with the tag from the database"""
@@ -419,7 +481,7 @@ class Page:
 
     """Scrape and store contents and metadata of a page."""
 
-    sn = Snapshot()   # Snapshot instance used to init the pages
+    sn = None   # Snapshot instance used to init the pages
 
     ###########################################################################
     # Constructors
@@ -521,8 +583,10 @@ class Page:
 
 
 def main():
-    dbname = arrow.now().format('YYYY-MM-DD') + '.db'
+    print(arrow.now())
+    dbname = 'scp-wiki.{}.db'.format(arrow.now().format('YYYY-MM-DD'))
     Snapshot(dbname).take()
+    print(arrow.now())
     pass
 
 
