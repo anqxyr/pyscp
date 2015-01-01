@@ -439,6 +439,13 @@ class Snapshot:
             votes.append({'pageid': pageid, 'user': i.user, 'vote': i.vote})
         return votes
 
+    def get_page_tags(self, url):
+        query = orm.Tag.select().where(orm.Tag.url == url)
+        tags = []
+        for tag in query:
+            tags.append(tag.tag)
+        return tags
+
     def get_forum_thread(self, thread_id):
         query = (orm.ForumPost.select()
                  .where(orm.ForumPost.thread_id == thread_id)
@@ -527,7 +534,49 @@ class Page:
     ###########################################################################
 
     def __init__(self, url=None):
+        prefix = 'http://www.scp-wiki.net/'
+        if not url.startswith(prefix):
+            url = prefix + url
         self.url = url
+
+    ###########################################################################
+    # Internal Methods
+    ###########################################################################
+
+    def _get_children_if_skip(self):
+        children = []
+        for url in self.links:
+            try:
+                p = Page(url)
+            except orm.Page.DoesNotExist:
+                continue
+            if 'supplement' in p.tags or 'splash' in p.tags:
+                children.append(p.url)
+        return children
+
+    def _get_children_if_hub(self):
+        maybe_children = []
+        confirmed_children = []
+        for url in self.links:
+            try:
+                p = Page(url)
+            except orm.Page.DoesNotExist:
+                continue
+            if set(p.tags) & set(['tale', 'goi-format', 'goi2014']):
+                maybe_children.append(p.url)
+            if self.url in p.links:
+                confirmed_children.append(p.url)
+            else:
+                crumb = BeautifulSoup(p.html).select('#breadcrumbs a')
+                if crumb:
+                    parent = crumb[-1]
+                    parent = 'http://www.scp-wiki.net{}'.format(parent['href'])
+                    if self.url == parent:
+                        confirmed_children.append(p.url)
+        if confirmed_children:
+            return confirmed_children
+        else:
+            return maybe_children
 
     ###########################################################################
     # Properties
@@ -573,6 +622,10 @@ class Page:
                    if vote.user != '(account deleted)')
 
     @cached_property
+    def tags(self):
+        return self.sn.get_page_tags(self.url)
+
+    @cached_property
     def comments(self):
         data = self.sn.get_forum_thread(self._thread_id)
         com = namedtuple('Comment', 'post_id parent title user time content')
@@ -589,64 +642,26 @@ class Page:
 
     @cached_property
     def links(self):
-        if self._raw_html is None:
+        if self.html is None:
             return []
-        links = []
-        soup = BeautifulSoup(self._raw_html)
-        for a in soup.select("#page-content a"):
-            if not a.has_attr("href") or a["href"][0] != "/":
+        links = set()
+        for a in BeautifulSoup(self.html).select('#page-content a'):
+            not_a_link = 'href' not in a.attrs
+            is_absolute_link = a['href'][0] != '/'
+            is_image_link = a['href'][-4:] in ['.png', '.jpg', '.gif']
+            if not_a_link or is_absolute_link or is_image_link:
                 continue
-            if a["href"][-4:] in [".png", ".jpg", ".gif"]:
-                continue
-            url = "http://www.scp-wiki.net{}".format(a["href"])
+            url = 'http://www.scp-wiki.net{}'.format(a['href'])
             url = url.rstrip("|")
-            if url in links:
-                continue
-            links.append(url)
-        return links
+            links.add(url)
+        return list(links)
 
     @cached_property
     def children(self):
-        if not hasattr(self, "tags"):
-            return []
-        if not any(i in self.tags for i in [
-                'scp', 'hub', 'goi2014', 'splash']):
-            return []
-        lpages = []
-        for url in self.links():
-            try:
-                p = Page(url)
-                try:
-                    p.chapters = self.chapters
-                except AttributeError:
-                    pass
-            except orm.Page.DoesNotExist:
-                continue
-            if p.data is not None:
-                lpages.append(p)
-        if any(i in self.tags for i in ["scp", "splash"]):
-            mpages = [i for i in lpages if
-                      any(k in i.tags for k in ["supplement", "splash"])]
-            return mpages
-        if "hub" in self.tags and any(i in self.tags
-                                      for i in ["tale", "goi2014"]):
-            mpages = [i for i in lpages if any(
-                k in i.tags for k in ["tale", "goi-format", "goi2014"])]
-
-            def backlinks(page, child):
-                if page.url in child.links():
-                    return True
-                soup = BeautifulSoup(child._raw_html)
-                if soup.select("#breadcrumbs a"):
-                    crumb = soup.select("#breadcrumbs a")[-1]
-                    crumb = "http://www.scp-wiki.net{}".format(crumb["href"])
-                    if self.url == crumb:
-                        return True
-                return False
-            if any(backlinks(self, p) for p in mpages):
-                return [p for p in mpages if backlinks(self, p)]
-            else:
-                return mpages
+        if 'scp' in self.tags or 'splash' in self.tags:
+            return self._get_children_if_skip()
+        if 'hub' in self.tags and (set(self.tags) & set(['tale', 'goi2014'])):
+            return self._get_children_if_hub()
         return []
 
 ###############################################################################
@@ -671,6 +686,9 @@ def enable_logging():
 def main():
     #dbname = 'scp-wiki.{}.db'.format(arrow.now().format('YYYY-MM-DD'))
     #Snapshot(dbname).take()
+    Page.sn = Snapshot('scp-wiki.2015-01-01.db')
+    p = Page('scp-026')
+    print(p.children)
     pass
 
 
