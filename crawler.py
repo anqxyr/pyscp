@@ -188,7 +188,7 @@ class WikidotConnector:
         counter = soup.select('div.pager span.pager-no')[0].text
         last_page = int(counter.split(' ')[-1])
         for index in range(1, last_page + 1):
-            logger.info('downloading index: {}/{}'.format(index, last_page))
+            logger.info('Downloading index: {}/{}'.format(index, last_page))
             soup = BeautifulSoup(self.get_page_html(baseurl.format(index)))
             pages = soup.select('div.list-pages-item a')
             for link in pages:
@@ -323,10 +323,10 @@ class Snapshot:
                 table.insert_many(data[idx:idx + 500]).execute()
 
     def _save_page_to_db(self, url):
-        logger.info('saving page: {}'.format(url))
+        logger.info('Saving page: {}'.format(url))
         html = self.wiki.get_page_html(url)
         if html is None:
-            msg = 'page {} is empty and will not be saved.'
+            msg = 'Page {} is empty and will not be saved.'
             logger.warning(msg.format(url))
             return
         pageid = self.wiki.parse_pageid(html)
@@ -359,7 +359,7 @@ class Snapshot:
         self.queue.put({'func': self._insert_many,
                         'args': (orm.Tag, tags),
                         'kwargs': {}})
-        logger.debug('finished saveing page: {}'.format(url))
+        logger.debug('Finished saving page: {}'.format(url))
 
     ###########################################################################
     # Threading Methods
@@ -386,7 +386,7 @@ class Snapshot:
         while True:
             with self.db.transaction():
                 for _ in range(500):
-                    logger.debug('processing queue item #{}'.format(n))
+                    logger.debug('Processing queue item #{}'.format(n))
                     n += 1
                     item = self.queue.get()
                     func = item['func']
@@ -623,19 +623,8 @@ def enable_logging():
 
 
 def main():
-    #sn = Snapshot('scp-wiki.2015-01-01.db')
-    #Page.sn = sn
-    #p = Page('http://www.scp-wiki.net/scp-1600')
-    #orm.connect('scp-wiki.2015-01-01.db')
-    #thread = orm.Page.get(
-    #    orm.Page.url == 'http://www.scp-wiki.net/scp-1600').thread_id
-    #query = orm.ForumPost.select().where(orm.ForumPost.thread_id == thread)
-    #print(query.count())
-    #for i in query:
-    #    print(i.content)
-    #    print()
-    dbname = 'scp-wiki.{}.db'.format(arrow.now().format('YYYY-MM-DD'))
-    Snapshot(dbname).take()
+    #dbname = 'scp-wiki.{}.db'.format(arrow.now().format('YYYY-MM-DD'))
+    #Snapshot(dbname).take()
     pass
 
 
