@@ -44,7 +44,9 @@ class WikidotConnector:
 
     def _module(self, name, pageid, **kwargs):
         '''Retrieve data from the specified wikidot module.'''
-        logger.debug('_module call: {} ({})'.format(name, pageid))
+        msg = '_module call: {} ({}) ({})'
+        kwstring = ', '.join('{}: {}'.format(k, v) for k, v in kwargs.items())
+        logger.debug(msg.format(name, pageid, kwstring))
         headers = {'Content-Type': 'application/x-www-form-urlencoded;'}
         payload = {
             'page_id': pageid,
@@ -62,6 +64,7 @@ class WikidotConnector:
 
     def _parse_forum_thread_page(self, page_html):
         soup = BeautifulSoup(page_html)
+        posts = []
         for e in soup.select('div.post'):
             post_id = e['id'].split('-')[1]
             title = e.select('div.title')[0].text.strip()
@@ -74,23 +77,26 @@ class WikidotConnector:
                 parent = granpa.select('div.post')[0]['id'].split('-')[1]
             else:
                 parent = None
-            yield {
+            posts.append({
                 'post_id': post_id,
                 'title': title,
                 'content': content,
                 'user': user,
                 'time': time,
-                'parent': parent}
+                'parent': parent})
+        return posts
 
     ###########################################################################
     # Page Interface Methods
     ###########################################################################
 
     def get_page_html(self, url):
-        data = self.req.get(url)
+        data = self.req.get(url, allow_redirects=False)
         if data.status_code == 200:
             return data.text
         else:
+            msg = 'Page {} returned http status code {}'
+            logger.warning(msg.format(url, data.status_code))
             return None
 
     def get_page_history(self, pageid):
@@ -191,7 +197,7 @@ class WikidotConnector:
 
     def get_forum_thread(self, thread_id):
         if thread_id is None:
-            return None
+            return []
         data = self._module(
             name='forum/ForumViewThreadPostsModule',
             t=thread_id,
@@ -203,10 +209,10 @@ class WikidotConnector:
             num_of_pages = int(pager.split(' of ')[1])
         except IndexError:
             num_of_pages = 1
+        posts = []
         for post in self._parse_forum_thread_page(data):
             post['thread_id'] = thread_id
-            yield post
-        posts = []
+            posts.append(post)
         for n in range(2, num_of_pages + 1):
             data = self._module(
                 name='forum/ForumViewThreadPostsModule',
@@ -334,7 +340,6 @@ class Snapshot:
                             'url': url,
                             'html': html,
                             'thread_id': thread_id}})
-        return
         history = self.wiki.get_page_history(pageid)
         self.queue.put({'func': self._insert_many,
                         'args': (orm.Revision, history),
@@ -343,7 +348,7 @@ class Snapshot:
         self.queue.put({'func': self._insert_many,
                         'args': (orm.Vote, votes),
                         'kwargs': {}})
-        comments = self.wiki.get_forum_thread(thread_id)
+        comments = list(self.wiki.get_forum_thread(thread_id))
         self.queue.put({'func': self._insert_many,
                         'args': (orm.ForumPost, comments),
                         'kwargs': {}})
@@ -354,6 +359,7 @@ class Snapshot:
         self.queue.put({'func': self._insert_many,
                         'args': (orm.Tag, tags),
                         'kwargs': {}})
+        logger.debug('finished saveing page: {}'.format(url))
 
     ###########################################################################
     # Threading Methods
@@ -379,7 +385,7 @@ class Snapshot:
         n = 1
         while True:
             with self.db.transaction():
-                for _ in range(50):
+                for _ in range(500):
                     logger.debug('processing queue item #{}'.format(n))
                     n += 1
                     item = self.queue.get()
@@ -521,7 +527,7 @@ class Page:
     @cached_property
     def history(self):
         # TODO: change to pageid
-        return list(self.sn.get_page_history(self.url))
+        return list(self.sn.get_page_history(self._pageid))
 
     @cached_property
     def votes(self):
@@ -617,6 +623,17 @@ def enable_logging():
 
 
 def main():
+    #sn = Snapshot('scp-wiki.2015-01-01.db')
+    #Page.sn = sn
+    #p = Page('http://www.scp-wiki.net/scp-1600')
+    #orm.connect('scp-wiki.2015-01-01.db')
+    #thread = orm.Page.get(
+    #    orm.Page.url == 'http://www.scp-wiki.net/scp-1600').thread_id
+    #query = orm.ForumPost.select().where(orm.ForumPost.thread_id == thread)
+    #print(query.count())
+    #for i in query:
+    #    print(i.content)
+    #    print()
     dbname = 'scp-wiki.{}.db'.format(arrow.now().format('YYYY-MM-DD'))
     Snapshot(dbname).take()
     pass
