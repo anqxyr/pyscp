@@ -412,35 +412,48 @@ class Snapshot:
         except orm.Page.DoesNotExist:
             return None
 
+    def get_pageid(self, url):
+        return orm.Page.get(orm.Page.url == url).pageid
+
+    def get_thread_id(self, url):
+        return orm.Page.get(orm.Page.url == url).thread_id
+
     def get_page_history(self, pageid):
         query = (orm.Revision.select()
                  .where(orm.Revision.pageid == pageid)
                  .order_by(orm.Revision.number))
+        history = []
         for i in query:
-            yield {
+            history.append({
                 'pageid': pageid,
                 'number': i.number,
                 'user': i.user,
                 'time': i.time,
-                'comment': i.comment}
+                'comment': i.comment})
+        return history
 
     def get_page_votes(self, pageid):
-        for i in orm.Vote.select().where(orm.Vote.pageid == pageid):
-            yield {'pageid': pageid, 'user': i.user, 'vote': i.vote}
+        query = orm.Vote.select().where(orm.Vote.pageid == pageid)
+        votes = []
+        for i in query:
+            votes.append({'pageid': pageid, 'user': i.user, 'vote': i.vote})
+        return votes
 
     def get_forum_thread(self, thread_id):
         query = (orm.ForumPost.select()
                  .where(orm.ForumPost.thread_id == thread_id)
                  .order_by(orm.ForumPost.post_id))
+        posts = []
         for i in query:
-            yield {
+            posts.append({
                 'thread_id': thread_id,
                 'post_id': i.post_id,
                 'title': i.title,
                 'content': i.content,
                 'user': i.user,
                 'time': i.time,
-                'parent': i.parent}
+                'parent': i.parent})
+        return posts
 
     ###########################################################################
     # Public Methods
@@ -525,21 +538,54 @@ class Page:
         return self.sn.get_page_html(self.url)
 
     @cached_property
+    def _pageid(self):
+        return self.sn.get_pageid(self.url)
+
+    @cached_property
+    def _thread_id(self):
+        return self.sn.get_thread_id(self.url)
+
+    @cached_property
     def history(self):
-        # TODO: change to pageid
-        return list(self.sn.get_page_history(self._pageid))
+        data = self.sn.get_page_history(self._pageid)
+        rev = namedtuple('Revision', 'number user time comment')
+        history = []
+        for i in data:
+            history.append(rev(
+                i['number'],
+                i['user'],
+                i['time'],
+                i['comment']))
+        return history
 
     @cached_property
     def votes(self):
-        return list(self.sn.get_page_votes(self.url))
+        data = self.sn.get_page_votes(self._pageid)
+        vote = namedtuple('Vote', 'user value')
+        votes = []
+        for i in data:
+            votes.append(vote(i['user'], i['vote']))
+        return votes
 
     @cached_property
     def rating(self):
-        return sum(i.vote for i in self.votes)
+        return sum(vote.value for vote in self.votes
+                   if vote.user != '(account deleted)')
 
     @cached_property
     def comments(self):
-        return list(self.sn.get_page_comments(self.url))
+        data = self.sn.get_forum_thread(self._thread_id)
+        com = namedtuple('Comment', 'post_id parent title user time content')
+        comments = []
+        for i in data:
+            comments.append(com(
+                i['post_id'],
+                i['parent'],
+                i['title'],
+                i['user'],
+                i['time'],
+                i['content']))
+        return comments
 
     @cached_property
     def links(self):
