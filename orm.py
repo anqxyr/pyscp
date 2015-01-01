@@ -4,19 +4,23 @@
 # Module Imports
 ###############################################################################
 
+import logging
 import peewee
+
+from os import path
 
 ###############################################################################
 # Global Constants
 ###############################################################################
 
-DBPATH = "/home/anqxyr/heap/_scp/scp-wiki.2014-12-13.db"
+DBPATH = '/home/anqxyr/heap/_scp/'
+logger = logging.getLogger('scp.crawler.orm')
 
 ###############################################################################
 # Database ORM Classes
 ###############################################################################
 
-db = peewee.SqliteDatabase(DBPATH)
+db = peewee.SqliteDatabase(None)
 
 
 class BaseModel(peewee.Model):
@@ -73,3 +77,26 @@ class Author(BaseModel):
 class Tag(BaseModel):
     tag = peewee.CharField(index=True)
     url = peewee.CharField()
+
+###############################################################################
+# Helper Functions
+###############################################################################
+
+TABLES = [Page, Revision, Vote, ForumPost, Image, Author, Tag]
+
+
+def connect(filename):
+    logger.info('Connecting to the database.')
+    dbpath = path.join(DBPATH, filename)
+    logger.info('Database is located at {} .'.format(dbpath))
+    db.init(dbpath)
+    db.connect()
+    logger.info('Creating database tables.')
+    db.create_tables(TABLES, safe=True)
+
+
+def purge():
+    logger.info('Purging the database.')
+    for i in TABLES:
+        db.drop_table(i)
+    db.create_tables(TABLES)

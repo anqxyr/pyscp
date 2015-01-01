@@ -5,6 +5,7 @@
 ###############################################################################
 
 import arrow
+import logging
 import orm
 import queue
 import re
@@ -14,6 +15,13 @@ import threading
 from bs4 import BeautifulSoup
 from cached_property import cached_property
 from collections import namedtuple
+
+###############################################################################
+# Global Constants And Variables
+###############################################################################
+
+logger = logging.getLogger('scp.crawler')
+logger.setLevel(logging.DEBUG)
 
 ###############################################################################
 # Primary Classes
@@ -35,7 +43,8 @@ class WikidotConnector:
     ###########################################################################
 
     def _module(self, name, pageid, **kwargs):
-        """Retrieve data from the specified wikidot module."""
+        '''Retrieve data from the specified wikidot module.'''
+        logger.debug('_module call: {} ({})'.format(name, pageid))
         headers = {'Content-Type': 'application/x-www-form-urlencoded;'}
         payload = {
             'page_id': pageid,
@@ -173,6 +182,7 @@ class WikidotConnector:
         counter = soup.select('div.pager span.pager-no')[0].text
         last_page = int(counter.split(' ')[-1])
         for index in range(1, last_page + 1):
+            logger.info('downloading index: {}/{}'.format(index, last_page))
             soup = BeautifulSoup(self.get_page_html(baseurl.format(index)))
             pages = soup.select('div.list-pages-item a')
             for link in pages:
@@ -256,7 +266,7 @@ class WikidotConnector:
 
 class Snapshot:
 
-    def __init__(self, dbname, thread_limit=10):
+    def __init__(self, dbname, thread_limit=18):
         orm.connect(dbname)
         self.db = orm.db
         self.thread_limit = thread_limit
@@ -306,13 +316,17 @@ class Snapshot:
             with self.db.transaction():
                 table.insert_many(data[idx:idx + 500]).execute()
 
-    def _save_page_to_db(self, url, include_comments):
-        print("saving\t\t\t{}".format(url))
+    def _save_page_to_db(self, url):
+        logger.info('saving page: {}'.format(url))
         html = self.wiki.get_page_html(url)
         if html is None:
+            msg = 'page {} is empty and will not be saved.'
+            logger.warning(msg.format(url))
             return
         pageid = self.wiki.parse_pageid(html)
         thread_id = self.wiki.parse_discussion_id(html)
+        soup = BeautifulSoup(html)
+        html = str(soup.select('#main-content')[0])
         self.queue.put({'func': orm.Page.create,
                         'args': (),
                         'kwargs': {
@@ -329,16 +343,14 @@ class Snapshot:
         self.queue.put({'func': self._insert_many,
                         'args': (orm.Vote, votes),
                         'kwargs': {}})
-        if include_comments:
-            comments = self.wiki.get_forum_thread(thread_id)
-            self.queue.put({'func': self._insert_many,
-                            'args': (orm.ForumPost, comments),
-                            'kwargs': {}})
+        comments = self.wiki.get_forum_thread(thread_id)
+        self.queue.put({'func': self._insert_many,
+                        'args': (orm.ForumPost, comments),
+                        'kwargs': {}})
         tags = [
             {'tag': i, 'url': url}
-            for i in [
-                a.string for a in
-                BeautifulSoup(html).select("div.page-tags a")]]
+            for i in [a.string for a in
+                      BeautifulSoup(html).select("div.page-tags a")]]
         self.queue.put({'func': self._insert_many,
                         'args': (orm.Tag, tags),
                         'kwargs': {}})
@@ -356,29 +368,33 @@ class Snapshot:
     # thread, which will perform all write operations sequentially.
     ###########################################################################
 
-    def _threaded_save(self, urls, include_comments):
+    def _threaded_save(self, urls):
         for url in urls:
             try:
-                self._save_page_to_db(url, include_comments)
-            except Exception as e:
-                print('Error: failed to save page: {}'.format(url))
-                #raise e
-                print(e)
+                self._save_page_to_db(url)
+            except Exception:
+                logger.exception('Failed to save page: {}'.format(url))
 
     def _process_queue(self):
-        n = 0
+        n = 1
         while True:
-            item = self.queue.get()
-            func = item['func']
-            args = item['args']
-            kwargs = item['kwargs']
-            print('processing queue item #{}'.format(n))
-            try:
-                func(*args, **kwargs)
-            except Exception as e:
-                print(e)
-            self.queue.task_done()
-            n += 1
+            with self.db.transaction():
+                for _ in range(50):
+                    logger.debug('processing queue item #{}'.format(n))
+                    n += 1
+                    item = self.queue.get()
+                    func = item['func']
+                    args = item['args']
+                    kwargs = item['kwargs']
+                    try:
+                        func(*args, **kwargs)
+                    except Exception:
+                        logger.exception('Unable to write to the database.')
+                    self.queue.task_done()
+                    empty = self.queue.empty()
+                    all_done = all(not i.is_alive() for i in self.threads)
+                    if empty and all_done:
+                        return
 
     ###########################################################################
     # Page Interface
@@ -424,28 +440,32 @@ class Snapshot:
     # Public Methods
     ###########################################################################
 
-    def take(self, include_comments=False):
+    def take(self):
+        time_start = arrow.now()
         orm.purge()
         all_pages = list(self.wiki.list_all_pages())
         self.threads = []
         for i in range(self.thread_limit):
             new_thread = threading.Thread(
                 target=self._threaded_save,
-                args=(
-                    all_pages[i::self.thread_limit],
-                    include_comments))
+                args=(all_pages[i::self.thread_limit], ))
             new_thread.start()
             self.threads.append(new_thread)
         db_writer = threading.Thread(target=self._process_queue)
-        db_writer.daemon = True
         db_writer.start()
         for thread in self.threads:
             thread.join()
-        print(arrow.now())
-        self.queue.join()
-        print("collecting metadata")
+        db_writer.join()
+        logger.info('Downloading image metadata.')
         self._insert_many(orm.Image, self._scrape_images())
+        logger.info('Downloading author metadata.')
         self._insert_many(orm.Author, self._scrape_authors())
+        time_taken = (arrow.now() - time_start)
+        hours, remainder = divmod(time_taken.seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        msg = 'Snapshot succesfully taken. [{:02d}:{:02d}:{:02d}]'
+        msg = msg.format(hours, minutes, seconds)
+        logger.warning(msg)
 
     def get_tag(self, tag):
         """Retrieve list of pages with the tag from the database"""
@@ -578,17 +598,30 @@ class Page:
         return []
 
 ###############################################################################
-# Methods For Retrieving Certain Pages
+# Main Methods
 ###############################################################################
 
 
+def enable_logging():
+    console = logging.StreamHandler()
+    console.setLevel(logging.INFO)
+    formatter = logging.Formatter('%(name)-12s: %(levelname)-8s %(message)s')
+    console.setFormatter(formatter)
+    logger.addHandler(console)
+    filelog = logging.FileHandler('crawler.log')
+    filelog.setLevel(logging.WARNING)
+    file_format = '%(asctime)s %(name)-12s %(levelname)-8s %(message)s'
+    file_formatter = logging.Formatter(file_format)
+    filelog.setFormatter(file_formatter)
+    logger.addHandler(filelog)
+
+
 def main():
-    print(arrow.now())
     dbname = 'scp-wiki.{}.db'.format(arrow.now().format('YYYY-MM-DD'))
     Snapshot(dbname).take()
-    print(arrow.now())
     pass
 
 
 if __name__ == "__main__":
+    enable_logging()
     main()
