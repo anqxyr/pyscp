@@ -501,9 +501,10 @@ class Snapshot:
 
     def get_author(self, url):
         try:
-            return orm.Author.get(orm.Author.url == url)
+            au = orm.Author.get(orm.Author.url == url)
+            return {'user': au.author, 'override': au.override}
         except orm.Author.DoesNotExist:
-            return False
+            return None
 
     def get_images(self):
         images = {}
@@ -602,12 +603,8 @@ class Page:
         cls._title_index = index
 
     ###########################################################################
-    # Properties
+    # Internal Properties
     ###########################################################################
-
-    @cached_property
-    def html(self):
-        return self.sn.get_page_html(self.url)
 
     @cached_property
     def _pageid(self):
@@ -628,6 +625,14 @@ class Page:
             return title_tag[0].text.strip()
         else:
             return ''
+    
+    ###########################################################################
+    # Public Properties
+    ###########################################################################
+
+    @cached_property
+    def html(self):
+        return self.sn.get_page_html(self.url)
 
     @cached_property
     def title(self):
@@ -652,6 +657,29 @@ class Page:
                 i['time'],
                 i['comment']))
         return history
+
+    @cached_property
+    def authors(self):
+        authors = []
+        author = namedtuple('Author', 'user status')
+        second_author = self.sn.get_author(self.url)
+        if second_author is None or not second_author['override']:
+            authors.append(author(self.history[0].user, 'original'))
+        if second_author is not None:
+            if second_author['override']:
+                authors.append(author(second_author['user'], 'override'))
+            else:
+                authors.append(author(second_author['user'], 'rewrite'))
+        return authors
+
+    @cached_property
+    def author(self):
+        if len(self.authors) == 1:
+            return self.authors[0].user
+        else:
+            msg = ('<author> property is inaplicable to the current page.'
+                   ' Use [page].authors to get all known authors.')
+            raise AttributeError(msg)
 
     @cached_property
     def votes(self):
@@ -733,8 +761,8 @@ def main():
     #dbname = 'scp-wiki.{}.db'.format(arrow.now().format('YYYY-MM-DD'))
     #Snapshot(dbname).take()
     Page.sn = Snapshot('scp-wiki.2015-01-01.db')
-    p = Page('scp-902')
-    print(p.title)
+    p = Page('scp-122')
+    print(p.authors)
     pass
 
 
