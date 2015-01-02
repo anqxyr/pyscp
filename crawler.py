@@ -277,7 +277,8 @@ class Snapshot:
         self.db = orm.db
         self.thread_limit = thread_limit
         self.queue = queue.Queue()
-        self.wiki = WikidotConnector('http://www.scp-wiki.net')
+        self.site = 'http://www.scp-wiki.net'
+        self.wiki = WikidotConnector(self.site)
 
     ###########################################################################
     # Scraping Methods
@@ -499,10 +500,8 @@ class Snapshot:
             yield i.url
 
     def get_author(self, url):
-        rd = namedtuple('DBAuthorOverride', 'url author override')
         try:
-            data = orm.Author.get(orm.Author.url == url)
-            return rd(data.url, data.author, data.override)
+            return orm.Author.get(orm.Author.url == url)
         except orm.Author.DoesNotExist:
             return False
 
@@ -528,6 +527,7 @@ class Page:
     """Scrape and store contents and metadata of a page."""
 
     sn = None   # Snapshot instance used to init the pages
+    _title_index = None
 
     ###########################################################################
     # Constructors
@@ -578,6 +578,29 @@ class Page:
         else:
             return maybe_children
 
+    @classmethod
+    def _construct_title_index(cls):
+        logger.info('constructing title index')
+        index_pages = ['scp-series', 'scp-series-2', 'scp-series-3']
+        index = {}
+        for url in index_pages:
+            soup = BeautifulSoup(cls(url).html)
+            items = [i for i in soup.select('ul > li')
+                     if re.search('[SCP]+-[0-9]+', i.text)]
+            for i in items:
+                url = cls.sn.site + i.a['href']
+                try:
+                    skip, title = i.text.split(' - ', maxsplit=1)
+                except:
+                    #skip, title = i.text.split(', ', maxsplit=1)
+                    skip, title = i.text.split('- ', maxsplit=1)
+                if url not in cls.sn.get_tag('splash'):
+                    index[url] = title
+                else:
+                    true_url = '{}/{}'.format(cls.sn.site, skip.lower())
+                    index[true_url] = title
+        cls._title_index = index
+
     ###########################################################################
     # Properties
     ###########################################################################
@@ -593,6 +616,29 @@ class Page:
     @cached_property
     def _thread_id(self):
         return self.sn.get_thread_id(self.url)
+
+    @cached_property
+    def _wikidot_title(self):
+        '''
+        Page title as used by wikidot. Should only be used by the self.title
+        property or when editing the page. In all other cases, use self.title.
+        '''
+        title_tag = BeautifulSoup(self.html).select('#page-title')
+        if title_tag:
+            return title_tag[0].text.strip()
+        else:
+            return ''
+
+    @cached_property
+    def title(self):
+        if 'scp' in self.tags and re.search('[scp]+-[0-9]+$', self.url):
+            if self._title_index is None:
+                self._construct_title_index()
+            title = '{}: {}'.format(
+                self._wikidot_title,
+                self._title_index[self.url])
+            return title
+        return self._wikidot_title
 
     @cached_property
     def history(self):
@@ -687,8 +733,8 @@ def main():
     #dbname = 'scp-wiki.{}.db'.format(arrow.now().format('YYYY-MM-DD'))
     #Snapshot(dbname).take()
     Page.sn = Snapshot('scp-wiki.2015-01-01.db')
-    p = Page('scp-026')
-    print(p.children)
+    p = Page('scp-902')
+    print(p.title)
     pass
 
 
