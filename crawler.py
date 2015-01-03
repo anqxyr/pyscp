@@ -15,6 +15,7 @@ import threading
 from bs4 import BeautifulSoup
 from cached_property import cached_property
 from collections import namedtuple
+from concurrent.futures import ThreadPoolExecutor
 
 ###############################################################################
 # Global Constants And Variables
@@ -31,9 +32,7 @@ logger.setLevel(logging.DEBUG)
 class WikidotConnector:
 
     def __init__(self, site):
-        if site[-1] != '/':
-            site += '/'
-        self.site = site
+        self.site = site.rstrip('/')
         req = requests.Session()
         req.mount(site, requests.adapters.HTTPAdapter(max_retries=5))
         self.req = req
@@ -58,7 +57,7 @@ class WikidotConnector:
             cookies[i.name] = i.value
         for k, v in kwargs.items():
             payload[k] = v
-        data = self.req.post(self.site + 'ajax-module-connector.php',
+        data = self.req.post(self.site + '/ajax-module-connector.php',
                              data=payload, headers=headers, cookies=cookies)
         return data.json()
 
@@ -85,6 +84,22 @@ class WikidotConnector:
                 'time': time,
                 'parent': parent})
         return posts
+
+    def _pager(self, baseurl):
+        logger.debug('Paging through {}'.format(baseurl))
+        first_page = self.get_page_html(baseurl)
+        yield first_page
+        soup = BeautifulSoup(first_page)
+        try:
+            counter = soup.select('div.pager span.pager-no')[0].text
+        except IndexError:
+            return
+        last_page_index = int(counter.split(' ')[-1])
+        for index in range(2, last_page_index + 1):
+            logger.debug('Paging through {} ({}/{})'.format(
+                baseurl, index, last_page_index))
+            url = '{}/p/{}'.format(baseurl, index)
+            yield self.get_page_html(url)
 
     ###########################################################################
     # Page Interface Methods
@@ -183,17 +198,43 @@ class WikidotConnector:
     ###########################################################################
 
     def list_all_pages(self):
-        baseurl = '{}system:list-all-pages/p/{}'.format(self.site, '{}')
-        soup = BeautifulSoup(self.get_page_html(baseurl))
-        counter = soup.select('div.pager span.pager-no')[0].text
-        last_page = int(counter.split(' ')[-1])
-        for index in range(1, last_page + 1):
-            logger.info('Downloading index: {}/{}'.format(index, last_page))
-            soup = BeautifulSoup(self.get_page_html(baseurl.format(index)))
-            pages = soup.select('div.list-pages-item a')
-            for link in pages:
-                url = self.site.rstrip('/') + link["href"]
+        baseurl = self.site + '/system:list-all-pages'
+        for page in self._pager(baseurl):
+            soup = BeautifulSoup(page)
+            for link in soup.select('div.list-pages-item a'):
+                url = self.site + link['href']
                 yield url
+
+    def list_forum_categories(self):
+        baseurl = '{}/forum:start'.format(self.site)
+        soup = BeautifulSoup(self.get_page_html(baseurl))
+        categories = []
+        for i in soup.select('td.name'):
+            title = i.select('div.title')[0].text.strip()
+            category_id = i.select('div.title')[0].a['href']
+            category_id = re.search(r'/forum/c-([0-9]+)/',
+                                    category_id).group(1)
+            description = i.select('div.description')[0].text.strip()
+            categories.append({
+                'category_id': category_id,
+                'title': title,
+                'description': description})
+        return categories
+
+    def list_threads_in_category(self, category_id):
+        baseurl = '{}/forum/c-{}'.format(self.site, category_id)
+        for page in self._pager(baseurl):
+            soup = BeautifulSoup(page)
+            for i in soup.select('td.name'):
+                thread_id = i.select('div.title')[0].a['href']
+                thread_id = re.search(r'/forum/t-([0-9]+)', thread_id).group(1)
+                title = i.select('div.title')[0].text.strip()
+                description = i.select('div.description')[0].text.strip()
+                yield {
+                    'thread_id': thread_id,
+                    'title': title,
+                    'description': description,
+                    'category_id': category_id}
 
     def get_forum_thread(self, thread_id):
         if thread_id is None:
@@ -272,12 +313,12 @@ class WikidotConnector:
 
 class Snapshot:
 
-    def __init__(self, dbname, thread_limit=18):
+    def __init__(self, dbname, site='http://www.scp-wiki.net'):
         orm.connect(dbname)
         self.db = orm.db
-        self.thread_limit = thread_limit
+        self.thread_limit = 20
         self.queue = queue.Queue()
-        self.site = 'http://www.scp-wiki.net'
+        self.site = site
         self.wiki = WikidotConnector(self.site)
 
     ###########################################################################
@@ -320,10 +361,16 @@ class Snapshot:
     def _insert_many(self, table, data):
         data = list(data)
         for idx in range(0, len(data), 500):
-            with self.db.transaction():
+            with orm.db.transaction():
                 table.insert_many(data[idx:idx + 500]).execute()
 
     def _save_page_to_db(self, url):
+        exclusion_list = ['http://www.scp-wiki.net/forum:thread']
+        if url in exclusion_list:
+            msg = 'Page {} is in the exlusion list and will not be saved'
+            msg = msg.format(url)
+            logger.warning(msg)
+            return
         logger.info('Saving page: {}'.format(url))
         html = self.wiki.get_page_html(url)
         if html is None:
@@ -349,10 +396,7 @@ class Snapshot:
         self.queue.put({'func': self._insert_many,
                         'args': (orm.Vote, votes),
                         'kwargs': {}})
-        comments = list(self.wiki.get_forum_thread(thread_id))
-        self.queue.put({'func': self._insert_many,
-                        'args': (orm.ForumPost, comments),
-                        'kwargs': {}})
+        self._save_thread_to_db(thread_id)
         tags = [
             {'tag': i, 'url': url}
             for i in [a.string for a in
@@ -361,6 +405,12 @@ class Snapshot:
                         'args': (orm.Tag, tags),
                         'kwargs': {}})
         logger.debug('Finished saving page: {}'.format(url))
+
+    def _save_thread_to_db(self, thread_id):
+        comments = list(self.wiki.get_forum_thread(thread_id))
+        self.queue.put({'func': self._insert_many,
+                        'args': (orm.ForumPost, comments),
+                        'kwargs': {}})
 
     ###########################################################################
     # Threading Methods
@@ -375,17 +425,10 @@ class Snapshot:
     # thread, which will perform all write operations sequentially.
     ###########################################################################
 
-    def _threaded_save(self, urls):
-        for url in urls:
-            try:
-                self._save_page_to_db(url)
-            except Exception:
-                logger.exception('Failed to save page: {}'.format(url))
-
     def _process_queue(self):
         n = 1
         while True:
-            with self.db.transaction():
+            with orm.db.transaction():
                 for _ in range(500):
                     logger.debug('Processing queue item #{}'.format(n))
                     n += 1
@@ -398,9 +441,10 @@ class Snapshot:
                     except Exception:
                         logger.exception('Unable to write to the database.')
                     self.queue.task_done()
-                    empty = self.queue.empty()
-                    all_done = all(not i.is_alive() for i in self.threads)
-                    if empty and all_done:
+                    for i in self.futures:
+                        if i.done():
+                            self.futures.remove(i)
+                    if not self.futures:
                         return
 
     ###########################################################################
@@ -414,7 +458,10 @@ class Snapshot:
             return None
 
     def get_pageid(self, url):
-        return orm.Page.get(orm.Page.url == url).pageid
+        try:
+            return orm.Page.get(orm.Page.url == url).pageid
+        except orm.Page.DoesNotExist:
+            return None
 
     def get_thread_id(self, url):
         return orm.Page.get(orm.Page.url == url).thread_id
@@ -467,51 +514,73 @@ class Snapshot:
     # Public Methods
     ###########################################################################
 
-    def take(self):
+    def take(self, include_forums=False):
+        # TODO: rewrite theading using decorators and thread pool
         time_start = arrow.now()
         orm.purge()
-        all_pages = list(self.wiki.list_all_pages())
-        self.threads = []
-        for i in range(self.thread_limit):
-            new_thread = threading.Thread(
-                target=self._threaded_save,
-                args=(all_pages[i::self.thread_limit], ))
-            new_thread.start()
-            self.threads.append(new_thread)
+        for i in [orm.Page, orm.Revision, orm.Vote, orm.ForumPost, orm.Tag]:
+            i.create_table()
+        self.futures = []
         db_writer = threading.Thread(target=self._process_queue)
         db_writer.start()
-        for thread in self.threads:
-            thread.join()
+        with ThreadPoolExecutor(max_workers=self.thread_limit) as executor:
+            for url in self.wiki.list_all_pages():
+                future = executor.submit(self._save_page_to_db, url)
+                self.futures.append(future)
+            if include_forums:
+                self.queue.put({'func': orm.ForumThread.create_table,
+                                'args': (), 'kwargs': {}})
+                self.queue.put({'func': orm.ForumCategory.create_table,
+                                'args': (), 'kwargs': {}})
+                for c in self.wiki.list_forum_categories():
+                    if c['title'] == 'Per page discussions':
+                        continue
+                    self.queue.put({'func': orm.ForumCategory.create,
+                                    'args': (),
+                                    'kwargs': c})
+                    c_id = c['category_id']
+                    for t in self.wiki.list_threads_in_category(c_id):
+                        msg = 'Saving forum thread: {}'.format(t['title'])
+                        logger.info(msg)
+                        self.queue.put({'func': orm.ForumThread.create,
+                                        'args': (),
+                                        'kwargs': t})
+                        t_id = t['thread_id']
+                        future = executor.submit(self._save_thread_to_db, t_id)
+                        self.futures.append(future)
         db_writer.join()
-        logger.info('Downloading image metadata.')
-        self._insert_many(orm.Image, self._scrape_images())
-        logger.info('Downloading author metadata.')
-        self._insert_many(orm.Author, self._scrape_authors())
+        if self.site == 'http://www.scp-wiki.net':
+            orm.Image.create_table()
+            logger.info('Downloading image metadata.')
+            self._insert_many(orm.Image, self._scrape_images())
+            orm.Author.create_table()
+            logger.info('Downloading author metadata.')
+            self._insert_many(orm.Author, self._scrape_authors())
         time_taken = (arrow.now() - time_start)
         hours, remainder = divmod(time_taken.seconds, 3600)
         minutes, seconds = divmod(remainder, 60)
         msg = 'Snapshot succesfully taken. [{:02d}:{:02d}:{:02d}]'
         msg = msg.format(hours, minutes, seconds)
-        logger.warning(msg)
+        logger.info(msg)
 
     def get_tag(self, tag):
         """Retrieve list of pages with the tag from the database"""
         for i in orm.Tag.select().where(orm.Tag.tag == tag):
             yield i.url
 
-    def get_author(self, url):
+    def get_author_metadata(self, url):
         try:
             au = orm.Author.get(orm.Author.url == url)
             return {'user': au.author, 'override': au.override}
         except orm.Author.DoesNotExist:
             return None
 
-    def get_images(self):
-        images = {}
-        im = namedtuple('Image', 'source data')
-        for i in orm.Image.select():
-            images[i.image_url] = im(i.image_source, i.image_data)
-        return images
+    def get_image_metadata(self, url):
+        try:
+            img = orm.Image.get(orm.Image.url == url)
+            return {'url': img.url, 'source': img.source, 'data': img.data}
+        except orm.Image.DoesNotExist:
+            return None
 
     def list_all_pages(self):
         count = orm.Page.select().count()
@@ -536,7 +605,7 @@ class Page:
 
     def __init__(self, url=None):
         prefix = 'http://www.scp-wiki.net/'
-        if not url.startswith(prefix):
+        if url is not None and not url.startswith(prefix):
             url = prefix + url
         self.url = url
 
@@ -547,10 +616,7 @@ class Page:
     def _get_children_if_skip(self):
         children = []
         for url in self.links:
-            try:
-                p = Page(url)
-            except orm.Page.DoesNotExist:
-                continue
+            p = self.__class__(url)
             if 'supplement' in p.tags or 'splash' in p.tags:
                 children.append(p.url)
         return children
@@ -559,15 +625,12 @@ class Page:
         maybe_children = []
         confirmed_children = []
         for url in self.links:
-            try:
-                p = Page(url)
-            except orm.Page.DoesNotExist:
-                continue
+            p = self.__class__(url)
             if set(p.tags) & set(['tale', 'goi-format', 'goi2014']):
                 maybe_children.append(p.url)
             if self.url in p.links:
                 confirmed_children.append(p.url)
-            else:
+            elif p.html:
                 crumb = BeautifulSoup(p.html).select('#breadcrumbs a')
                 if crumb:
                     parent = crumb[-1]
@@ -625,7 +688,7 @@ class Page:
             return title_tag[0].text.strip()
         else:
             return ''
-    
+
     ###########################################################################
     # Public Properties
     ###########################################################################
@@ -662,8 +725,9 @@ class Page:
     def authors(self):
         authors = []
         author = namedtuple('Author', 'user status')
-        second_author = self.sn.get_author(self.url)
-        if second_author is None or not second_author['override']:
+        second_author = self.sn.get_author_metadata(self.url)
+        if ((second_author is None or not second_author['override'])
+                and self.history):
             authors.append(author(self.history[0].user, 'original'))
         if second_author is not None:
             if second_author['override']:
@@ -720,10 +784,9 @@ class Page:
             return []
         links = set()
         for a in BeautifulSoup(self.html).select('#page-content a'):
-            not_a_link = 'href' not in a.attrs
-            is_absolute_link = a['href'][0] != '/'
-            is_image_link = a['href'][-4:] in ['.png', '.jpg', '.gif']
-            if not_a_link or is_absolute_link or is_image_link:
+            if (('href' not in a.attrs) or
+                (a['href'][0] != '/') or
+                    (a['href'][-4:] in ['.png', '.jpg', '.gif'])):
                 continue
             url = 'http://www.scp-wiki.net{}'.format(a['href'])
             url = url.rstrip("|")
@@ -748,21 +811,16 @@ def enable_logging():
     console.setLevel(logging.INFO)
     formatter = logging.Formatter('%(name)-12s: %(levelname)-8s %(message)s')
     console.setFormatter(formatter)
-    logger.addHandler(console)
-    filelog = logging.FileHandler('crawler.log')
-    filelog.setLevel(logging.WARNING)
+    logging.getLogger('scp').addHandler(console)
+    logfile = logging.FileHandler('logfile.txt', mode='w', delay=True)
+    logfile.setLevel(logging.WARNING)
     file_format = '%(asctime)s %(name)-12s %(levelname)-8s %(message)s'
     file_formatter = logging.Formatter(file_format)
-    filelog.setFormatter(file_formatter)
-    logger.addHandler(filelog)
+    logfile.setFormatter(file_formatter)
+    logging.getLogger('scp').addHandler(logfile)
 
 
 def main():
-    #dbname = 'scp-wiki.{}.db'.format(arrow.now().format('YYYY-MM-DD'))
-    #Snapshot(dbname).take()
-    Page.sn = Snapshot('scp-wiki.2015-01-01.db')
-    p = Page('scp-122')
-    print(p.authors)
     pass
 
 
