@@ -14,8 +14,10 @@ import threading
 
 from bs4 import BeautifulSoup
 from cached_property import cached_property
+from contextlib import contextmanager
 from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor
+from os import listdir
 
 ###############################################################################
 # Global Constants And Variables
@@ -610,6 +612,24 @@ class Page:
         self.url = url
 
     ###########################################################################
+    # Class Methods
+    ###########################################################################
+
+    @classmethod
+    @contextmanager
+    def from_snapshot(cls, name=None):
+        previous_sn = cls.sn
+        if name is None:
+            name = sorted([
+                i for i in listdir(orm.DBPATH)
+                if i.startswith('scp-wiki') and i.endswith('.db')])[-1]
+        cls.sn = Snapshot(name)
+        yield cls.sn
+        cls.sn = previous_sn
+
+
+
+    ###########################################################################
     # Internal Methods
     ###########################################################################
 
@@ -821,6 +841,8 @@ def enable_logging():
 
 
 def main():
+    #with Page.from_snapshot():
+    #    print(Page('scp-1200').rating)
     pass
 
 
