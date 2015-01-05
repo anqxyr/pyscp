@@ -316,6 +316,7 @@ class WikidotConnector:
 class Snapshot:
 
     def __init__(self, dbname, site='http://www.scp-wiki.net'):
+        self.dbname = dbname
         orm.connect(dbname)
         self.db = orm.db
         self.thread_limit = 20
@@ -586,12 +587,12 @@ class Snapshot:
 
     def list_all_pages(self):
         count = orm.Page.select().count()
-        for n in range(1, count // 50 + 2):
+        for n in range(1, count // 200 + 2):
             query = orm.Page.select(
                 orm.Page.url).order_by(
-                orm.Page.url).paginate(n, 50)
+                orm.Page.url).paginate(n, 200)
             for i in query:
-                yield Page(i.url)
+                yield i.url
 
 
 class Page:
@@ -625,9 +626,9 @@ class Page:
                 if i.startswith('scp-wiki') and i.endswith('.db')])[-1]
         cls.sn = Snapshot(name)
         yield cls.sn
+        if previous_sn is not None:
+            orm.connect(previous_sn.dbname)
         cls.sn = previous_sn
-
-
 
     ###########################################################################
     # Internal Methods
@@ -841,8 +842,11 @@ def enable_logging():
 
 
 def main():
-    #with Page.from_snapshot():
-    #    print(Page('scp-1200').rating)
+    with Page.from_snapshot():
+        print(Page('scp-1200').rating)
+        with Page.from_snapshot('scp-wiki.2015-01-01.db'):
+            print(Page('scp-1200').rating)
+        print(Page('scp-1200').rating)
     pass
 
 
