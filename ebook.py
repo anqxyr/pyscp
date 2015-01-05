@@ -7,6 +7,7 @@
 
 import arrow
 import copy
+import logging
 import natsort
 import os
 import re
@@ -14,19 +15,24 @@ import requests
 import shutil
 import tempfile
 
+from bs4 import BeautifulSoup
+from cached_property import cached_property
 from collections import defaultdict, namedtuple, OrderedDict
+from crawler import Page, Snapshot
 from lxml import etree, html
-from crawler import Page
 
 ###############################################################################
-# Global Constants
+# Global Constants And Variables
 ###############################################################################
 
 SAVEPATH = '/home/anqxyr/heap/_scp/ebook/'
 STATICDATA = os.path.dirname(os.path.abspath(__file__))
 # pick from 'COMPLETE', 'TOMES', and 'DIGEST'
-BOOKTYPE = 'DIGEST'
-DIGESTMONTH = '2014-11'
+BOOKTYPE = 'COMPLETE'
+DIGESTMONTH = '2014-12'
+
+logger = logging.getLogger('scp.ebook')
+logger.setLevel(logging.DEBUG)
 
 ###############################################################################
 # Primary Classes
@@ -54,16 +60,24 @@ class Epub():
 
     def add_page(self, page, parent=None, node=None):
         #each page can only appear once in the book
-        duplicate = page.url in Epub.allpages_global
-        empty = page.data is None
-        negative = page.rating is not None and int(page.rating) < 0
-        if duplicate or empty or negative:
+        duplicate = page.url in self.allpages_global
+        empty = page.parsed_html is None
+        try:
+            tale_hub = (page.title.startswith('Author Tales')
+                        or page.title.startswith('Tales by Year'))
+        except AttributeError as e:
+            print(page.url)
+            print(page.title)
+            raise e
+            exit()
+        if duplicate or empty or page.rating < 0 or tale_hub:
             return
+        logger.info('Adding page: {}'.format(page.url))
         epub_page = copy.deepcopy(self.templates["page"])
         #XPath expressions are pre-generated with etree.getpath
         #I have no clue how they work
         epub_page.xpath("/*/*[1]/*[1]")[0].text = page.title
-        epub_page.xpath("/*/*[2]")[0].append(html.fromstring(page.data))
+        epub_page.xpath("/*/*[2]")[0].append(html.fromstring(page.parsed_html))
         #write the page on disk
         uid = "page_{:0>4}".format(len(self.pageinfo))
         epub_page.write("{}/{}.xhtml".format(self.dir.name, uid))
@@ -92,8 +106,10 @@ class Epub():
                 './/navPoint[child::navLabel[child::text[text()="{}"]]]'
                 .format(parent))[0]
         new_node = self.add_to_toc(node, page, uid)
-        for i in page.children():
-            self.add_page(i, node=new_node)
+        for i in page.children:
+            p = BookPage(i)
+            p.chapters = page.chapters
+            self.add_page(p, node=new_node)
 
     def add_to_toc(self, node, page, uid):
         navpoint = etree.SubElement(node, "navPoint", id=uid, playOrder=
@@ -125,9 +141,8 @@ class Epub():
         os.mkdir(imagedir)
         for i in self.images:
             path = "_".join([i.split("/")[-2], i.split("/")[-1]])
-            print("downloading image: {}".format(i))
             with open(os.path.join(imagedir, path), "wb") as F:
-                F.write(Page.sn.images()[i].data)
+                F.write(BookPage.sn.get_image_metadata(i)['data'])
         spine.write(self.dir.name + "/content.opf", xml_declaration=True,
                     encoding="utf-8", pretty_print=True)
         #other necessary files
@@ -144,117 +159,97 @@ class Epub():
         shutil.move(filename + ".zip", filename + ".epub")
 
 
-class EbookPage(Page):
+class BookPage(Page):
 
     ###########################################################################
     # Constructors
     ###########################################################################
 
     def __init__(self, url=None):
-        self.url = url
-        self.data = None
-        self.rating = None
+        super().__init__(url)
         self.images = []
-        self.history = []
-        self.authors = []
-        self.votes = []
-
-        if url is not None:
-            pd = self.sn.pagedata(url)
-            self._parse_html(pd.html)
-            self._raw_html = pd.html
-            if pd.history is not None:
-                self._parse_history(pd.history)
-                self.authors = self._meta_authors()
-            if pd.votes is not None:
-                self._parse_votes(pd.votes)
-        self._override()
-
 
     ###########################################################################
-    # Misc. Methods
+    # Internal Parsing Methods
     ###########################################################################
 
-    def _override(self):
-        _inrange = lambda x: [Page("{}-{}".format(self.url, n)) for n in x]
-        _except = lambda x: [p for p in self.children()
-                             if p.url != "http://www.scp-wiki.net/" + x]
-        ov_data = [("scp-1047-j", None)]
-        ov_children = [
-            ("scp-2998", _inrange, range(2, 11)),
-            ("wills-and-ways-hub", _except, "marshall-carter-and-dark-hub"),
-            ("serpent-s-hand-hub", _except, "black-queen-hub"),
-            ("chicago-spirit-hub", list, "")]
-        for partial_url, data in ov_data:
-            if self.url == "http://www.scp-wiki.net/" + partial_url:
-                self.data = data
-        for partial_url, func, args in ov_children:
-            if self.url == "http://www.scp-wiki.net/" + partial_url:
-                new_children = func(args)
-                self.children = lambda: new_children
+    @staticmethod
+    def _parse_tabviews(html):
+        soup = BeautifulSoup(str(html))
+        for i in html.select('div.yui-navset'):
+            wraper = soup.new_tag('div', **{'class': 'tabview'})
+            titles = [a.text for a in i.select('ul.yui-nav em')]
+            tabs = i.select('div.yui-content > div')
+            for k in tabs:
+                k.attrs = {'class': 'tabview-tab'}
+                tab_title = soup.new_tag('div', **{'class': 'tab-title'})
+                tab_title.string = titles[tabs.index(k)]
+                k.insert(0, tab_title)
+                wraper.append(k)
+            i.replace_with(wraper)
+        return html
 
-    ###########################################################################
-    # Parsing Methods
-    ###########################################################################
+    @staticmethod
+    def _parse_collapsibles(html):
+        soup = BeautifulSoup(str(html))
+        for i in html.select('div.collapsible-block'):
+            link_text = i.select('a.collapsible-block-link')[0].text
+            content = i.select('div.collapsible-block-content')[0]
+            if not content.text:
+                content = i.select('div.collapsible-block-unfolded')[0]
+                del(content['style'])
+                content.select('div.collapsible-block-content')[0].decompose()
+                content.select(
+                    'div.collapsible-block-unfolded-link')[0].decompose()
+            content['class'] = 'collaps-content'
+            col = soup.new_tag('div', **{'class': 'collapsible'})
+            content = content.wrap(col)
+            col_title = soup.new_tag('div', **{'class': 'collaps-title'})
+            col_title.string = link_text
+            content.div.insert_before(col_title)
+            i.replace_with(content)
+        return html
 
-    def _parse_html(self, raw_html):
-        '''Retrieve title, data, and tags'''
-        soup = BeautifulSoup(raw_html)
-        rating_el = soup.select("#pagerate-button span")
-        if rating_el:
-            self.rating = rating_el[0].text
-        try:
-            comments = soup.select('#discuss-button')[0].text
-            comments = re.search('[0-9]+', comments).group()
-            self.comments = comments
-        except:
-            self.comments = 0
-        self._parse_body(soup)
-        self.tags = [a.string for a in soup.select("div.page-tags a")]
-        self._parse_title(soup)
-        if "scp" in self.tags:
-            title_insert = "<p class='scp-title'>{}</p>{}"
-        else:
-            title_insert = "<p class='tale-title'>{}</p>{}"
-        self.data = title_insert.format(self.title, self.data)
+    @staticmethod
+    def _parse_footnotes(html):
+        for i in html.select('sup.footnoteref'):
+            i.string = i.a.string
+        for i in html.select('sup.footnote-footer'):
+            i['class'] = 'footnote'
+            del(i['id'])
+            i.string = ''.join(i.strings)
+        return html
 
-    def _parse_body(self, soup):
-        if not soup.select("#page-content"):
-            self.data = None
-            return
-        data = soup.select("#page-content")[0]
-        for i in data.select("div.page-rate-widget-box"):
-            i.decompose()
-        data = self._parse_tabviews(data)
-        data = self._parse_collapsibles(data)
-        data = self._parse_footnotes(data)
-        data = self._parse_links(data)
-        data = self._parse_quotes(data)
-        data = self._parse_images(data)
-        self.data = str(data)
+    @staticmethod
+    def _parse_links(html):
+        for i in html.select('a'):
+            del(i['href'])
+            i.name = 'span'
+            i['class'] = 'link'
+        return html
 
-    def _parse_title(self, soup):
-        if soup.select("#page-title"):
-            title = soup.select("#page-title")[0].text.strip()
-        else:
-            title = ""
-        if "scp" in self.tags and re.search("[scp]+-[0-9]+$", self.url):
-            title = "{}: {}".format(title, self.sn.title(self.url))
-        self.title = title
+    @staticmethod
+    def _parse_quotes(html):
+        for i in html.select('blockquote'):
+            i.name = 'div'
+            i['class'] = 'quote'
+        return html
 
-    def _parse_images(self, data):
-        images = self.sn.images()
-        for i in data.select('img'):
-            if i.name is None or not i.has_attr('src'):
+    def _parse_images(self, html):
+        for i in html.select('img'):
+            if i.name is None or 'src' not in i.attrs:
                 continue
-            if i["src"] not in images:
+            img_meta = self.sn.get_image_metadata(i['src'])
+            if img_meta is None:
                 #loop through the image's parents, until we find what to cut
                 for p in i.parents:
                     # old-style image formatting:
-                    old_style = bool(p.select("table tr td img") and
-                                     len(p.select("table tr td")) == 1)
-                    new_style = bool("class" in p.attrs and
-                                     "scp-image-block" in p["class"])
+                    old_style = bool(
+                        p.select('table tr td img') and
+                        len(p.select('table tr td')) == 1)
+                    new_style = bool(
+                        'class' in p.attrs and
+                        'scp-image-block' in p['class'])
                     if old_style or new_style:
                         p.decompose()
                         break
@@ -263,80 +258,52 @@ class EbookPage(Page):
                     # just remove the image itself
                     i.decompose()
             else:
-                    self.images.append(i["src"])
-                    page, image_url = i["src"].split("/")[-2:]
-                    i["src"] = "images/{}_{}".format(page, image_url)
-        return data
+                self.images.append(i['src'])
+                page, image_url = i['src'].split('/')[-2:]
+                i['src'] = 'images/{}_{}'.format(page, image_url)
+        return html
 
-    def _parse_tabviews(self, data):
-        soup = BeautifulSoup(str(data))
-        for i in data.select("div.yui-navset"):
-            wraper = soup.new_tag("div", **{"class": "tabview"})
-            titles = [a.text for a in i.select("ul.yui-nav em")]
-            tabs = i.select("div.yui-content > div")
-            for k in tabs:
-                k.attrs = {"class": "tabview-tab"}
-                tab_title = soup.new_tag("div", **{"class": "tab-title"})
-                tab_title.string = titles[tabs.index(k)]
-                k.insert(0, tab_title)
-                wraper.append(k)
-            i.replace_with(wraper)
-        return data
+    ###########################################################################
+    # Public Properties
+    ###########################################################################
 
-    def _parse_collapsibles(self, data):
-        soup = BeautifulSoup(str(data))
-        for i in data.select("div.collapsible-block"):
-            link_text = i.select("a.collapsible-block-link")[0].text
-            content = i.select("div.collapsible-block-content")[0]
-            if content.text == "":
-                content = i.select("div.collapsible-block-unfolded")[0]
-                del(content["style"])
-                content.select("div.collapsible-block-content")[0].decompose()
-                content.select("div.collapsible-block-unfolded-link"
-                               )[0].decompose()
-            content["class"] = "collaps-content"
-            col = soup.new_tag("div", **{"class": "collapsible"})
-            content = content.wrap(col)
-            col_title = soup.new_tag("div", **{"class": "collaps-title"})
-            col_title.string = link_text
-            content.div.insert_before(col_title)
-            i.replace_with(content)
-        return data
+    @cached_property
+    def children(self):
+        if self.url is None:
+            return []
+        if self.url.endswith('scp-2998'):
+            links = ['{}-{}'.format(self.url, n) for n in range(2, 11)]
+        if self.url.endswith('wills-and-ways-hub'):
+            return [i for i in super().children
+                    if not i.endswith('marshall-carter-and-dark-hub')]
+        if self.url.endswith('serpent-s-hand-hub'):
+            return [i for i in super().children
+                    if not i.endswith('black-queen-hub')]
+        if self.url.endswith('chicago-spirit-hub'):
+            return []
+        return super().children
 
-    def _parse_links(self, data):
-        for i in data.select("a"):
-            del(i["href"])
-            i.name = "span"
-            i["class"] = "link"
-        return data
-
-    def _parse_quotes(self, data):
-        for i in data.select("blockquote"):
-            i.name = "div"
-            i["class"] = "quote"
-        return data
-
-    def _parse_footnotes(self, data):
-        for i in data.select("sup.footnoteref"):
-            i.string = i.a.string
-        for i in data.select("sup.footnote-footer"):
-            i["class"] = "footnote"
-            del(i["id"])
-            i.string = "".join([k for k in i.strings])
-        return data
-
-    def _meta_authors(self):
-        au = namedtuple('author', 'username status')
-        his_author = self.history[0].user
-        rewrite = self.sn.rewrite(self.url)
-        if rewrite:
-            if rewrite.override:
-                return [au(rewrite.author, 'original')]
-            else:
-                return [au(his_author, 'original'),
-                        au(rewrite.author, 'rewrite')]
+    @cached_property
+    def parsed_html(self):
+        logger.debug('Parsing page html: {}'.format(self.url))
+        soup = BeautifulSoup(self.html)
+        content = soup.select('#page-content')
+        if not content:
+            return None
+        parsed = content[0]
+        [i.decompose() for i in parsed.select('div.page-rate-widget-box')]
+        parsed = self._parse_tabviews(parsed)
+        parsed = self._parse_collapsibles(parsed)
+        parsed = self._parse_footnotes(parsed)
+        parsed = self._parse_links(parsed)
+        parsed = self._parse_quotes(parsed)
+        parsed = self._parse_images(parsed)
+        if 'scp' in self.tags:
+            title_wrap = '<p class="scp-title">{}</p>\n{}'
         else:
-            return [au(his_author, 'original')]
+            title_wrap = '<p class="tale-title">{}</p>\n{}'
+        parsed = title_wrap.format(self.title, parsed)
+        return parsed
 
 ###############################################################################
 # Page Retrieval Functions
@@ -344,34 +311,34 @@ class EbookPage(Page):
 
 
 def get_skips():
-    tagged_as_scp = Page.sn.tag("scp")
-    mainlist = [i for i in tagged_as_scp if re.search("scp-[0-9]*$", i)]
+    tagged = BookPage.sn.get_tag('scp')
+    mainlist = [i for i in tagged if re.search("scp-[0-9]*$", i)]
     skips = natsort.natsorted(mainlist, signed=False)
     scp_blocks = defaultdict(list)
     for url in skips:
-        num = int(url.split("-")[-1])
+        num = int(url.split('-')[-1])
         block = num // 100      # should range from 0 to 29
         scp_blocks[block].append(url)
     for block in (scp_blocks[i] for i in range(30)):
-        first = block[0].split("-")[-1]
-        last = block[-1].split("-")[-1]
+        first = block[0].split('-')[-1]
+        last = block[-1].split('-')[-1]
         block_name = 'SCP Database/Articles {}-{}'.format(first, last)
         for url in block:
-            p = Page(url)
+            p = BookPage(url)
             p.chapters = block_name.split('/')
             yield p
 
 
 def get_extra_categories():
     baseurl = 'http://www.scp-wiki.net/scp-001'
-    proposals_hub = Page(baseurl)
+    proposals_hub = BookPage(baseurl)
     categories = (
-        ("SCP Database/001 Proposals", proposals_hub.links()),
-        ("SCP Database/Explained Phenomena", Page.sn.tag("explained")),
-        ("SCP Database/Joke Articles", Page.sn.tag("joke")))
+        ("SCP Database/001 Proposals", proposals_hub.links),
+        ("SCP Database/Explained Phenomena", BookPage.sn.get_tag("explained")),
+        ("SCP Database/Joke Articles", BookPage.sn.get_tag("joke")))
     for k, v in categories:
         for url in v:
-            p = Page(url)
+            p = BookPage(url)
             p.chapters = k.split('/')
             yield p
 
@@ -380,20 +347,21 @@ def get_hubs():
     hubhubs = ["http://www.scp-wiki.net/canon-hub",
                "http://www.scp-wiki.net/goi-contest-2014",
                "http://www.scp-wiki.net/acidverse"]
-    nested_hubs = [i.url for k in hubhubs for i in Page(k).children()]
-    hubs = [i for i in Page.sn.tag("hub") if i in Page.sn.tag("tale")
-            or i in Page.sn.tag("goi2014")]
+    nested_hubs = [i for k in hubhubs for i in BookPage(k).children]
+    hubs = [i for i in BookPage.sn.get_tag("hub")
+            if i in BookPage.sn.get_tag("tale")
+            or i in BookPage.sn.get_tag("goi2014")]
     for url in hubs:
         if url not in nested_hubs:
-            p = Page(url)
+            p = BookPage(url)
             p.chapters = ['Canons and Series']
             yield p
 
 
 def get_tales():
-    for url in Page.sn.tag("tale"):
+    for url in BookPage.sn.get_tag("tale"):
         try:
-            p = Page(url)
+            p = BookPage(url)
         except:
             continue
         first_letter = [i for i in p.title.upper()
@@ -417,28 +385,27 @@ def get_all_in_order():
 
 
 def add_attributions(book):
-    atrb_main = Page()
+    atrb_main = BookPage()
     atrb_main.title = 'Acknowledgments and Attributions'
-    atrb_main.data = ("<div class='title2'>"
-                      "Acknowledgments and Attributions</div>")
+    atrb_main.parsed_html = ("<div class='title2'>"
+                             "Acknowledgments and Attributions</div>")
     book.add_page(atrb_main)
     atrb_pages = OrderedDict()
     for i in sorted(book.pageinfo, key=lambda k: k.id):
         if i.url is None or not i.authors:
             continue
         atrb = '<p><b>{}</b> ({}) was written by <b>{}</b>'
-        atrb = atrb.format(i.title, i.url, i.authors[0].username)
+        atrb = atrb.format(i.title, i.url, i.authors[0].user)
         if not i.chapter in atrb_pages:
             atrb_pages[i.chapter] = "<div class='attrib'>"
         atrb_pages[i.chapter] += atrb
-        for au in (j.username for j in i.authors if j.status == 'rewrite'):
+        for au in (j.user for j in i.authors if j.status == 'rewrite'):
             atrb_pages[i.chapter] += ', rewritten by <b>{}</b>'.format(au)
         atrb_pages[i.chapter] += '.</p>'
-    images = Page.sn.images()
     if book.images:
         atrb_pages['Images'] = "<div class='attrib'>"
     for i in book.images:
-        source = images[i].source
+        source = BookPage.sn.get_image_metadata(i)['source']
         if source != 'PUBLIC DOMAIN':
             atrb = ('<p>The image {}_{}, which appears on the page <b>{}</b>, '
                     'is a CC image available at <u>{}</u>.</p>')
@@ -447,9 +414,9 @@ def add_attributions(book):
             atrb_pages['Images'] += atrb
     for k, v in atrb_pages.items():
         v += "</div>"
-        p = Page()
+        p = BookPage()
         p.title = k
-        p.data = v
+        p.parsed_html = v
         book.add_page(p, parent='Acknowledgments and Attributions')
 
 
@@ -457,10 +424,10 @@ def new_book(title):
     book = Epub(title)
     pagedir = os.path.join(STATICDATA, 'pages')
     for filename in sorted(os.listdir(pagedir)):
-        p = Page()
+        p = BookPage()
         p.title = filename[3:-6]
         with open(os.path.join(pagedir, filename)) as F:
-            p.data = F.read()
+            p.parsed_html = F.read()
         book.add_page(p)
     book.chapters = []   # ?
     return book
@@ -470,10 +437,9 @@ def check_chapters(book, chapters):
     """Check if the chapters exist in the book, and create if necessary"""
     for n, chap in enumerate(chapters):
         if not chap in (i.title for i in book.pageinfo):
-            print(chap)
-            p = Page()
+            p = BookPage()
             p.title = chap
-            p.data = "<div class='title2'>{}</div>".format(chap)
+            p.parsed_html = "<div class='title2'>{}</div>".format(chap)
             if n > 0:
                 book.add_page(p, parent=chapters[n - 1])
             else:
@@ -539,29 +505,34 @@ def add_tomes(books, page):
     check_chapters(cur_book, page.chapters)
     cur_book.add_page(page, parent=page.chapters[-1])
 
+###############################################################################
+
+
+def enable_logging():
+    console = logging.StreamHandler()
+    console.setLevel(logging.INFO)
+    formatter = logging.Formatter('%(name)-12s: %(levelname)-8s %(message)s')
+    console.setFormatter(formatter)
+    logging.getLogger('scp').addHandler(console)
+    logfile = logging.FileHandler('logfile.txt', mode='w', delay=True)
+    logfile.setLevel(logging.WARNING)
+    file_format = '%(asctime)s %(name)-12s %(levelname)-8s %(message)s'
+    file_formatter = logging.Formatter(file_format)
+    logfile.setFormatter(file_formatter)
+    logging.getLogger('scp').addHandler(logfile)
+
 
 def main():
+    BookPage.sn = Snapshot('scp-wiki.2015-01-01.db')
     books = []
     for n, page in enumerate(get_all_in_order()):
-        # if n > 10:
-        #     break
         pick_and_add(books, page)
-        # book_name = goes_in_book(book, i)
-        # previous_chapter = None
-        # for c in i.chapter.split("/"):
-        #     if not c in [i["title"] for i in book.allpages]:
-        #         print(c)
-        #         p = scp_crawler.Page()
-        #         p.title = c
-        #         p.data = "<div class='title2'>{}</div>".format(c)
-        #         book.add_page(p, node_with_text(book, previous_chapter))
-        #         book.chapters.append(c)
-        #     previous_chapter = c
-        # book.add_page(i, node_with_text(book, previous_chapter))
     for book in books:
         add_attributions(book)
         book.save(os.path.join(SAVEPATH, book.title))
-    print("done")
+    logger.info('Finished.')
 
 
-main()
+if __name__ == "__main__":
+    enable_logging()
+    main()
