@@ -60,6 +60,19 @@ class ForumPost(BaseModel):
     parent = peewee.CharField(null=True)
 
 
+class ForumThread(BaseModel):
+    thread_id = peewee.IntegerField(primary_key=True)
+    title = peewee.CharField()
+    description = peewee.TextField()
+    category_id = peewee.IntegerField()
+
+
+class ForumCategory(BaseModel):
+    category_id = peewee.IntegerField(primary_key=True)
+    title = peewee.CharField()
+    description = peewee.TextField()
+
+
 class Image(BaseModel):
     url = peewee.CharField(unique=True)
     source = peewee.CharField()
@@ -76,27 +89,24 @@ class Author(BaseModel):
 
 class Tag(BaseModel):
     tag = peewee.CharField(index=True)
-    url = peewee.CharField()
+    url = peewee.CharField(index=True)
 
 ###############################################################################
 # Helper Functions
 ###############################################################################
 
-TABLES = [Page, Revision, Vote, ForumPost, Image, Author, Tag]
-
 
 def connect(filename):
     logger.info('Connecting to the database.')
     dbpath = path.join(DBPATH, filename)
-    logger.info('Database is located at {} .'.format(dbpath))
+    logger.info('Database is located at {}'.format(dbpath))
     db.init(dbpath)
     db.connect()
-    logger.info('Creating database tables.')
-    db.create_tables(TABLES, safe=True)
 
 
 def purge():
     logger.info('Purging the database.')
-    for i in TABLES:
-        db.drop_table(i)
-    db.create_tables(TABLES)
+    tables = [Page, Revision, Vote, ForumPost, ForumThread, ForumCategory,
+              Image, Author, Tag]
+    for i in tables:
+        i.drop_table(fail_silently=True)
