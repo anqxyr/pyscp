@@ -315,9 +315,12 @@ class WikidotConnector:
 
 class Snapshot:
 
+    database_directory = '/home/anqxyr/heap/_scp/'
+
     def __init__(self, dbname, site='http://www.scp-wiki.net'):
         self.dbname = dbname
-        orm.connect(dbname)
+        dbpath = self.database_directory + dbname
+        orm.connect(dbpath)
         self.db = orm.db
         self.thread_limit = 20
         self.queue = queue.Queue()
@@ -518,7 +521,6 @@ class Snapshot:
     ###########################################################################
 
     def take(self, include_forums=False):
-        # TODO: rewrite theading using decorators and thread pool
         time_start = arrow.now()
         orm.purge()
         for i in [orm.Page, orm.Revision, orm.Vote, orm.ForumPost, orm.Tag]:
@@ -622,7 +624,7 @@ class Page:
         previous_sn = cls.sn
         if name is None:
             name = sorted([
-                i for i in listdir(orm.DBPATH)
+                i for i in listdir(Snapshot.database_directory)
                 if i.startswith('scp-wiki') and i.endswith('.db')])[-1]
         cls.sn = Snapshot(name)
         yield cls.sn
@@ -676,9 +678,9 @@ class Page:
                 url = cls.sn.site + i.a['href']
                 try:
                     skip, title = i.text.split(' - ', maxsplit=1)
-                except:
-                    #skip, title = i.text.split(', ', maxsplit=1)
-                    skip, title = i.text.split('- ', maxsplit=1)
+                except ValueError:
+                    skip, title = i.text.split(', ', maxsplit=1)
+                    #skip, title = i.text.split('- ', maxsplit=1)
                 if url not in cls.sn.get_tag('splash'):
                     index[url] = title
                 else:
@@ -719,6 +721,18 @@ class Page:
         return self.sn.get_page_html(self.url)
 
     @cached_property
+    def text(self):
+        return BeautifulSoup(self.html).select('#page-content')[0].text
+
+    @cached_property
+    def wordcount(self):
+        return len(re.findall(r"[\w'█_-]+", self.text))
+
+    @cached_property
+    def images(self):
+        return [i['src'] for i in BeautifulSoup(self.html).select('img')]
+
+    @cached_property
     def title(self):
         if 'scp' in self.tags and re.search('[scp]+-[0-9]+$', self.url):
             if self._title_index is None:
@@ -743,6 +757,10 @@ class Page:
         return history
 
     @cached_property
+    def creation_time(self):
+        return self.history[0].time
+
+    @cached_property
     def authors(self):
         authors = []
         author = namedtuple('Author', 'user status')
@@ -762,9 +780,12 @@ class Page:
         if len(self.authors) == 1:
             return self.authors[0].user
         else:
-            msg = ('<author> property is inaplicable to the current page.'
-                   ' Use [page].authors to get all known authors.')
-            raise AttributeError(msg)
+            for i in self.authors:
+                if i.status == 'override':
+                    return i.user
+                if i.status == 'original':
+                    original_author = i.user
+            return original_author
 
     @cached_property
     def votes(self):
@@ -777,6 +798,8 @@ class Page:
 
     @cached_property
     def rating(self):
+        if not self.votes:
+            return None
         return sum(vote.value for vote in self.votes
                    if vote.user != '(account deleted)')
 
@@ -827,7 +850,7 @@ class Page:
 ###############################################################################
 
 
-def enable_logging():
+def enable_logging(logger):
     console = logging.StreamHandler()
     console.setLevel(logging.INFO)
     formatter = logging.Formatter('%(name)-12s: %(levelname)-8s %(message)s')
@@ -843,13 +866,10 @@ def enable_logging():
 
 def main():
     with Page.from_snapshot():
-        print(Page('scp-1200').rating)
-        with Page.from_snapshot('scp-wiki.2015-01-01.db'):
-            print(Page('scp-1200').rating)
-        print(Page('scp-1200').rating)
+        print(Page('scp-1797').images)
     pass
 
 
 if __name__ == "__main__":
-    enable_logging()
+    enable_logging(logger)
     main()
