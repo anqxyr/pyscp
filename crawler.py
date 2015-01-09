@@ -388,7 +388,6 @@ class Snapshot:
         soup = BeautifulSoup(html)
         html = str(soup.select('#main-content')[0])
         self.queue.put({'func': orm.Page.create,
-                        'args': (),
                         'kwargs': {
                             'pageid': pageid,
                             'url': url,
@@ -396,27 +395,23 @@ class Snapshot:
                             'thread_id': thread_id}})
         history = self.wiki.get_page_history(pageid)
         self.queue.put({'func': self._insert_many,
-                        'args': (orm.Revision, history),
-                        'kwargs': {}})
+                        'args': (orm.Revision, history)})
         votes = self.wiki.get_page_votes(pageid)
         self.queue.put({'func': self._insert_many,
-                        'args': (orm.Vote, votes),
-                        'kwargs': {}})
+                        'args': (orm.Vote, votes)})
         self._save_thread_to_db(thread_id)
         tags = [
             {'tag': i, 'url': url}
             for i in [a.string for a in
                       BeautifulSoup(html).select("div.page-tags a")]]
         self.queue.put({'func': self._insert_many,
-                        'args': (orm.Tag, tags),
-                        'kwargs': {}})
+                        'args': (orm.Tag, tags)})
         logger.debug('Finished saving page: {}'.format(url))
 
     def _save_thread_to_db(self, thread_id):
         comments = list(self.wiki.get_forum_thread(thread_id))
         self.queue.put({'func': self._insert_many,
-                        'args': (orm.ForumPost, comments),
-                        'kwargs': {}})
+                        'args': (orm.ForumPost, comments)})
 
     ###########################################################################
     # Threading Methods
@@ -440,8 +435,8 @@ class Snapshot:
                     n += 1
                     item = self.queue.get()
                     func = item['func']
-                    args = item['args']
-                    kwargs = item['kwargs']
+                    args = item.get('args', ())
+                    kwargs = item.get('kwargs', {})
                     try:
                         func(*args, **kwargs)
                     except Exception:
@@ -533,22 +528,18 @@ class Snapshot:
                 future = executor.submit(self._save_page_to_db, url)
                 self.futures.append(future)
             if include_forums:
-                self.queue.put({'func': orm.ForumThread.create_table,
-                                'args': (), 'kwargs': {}})
-                self.queue.put({'func': orm.ForumCategory.create_table,
-                                'args': (), 'kwargs': {}})
+                self.queue.put({'func': orm.ForumThread.create_table})
+                self.queue.put({'func': orm.ForumCategory.create_table})
                 for c in self.wiki.list_forum_categories():
                     if c['title'] == 'Per page discussions':
                         continue
                     self.queue.put({'func': orm.ForumCategory.create,
-                                    'args': (),
                                     'kwargs': c})
                     c_id = c['category_id']
                     for t in self.wiki.list_threads_in_category(c_id):
                         msg = 'Saving forum thread: {}'.format(t['title'])
                         logger.info(msg)
                         self.queue.put({'func': orm.ForumThread.create,
-                                        'args': (),
                                         'kwargs': t})
                         t_id = t['thread_id']
                         future = executor.submit(self._save_thread_to_db, t_id)
