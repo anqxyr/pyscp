@@ -108,23 +108,34 @@ class StatGenerator:
 
     def print_basic(self):
         msgs = (
-            'Number of pages on the site:',
-            'Number of unique authors:',
-            'Total number of votes:',
-            '    Upvotes:',
-            '    Downvotes:',
-            'Total Net Rating:',
-            '    Average:',
-            '    Mode:',
-            '    Deviation:',
-            'Total Wordcount:',
-            '    Average:',
-            'Total Comments:',
-            'Total Revisions:',
-            'Total Images:')
+            '~ Pages',
+            '~ Users',
+            'Authors',
+            'Voters',
+            'Editors',
+            '~ Votes',
+            'Upvotes',
+            'Downvotes',
+            '~ Rating',
+            'Average',
+            'Mode',
+            'Deviation',
+            '~ Wordcount',
+            'Average',
+            '~ Comments',
+            '~ Revisions',
+            '~ Images')
         funcs = (
             lambda x: x.index.size,
+            lambda x: len(
+                set(x.author.unique()) |
+                set(self.votes[self.votes.page.isin(x.index)].user.unique()) |
+                set(self.revisions[
+                    self.revisions.page.isin(x.index)].user.unique())),
             lambda x: x.author.nunique(),
+            lambda x: self.votes[self.votes.page.isin(x.index)].user.nunique(),
+            lambda x: self.revisions[
+                self.revisions.page.isin(x.index)].user.nunique(),
             lambda x: self.votes[self.votes.page.isin(x.index)].index.size,
             lambda x: self.votes[
                 (self.votes.page.isin(x.index)) &
@@ -140,14 +151,13 @@ class StatGenerator:
             lambda x: x.wordcount.mean(),
             lambda x: x.comments.sum(),
             lambda x: x.history.sum(),
-            lambda x: x.images.sum(),
-        )
+            lambda x: x.images.sum())
         skips = self.tags[self.tags.tag == 'scp'].page
         tales = self.tags[self.tags.tag == 'tale'].page
-        header = '| {:<33} | {:<8} | {:<8} | {:<8} |'
+        header = '||~ {} ||~ {} ||~ {} ||~ {} ||'
         header = header.format('Field', 'Total', 'Skips', 'Tales')
         print(header)
-        row = '| {:<33} | {:<8.0f} | {:<8.0f} | {:<8.0f} |'
+        row = '||{} || {:.0f} || {:.0f} || {:.0f} ||'
         for msg, func in zip(msgs, funcs):
             print(row.format(
                 msg,
@@ -155,13 +165,21 @@ class StatGenerator:
                 func(self.pages[self.pages.index.isin(skips)]),
                 func(self.pages[self.pages.index.isin(tales)])))
 
+    def _days_on_the_site(self, user):
+        print(user)
+        com = self.comments[self.comments.user == user].time.dropna().min()
+        rev = self.revisions[self.revisions.user == user].time.dropna().min()
+        if pd.isnull(com) and pd.isnull(rev):
+            return 999999 # this is a dirty hack :(
+        elif pd.isnull(com) or pd.isnull(rev):
+            act = com if pd.notnull(com) else rev
+        else:
+            act = min(com, rev)
+        return (arrow.now() - arrow.get(act)).days
+
     def create_table_authors(self):
-        pf = self.pages
-        rf = self.revisions
-        cf = self.comments
-        columns = {}
-        aus = pf.author.dropna().unique()
-        au = lambda x: pf[pf.author == x]
+        authors = pf.author.dropna().unique()
+        author_data = lambda x: self.pages[self.pages.author == x]
         columns['pages created'] = {i: au(i).index.size for i in aus}
         columns['net rating'] = {i: au(i).rating.sum() for i in aus}
         columns['average rating'] = {i: au(i).rating.mean().round(2) for i in aus}
@@ -187,13 +205,48 @@ class StatGenerator:
         table_authors = pd.DataFrame(columns)
         table_authors.to_csv(self.dir + 'table_authors.csv', index_col='user')
 
+    def create_table_ratings(self):
+        ratings = collections.defaultdict(dict)
+        contributors = self.pages.author.unique()
+        newbies = [
+            i for i in self.votes.user.unique()
+            if self._days_on_the_site(i) < 180]
+        staff = [
+            'DrEverettMann', 'DrBright', 'DrClef', 'Drewbear',
+            'Photosynthetic', 'Sorts', 'thedeadlymoose', 'TroyL', 'Crayne',
+            'Dexanote', 'Eskobar', 'Gaffney', 'Pig_catapult', 'Roget',
+            'Silberescher', 'Sophia', 'SoullessSingularity', 'Vivax', 'Zyn',
+            'Accelerando', 'Doctor', 'anqxyr', 'pxdnbluesoul', 'Bouncl',
+            'Faminepulse', 'FlameShirt', 'FortuneFavorsBold', 'Kalinin',
+            'MisterFlames', 'murphy_slaw', 'Nioki', 'ProcyonLotor', 'Reject',
+            'Riemann', 'Rumetzen', 'spikebrennan', 'thattallfellow', 'Tuomey',
+            'Vincent_Redgrave', 'weizhong', 'Wogglebug', 'Blaroth', 'Chubert',
+            'Devereaux', 'djkaktus', 'Fantem', 'Kate', 'LurkD', 'Pixeltasim']
+        for n, (index, row) in enumerate(self.pages.iterrows()):
+            print(n)
+            ratings['full rating'][row['url']] = row['rating']
+            ratings['contributor rating'][row['url']] = self.votes[
+                (self.votes.user.isin(contributors)) &
+                (self.votes.page == row.name)].value.sum()
+            ratings['newbie rating'][row['url']] = self.votes[
+                (self.votes.user.isin(newbies)) &
+                (self.votes.page == row.name)].value.sum()
+            ratings['staff rating'][row['url']] = self.votes[
+                (self.votes.user.isin(staff)) &
+                (self.votes.page == row.name)].value.sum()
+        ratings = pd.DataFrame(ratings)
+        ratings.to_csv(
+            '{}table_ratings.csv'.format(self.datadir),
+            index_label='page')
+
 ###############################################################################
 
 
 def main():
     gen = StatGenerator()
     gen.load()
-    gen.print_basic()
+    gen.create_table_ratings()
+    #gen.print_basic()
     #print(gen.basic_lists['unique authors'])
     #gen.print_basic()
     #print(gen.basic_lists['ratings'])
