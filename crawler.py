@@ -33,7 +33,21 @@ logger.setLevel(logging.DEBUG)
 
 class WikidotConnector:
 
+    """
+    Provide a low-level interface to a Wikidot site.
+
+    This class does not use any of the official Wikidot API, and instead
+    relies on sending http post/get requests to internal Wikidot pages and
+    parsing the returned data.
+    """
+
     def __init__(self, site):
+        """
+        Initialize an instance of the class.
+
+        Args:
+            site (str): Full url of the main page of the site
+        """
         self.site = site.rstrip('/')
         req = requests.Session()
         req.mount(site, requests.adapters.HTTPAdapter(max_retries=5))
@@ -44,7 +58,23 @@ class WikidotConnector:
     ###########################################################################
 
     def _module(self, name, pageid, **kwargs):
-        '''Retrieve data from the specified wikidot module.'''
+        """
+        Call an internal Wikidot module.
+
+        This method is responsible for most of the class' functionality.
+        Almost all other methods of the class are using _module in one way
+        or another.
+
+        Args:
+            name (str): Name of the Wikidot module that will be called.
+            pageid (int): Unique page identifier used by Wikidot. In some
+                cases, may be None, e.g. when retrieving a forum thread.
+            **kwargs: Arbitrary keyword arguments.
+
+        Returns:
+            json: unparsed json data returned by Wikidot servers.
+
+        """
         msg = '_module call: {} ({}) ({})'
         kwstring = ', '.join('{}: {}'.format(k, v) for k, v in kwargs.items())
         logger.debug(msg.format(name, pageid, kwstring))
@@ -53,6 +83,8 @@ class WikidotConnector:
             'page_id': pageid,
             'pageId': pageid,  # fuck wikidot
             'moduleName': name,
+            # token7 can be any 6-digit number, as long as it's the same
+            # in the payload and in the cookie
             'wikidot_token7': '123456'}
         cookies = {'wikidot_token7': '123456'}
         for i in self.req.cookies:
@@ -64,6 +96,7 @@ class WikidotConnector:
         return data.json()
 
     def _parse_forum_thread_page(self, page_html):
+        """Retrieve posts from a single forum page."""
         soup = BeautifulSoup(page_html)
         posts = []
         for e in soup.select('div.post'):
@@ -88,6 +121,23 @@ class WikidotConnector:
         return posts
 
     def _pager(self, baseurl):
+        """
+        Iterate over multi-page pages.
+
+        Note:
+            Some Wikidot pages that seem to employ the paging mechanism
+            actually don't. For example, discussion pages have an page
+            navigation bar that displays '<< previous' and 'next >>' buttons;
+            however, discussion pages actually use separate calls to the
+            ForumViewThreadPostsModule.
+
+        Args:
+            baseurl (str): url of the page without the subpage suffix.
+
+        Yields:
+            str: html data of the next subpage
+
+        """
         logger.debug('Paging through {}'.format(baseurl))
         first_page = self.get_page_html(baseurl)
         yield first_page
@@ -106,8 +156,13 @@ class WikidotConnector:
     ###########################################################################
     # Page Interface Methods
     ###########################################################################
+    # These methods are used by the Page class if WikidotConnector is used as
+    # the backend. Can also be used elsewhere as a slightly higher-level
+    # abstraction over _module .
+    ###########################################################################
 
     def get_page_html(self, url):
+        """Get page html. Return None if status code is not 200."""
         data = self.req.get(url, allow_redirects=False)
         if data.status_code == 200:
             return data.text
@@ -117,6 +172,7 @@ class WikidotConnector:
             return None
 
     def get_page_history(self, pageid):
+        """Get page history."""
         if pageid is None:
             return None
         data = self._module(
@@ -142,6 +198,7 @@ class WikidotConnector:
         return history
 
     def get_page_votes(self, pageid):
+        """Get page votes."""
         if pageid is None:
             return None
         data = self._module(
@@ -160,6 +217,7 @@ class WikidotConnector:
         return votes
 
     def get_page_source(self, pageid):
+        """Get page source."""
         if pageid is None:
             return None
         html = self._module(
@@ -168,6 +226,35 @@ class WikidotConnector:
         source = BeautifulSoup(html).text
         source = source[11:].strip()
         return source
+
+    def get_forum_thread(self, thread_id):
+        if thread_id is None:
+            return []
+        data = self._module(
+            name='forum/ForumViewThreadPostsModule',
+            t=thread_id,
+            pageid=None,
+            pageNo=1)['body']
+        soup = BeautifulSoup(data)
+        try:
+            pager = soup.select('span.pager-no')[0].text
+            num_of_pages = int(pager.split(' of ')[1])
+        except IndexError:
+            num_of_pages = 1
+        posts = []
+        for post in self._parse_forum_thread_page(data):
+            post['thread_id'] = thread_id
+            posts.append(post)
+        for n in range(2, num_of_pages + 1):
+            data = self._module(
+                name='forum/ForumViewThreadPostsModule',
+                t=thread_id,
+                pageid=None,
+                pageNo=n)['body']
+            for post in self._parse_forum_thread_page(data):
+                post['thread_id'] = thread_id
+                posts.append(post)
+        return posts
 
     ###########################################################################
     # Helper Methods
@@ -238,35 +325,6 @@ class WikidotConnector:
                     'description': description,
                     'category_id': category_id}
 
-    def get_forum_thread(self, thread_id):
-        if thread_id is None:
-            return []
-        data = self._module(
-            name='forum/ForumViewThreadPostsModule',
-            t=thread_id,
-            pageid=None,
-            pageNo=1)['body']
-        soup = BeautifulSoup(data)
-        try:
-            pager = soup.select('span.pager-no')[0].text
-            num_of_pages = int(pager.split(' of ')[1])
-        except IndexError:
-            num_of_pages = 1
-        posts = []
-        for post in self._parse_forum_thread_page(data):
-            post['thread_id'] = thread_id
-            posts.append(post)
-        for n in range(2, num_of_pages + 1):
-            data = self._module(
-                name='forum/ForumViewThreadPostsModule',
-                t=thread_id,
-                pageid=None,
-                pageNo=n)['body']
-            for post in self._parse_forum_thread_page(data):
-                post['thread_id'] = thread_id
-                posts.append(post)
-        return posts
-
     ###########################################################################
     # Active Methods
     ###########################################################################
@@ -317,7 +375,10 @@ class Snapshot:
 
     database_directory = '/home/anqxyr/heap/_scp/'
 
-    def __init__(self, dbname, site='http://www.scp-wiki.net'):
+    def __init__(self, dbname=None, site='http://www.scp-wiki.net'):
+        if dbname is None:
+            dbname = '{}.{}.db'.format(
+                site.split('.')[-2], arrow.now().format('YYYY-MM-DD'))
         self.dbname = dbname
         dbpath = self.database_directory + dbname
         orm.connect(dbpath)
@@ -748,7 +809,7 @@ class Page:
         return history
 
     @cached_property
-    def creation_time(self):
+    def created(self):
         return self.history[0].time
 
     @cached_property
@@ -756,8 +817,11 @@ class Page:
         authors = []
         author = namedtuple('Author', 'user status')
         second_author = self.sn.get_author_metadata(self.url)
-        if ((second_author is None or not second_author['override'])
-                and self.history):
+        if ((second_author is None
+            or not second_author['override'])
+            and self.history
+            and self.history[0].user != '(account deleted)'
+                and not self.history[0].user.startswith('Anonymous (')):
             authors.append(author(self.history[0].user, 'original'))
         if second_author is not None:
             if second_author['override']:
@@ -768,6 +832,8 @@ class Page:
 
     @cached_property
     def author(self):
+        if len(self.authors) == 0:
+            return None
         if len(self.authors) == 1:
             return self.authors[0].user
         else:
@@ -856,8 +922,7 @@ def enable_logging(logger):
 
 
 def main():
-    with Page.from_snapshot():
-        print(Page('scp-1797').images)
+    Snapshot().take()
     pass
 
 
