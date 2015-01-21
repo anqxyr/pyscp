@@ -4,8 +4,6 @@
 # Module Imports
 ###############################################################################
 
-#import matplotlib
-#import re
 import arrow
 import bs4
 import collections
@@ -14,6 +12,7 @@ import csv
 import logging
 import os
 import peewee
+import pygal
 import re
 
 from statistics import mode, pstdev
@@ -314,10 +313,8 @@ def create_table_ratings():
     contributors = Page.list('author', distinct=True)
     is_newbie = lambda x: x is not None and x < 180
     newbies = [i for i in User.list('name') if is_newbie(_days_on_the_site(i))]
-    staff = []
-    with open('stafflist.txt') as F:
-        for i in F.readlines():
-            staff.append(i.strip())
+    with open('stafflist.txt') as f:
+        staff = [i.strip() for i in f]
     for n, p in enumerate(Page.select()):
         logger.info('Processing page {}/{}'.format(n, Page.count()))
         page_dict = collections.OrderedDict()
@@ -340,12 +337,58 @@ def create_table_ratings():
     _dict_to_csv('ratings.csv', data)
 
 ###############################################################################
+# Plotting Functions
+###############################################################################
+
+
+def plot_user_activity(user):
+    plot = pygal.Line(
+        fill=True,
+        style=pygal.style.NeonStyle,
+        x_label_rotation=35,
+        show_dots=False,
+        title='User Activity: {}'.format(user))
+    rev_cn = collections.Counter()
+    for rev in Revision.select().where(Revision.user == user):
+        key = '{}-{:02}'.format(rev.time.year, rev.time.month)
+        rev_cn[key] += 1
+    post_cn = collections.Counter()
+    for post in ForumPost.select().where(ForumPost.user == user):
+        key = '{}-{:02}'.format(post.time.year, post.time.month)
+        post_cn[key] += 1
+    page_cn = collections.Counter()
+    for page in Page.select().where(Page.author == user):
+        key = '{}-{:02}'.format(page.created.year, page.created.month)
+        page_cn[key] += 20
+    dates = set.union(*map(set, (rev_cn, post_cn, page_cn)))
+    if not dates:
+        print('ERROR: {}'.format(user))
+        return
+    start = arrow.get(min(dates), 'YYYY-MM')
+    end = arrow.get(max(dates), 'YYYY-MM')
+    x_axis = [
+        '{}-{:02}'.format(i.year, i.month)
+        for i, _ in arrow.Arrow.span_range('month', start, end)]
+    # the data from last month is usually only partial, discard it
+    x_axis = x_axis[:-1]
+    plot.x_labels = x_axis
+    plot.x_labels_major = [i for i in x_axis if i[-2:] == '01']
+    plot.width = max(50 * len(x_axis), 800)
+    plot.add('Revisions', [rev_cn[i] for i in x_axis])
+    plot.add('Comments', [post_cn[i] for i in x_axis])
+    plot.add('Pages Authored', [page_cn[i] for i in x_axis])
+    if not os.path.exists('plots/activity/'):
+        os.mkdir('plots/activity/')
+    plot.render_to_png('plots/activity/{}.png'.format(user))
+
+###############################################################################
 
 
 def main():
     #generate()
-    create_table_ratings()
+    #create_table_ratings()
     #print_basic()
+    plot_user_activity('Aelanna')
     pass
 
 if __name__ == "__main__":
