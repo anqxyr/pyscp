@@ -4,18 +4,19 @@
 # Module Imports
 ###############################################################################
 
-#import csv
 #import matplotlib
 #import re
 import arrow
 import bs4
 import collections
 import crawler
+import csv
 import logging
+import os
+import peewee
 import re
-#import numpy as np
-import pandas as pd
 
+from statistics import mode, pstdev
 
 ###############################################################################
 # Global Constants And Variables
@@ -23,233 +24,328 @@ import pandas as pd
 
 logger = logging.getLogger('scp.stats')
 logger.setLevel(logging.DEBUG)
+CSV_OUT_PATH = '/home/anqxyr/heap/_scp/csv_stats/'
 
 ###############################################################################
-# Classes
+# Database ORM Classes
 ###############################################################################
 
+DBPATH = '/home/anqxyr/heap/_scp/stats.db'
+db = peewee.SqliteDatabase(DBPATH)
 
-class StatGenerator:
 
-    def __init__(self):
-        self.datadir = crawler.Snapshot.database_directory + 'stats/'
+class BaseModel(peewee.Model):
 
-    ###########################################################################
-    # Page Processors
-    ###########################################################################
+    class Meta:
+        database = db
 
-    ###########################################################################
-    # Generator
-    ###########################################################################
-
-    def _generate_pages(self, frames, page):
-        basic = ('url', 'title', 'rating', 'author', 'created', 'wordcount')
-        for x in basic:
-            frames['pages'][x][page._pageid] = getattr(page, x)
-        lists = ('images', 'comments', 'history')
-        for x in lists:
-            frames['pages'][x][page._pageid] = len(getattr(page, x))
-        for i in page.tags:
-            index = len(frames['tags']['page'])
-            frames['tags']['page'][index] = page._pageid
-            frames['tags']['tag'][index] = i
-
-    def _generate_votes(self, frames, page):
-        for i in page.votes:
-            index = len(frames['votes']['page'])
-            for x in ('user', 'value'):
-                frames['votes'][x][index] = getattr(i, x)
-            frames['votes']['page'][index] = page._pageid
-
-    def _generate_revisions(self, frames, page):
-        for i in page.history:
-            index = len(frames['revisions']['page'])
-            for x in ('user', 'time'):
-                frames['revisions'][x][index] = getattr(i, x)
-            frames['revisions']['page'][index] = page._pageid
-
-    def _generate_comments(self, frames, page):
-        for i in page.comments:
-            for x in ('user', 'time', 'title'):
-                frames['comments'][x][i.post_id] = getattr(i, x)
-            wc = len(re.findall(r"[\w'█_-]+",
-                                bs4.BeautifulSoup(i.content).text))
-            frames['comments']['wordcount'][i.post_id] = wc
-            frames['comments']['page'][i.post_id] = page._pageid
-
-    def generate(self):
-        frames = collections.defaultdict(lambda: collections.defaultdict(dict))
-        with crawler.Page.from_snapshot():
-            logger.info('Generating DataFrame objects')
-            for n, url in enumerate(crawler.Page.sn.list_all_pages()):
-                logger.info('Processing page #{}'.format(n))
-                p = crawler.Page(url)
-                self._generate_pages(frames, p)
-                self._generate_votes(frames, p)
-                self._generate_revisions(frames, p)
-                self._generate_comments(frames, p)
-        for i in frames:
-            frame = pd.DataFrame(frames[i])
-            frame.to_csv(
-                '{}_{}.csv'.format(self.datadir, i),
-                index_label='index')
-            setattr(self, i, frame)
-
-    def load(self):
-        for i in ('pages', 'votes', 'tags', 'revisions', 'comments'):
-            frame = pd.read_csv(
-                '{}_{}.csv'.format(self.datadir, i),
-                index_col='index')
-            setattr(self, i, frame)
-
-    ###########################################################################
-    # Output Methods
-    ###########################################################################
-
-    def print_basic(self):
-        msgs = (
-            '~ Pages',
-            '~ Users',
-            'Authors',
-            'Voters',
-            'Editors',
-            '~ Votes',
-            'Upvotes',
-            'Downvotes',
-            '~ Rating',
-            'Average',
-            'Mode',
-            'Deviation',
-            '~ Wordcount',
-            'Average',
-            '~ Comments',
-            '~ Revisions',
-            '~ Images')
-        funcs = (
-            lambda x: x.index.size,
-            lambda x: len(
-                set(x.author.unique()) |
-                set(self.votes[self.votes.page.isin(x.index)].user.unique()) |
-                set(self.revisions[
-                    self.revisions.page.isin(x.index)].user.unique())),
-            lambda x: x.author.nunique(),
-            lambda x: self.votes[self.votes.page.isin(x.index)].user.nunique(),
-            lambda x: self.revisions[
-                self.revisions.page.isin(x.index)].user.nunique(),
-            lambda x: self.votes[self.votes.page.isin(x.index)].index.size,
-            lambda x: self.votes[
-                (self.votes.page.isin(x.index)) &
-                (self.votes.value == 1)].index.size,
-            lambda x: self.votes[
-                (self.votes.page.isin(x.index)) &
-                (self.votes.value == -1)].index.size,
-            lambda x: x.rating.sum(),
-            lambda x: x.rating.mean(),
-            lambda x: x.rating.mode()[0],
-            lambda x: x.rating.std(),
-            lambda x: x.wordcount.sum(),
-            lambda x: x.wordcount.mean(),
-            lambda x: x.comments.sum(),
-            lambda x: x.history.sum(),
-            lambda x: x.images.sum())
-        skips = self.tags[self.tags.tag == 'scp'].page
-        tales = self.tags[self.tags.tag == 'tale'].page
-        header = '||~ {} ||~ {} ||~ {} ||~ {} ||'
-        header = header.format('Field', 'Total', 'Skips', 'Tales')
-        print(header)
-        row = '||{} || {:.0f} || {:.0f} || {:.0f} ||'
-        for msg, func in zip(msgs, funcs):
-            print(row.format(
-                msg,
-                func(self.pages),
-                func(self.pages[self.pages.index.isin(skips)]),
-                func(self.pages[self.pages.index.isin(tales)])))
-
-    def _days_on_the_site(self, user):
-        print(user)
-        com = self.comments[self.comments.user == user].time.dropna().min()
-        rev = self.revisions[self.revisions.user == user].time.dropna().min()
-        if pd.isnull(com) and pd.isnull(rev):
-            return 999999 # this is a dirty hack :(
-        elif pd.isnull(com) or pd.isnull(rev):
-            act = com if pd.notnull(com) else rev
+    @classmethod
+    def count(cls, expr=None, distinct=None):
+        if distinct is None:
+            query = cls.select(peewee.fn.Count())
         else:
-            act = min(com, rev)
-        return (arrow.now() - arrow.get(act)).days
+            query = cls.select(peewee.fn.Count(peewee.fn.Distinct(distinct)))
+        if expr is not None:
+            query = query.where(expr)
+        return query.scalar()
 
-    def create_table_authors(self):
-        authors = pf.author.dropna().unique()
-        author_data = lambda x: self.pages[self.pages.author == x]
-        columns['pages created'] = {i: au(i).index.size for i in aus}
-        columns['net rating'] = {i: au(i).rating.sum() for i in aus}
-        columns['average rating'] = {i: au(i).rating.mean().round(2) for i in aus}
-        columns['rating per day'] = {}
-        for i in aus:
-            first_comment = cf[cf.user == i].time.dropna().min()
-            first_revision = rf[rf.user == i].time.dropna().min()
-            if pd.isnull(first_comment) and pd.isnull(first_revision):
-                continue
-            elif pd.isnull(first_comment):
-                first_activity = arrow.get(first_revision)
-            elif pd.isnull(first_revision):
-                first_activity = arrow.get(first_comment)
-            else:
-                first_activity = min(
-                    arrow.get(first_comment), arrow.get(first_revision))
-            days_on_site = (arrow.now() - first_activity).days
-            rating = au(i).rating.sum() / days_on_site
-            columns['rating per day'][i] = rating
-        columns['wordcount'] = {i: au(i).wordcount.sum() for i in aus}
-        columns['average wordcount'] = {i: au(i).wordcount.mean() for i in aus}
-        columns['image count'] = {i: au(i).images.sum() for i in aus}
-        table_authors = pd.DataFrame(columns)
-        table_authors.to_csv(self.dir + 'table_authors.csv', index_col='user')
+    @classmethod
+    def sum(cls, attr, expr=None):
+        query = cls.select(peewee.fn.Sum(getattr(cls, attr)))
+        if expr is not None:
+            query = query.where(expr)
+        return query.scalar()
 
-    def create_table_ratings(self):
-        ratings = collections.defaultdict(dict)
-        contributors = self.pages.author.unique()
-        newbies = [
-            i for i in self.votes.user.unique()
-            if self._days_on_the_site(i) < 180]
-        staff = [
-            'DrEverettMann', 'DrBright', 'DrClef', 'Drewbear',
-            'Photosynthetic', 'Sorts', 'thedeadlymoose', 'TroyL', 'Crayne',
-            'Dexanote', 'Eskobar', 'Gaffney', 'Pig_catapult', 'Roget',
-            'Silberescher', 'Sophia', 'SoullessSingularity', 'Vivax', 'Zyn',
-            'Accelerando', 'Doctor', 'anqxyr', 'pxdnbluesoul', 'Bouncl',
-            'Faminepulse', 'FlameShirt', 'FortuneFavorsBold', 'Kalinin',
-            'MisterFlames', 'murphy_slaw', 'Nioki', 'ProcyonLotor', 'Reject',
-            'Riemann', 'Rumetzen', 'spikebrennan', 'thattallfellow', 'Tuomey',
-            'Vincent_Redgrave', 'weizhong', 'Wogglebug', 'Blaroth', 'Chubert',
-            'Devereaux', 'djkaktus', 'Fantem', 'Kate', 'LurkD', 'Pixeltasim']
-        for n, (index, row) in enumerate(self.pages.iterrows()):
-            print(n)
-            ratings['full rating'][row['url']] = row['rating']
-            ratings['contributor rating'][row['url']] = self.votes[
-                (self.votes.user.isin(contributors)) &
-                (self.votes.page == row.name)].value.sum()
-            ratings['newbie rating'][row['url']] = self.votes[
-                (self.votes.user.isin(newbies)) &
-                (self.votes.page == row.name)].value.sum()
-            ratings['staff rating'][row['url']] = self.votes[
-                (self.votes.user.isin(staff)) &
-                (self.votes.page == row.name)].value.sum()
-        ratings = pd.DataFrame(ratings)
-        ratings.to_csv(
-            '{}table_ratings.csv'.format(self.datadir),
-            index_label='page')
+    @classmethod
+    def mean(cls, attr, expr=None):
+        query = cls.select(peewee.fn.Avg(getattr(cls, attr)))
+        if expr is not None:
+            query = query.where(expr)
+        return query.scalar()
+
+    @classmethod
+    def list(cls, attr, expr=None, distinct=False):
+        query = cls.select(getattr(cls, attr))
+        if expr is not None:
+            query = query.where(expr)
+        if distinct:
+            query = query.distinct()
+        return [getattr(i, attr) for i in query
+                if getattr(i, attr) is not None]
+
+
+class Page(BaseModel):
+    pageid = peewee.IntegerField(primary_key=True)
+    url = peewee.CharField(unique=True)
+    title = peewee.CharField()
+    rating = peewee.IntegerField(null=True)
+    author = peewee.CharField()
+    created = peewee.DateTimeField()
+    wordcount = peewee.IntegerField()
+    revisions = peewee.IntegerField()
+    comments = peewee.IntegerField()
+    images = peewee.IntegerField()
+
+
+class Revision(BaseModel):
+    pageid = peewee.IntegerField(index=True)
+    user = peewee.CharField(index=True)
+    time = peewee.DateTimeField()
+
+
+class Vote(BaseModel):
+    pageid = peewee.IntegerField(index=True)
+    user = peewee.CharField(index=True)
+    value = peewee.IntegerField()
+
+
+class ForumPost(BaseModel):
+    pageid = peewee.IntegerField(index=True)
+    title = peewee.CharField()
+    wordcount = peewee.IntegerField()
+    user = peewee.CharField(index=True)
+    time = peewee.DateTimeField()
+
+
+class Tag(BaseModel):
+    pageid = peewee.IntegerField(index=True)
+    tag = peewee.CharField(index=True)
+
+
+class User(BaseModel):
+    name = peewee.CharField(unique=True)
+    pages = peewee.IntegerField()
+    wordcount = peewee.IntegerField(null=True)
+    comments = peewee.IntegerField()
+    edits = peewee.IntegerField()
+    first_activity = peewee.DateTimeField(null=True)
+    rating = peewee.IntegerField(null=True)
+    upvoted = peewee.IntegerField()
+    downvoted = peewee.IntegerField()
+
+###############################################################################
+# DB Generating Functions
+###############################################################################
+
+
+def _process_page(url):
+    p = crawler.Page(url)
+    logger.info('Processing page: {}'.format(url))
+    Page.create(
+        pageid=p._pageid,
+        url=p.url,
+        title=p.title,
+        rating=p.rating,
+        author=p.author,
+        created=p.created,
+        wordcount=p.wordcount,
+        revisions=len(p.history),
+        comments=len(p.comments),
+        images=len(p.images))
+    for i in p.history:
+        Revision.create(pageid=p._pageid, user=i.user, time=i.time)
+    for i in p.votes:
+        Vote.create(pageid=p._pageid, user=i.user, value=i.value)
+    for i in p.comments:
+        ForumPost.create(
+            pageid=p._pageid,
+            title=i.title,
+            user=i.user,
+            time=i.time,
+            wordcount=len(re.findall(
+                r"[\w'█_-]+",
+                bs4.BeautifulSoup(i.content).text)))
+    for i in p.tags:
+        Tag.create(pageid=p._pageid, tag=i)
+
+
+def _process_user(user):
+    if user == '(account deleted)' or user.startswith('Anonymous ('):
+        return
+    logger.info('Processing user: {}'.format(user))
+    data = {'name': user}
+    data['pages'] = Page.count(Page.author == user)
+    data['wordcount'] = Page.sum('wordcount', Page.author == user)
+    data['comments'] = ForumPost.count(ForumPost.user == user)
+    data['edits'] = Revision.count(Revision.user == user)
+    activities = [
+        Revision.select(peewee.fn.Min(Revision.time))
+        .where(Revision.user == user)
+        .scalar(),
+        ForumPost.select(peewee.fn.Min(ForumPost.time))
+        .where(ForumPost.user == user)
+        .scalar()]
+    activities = [i for i in activities if i is not None]
+    data['first_activity'] = min(activities) if activities else None
+    data['rating'] = Page.sum('rating', Page.author == user)
+    data['upvoted'] = Vote.count((Vote.user == user) & (Vote.value == 1))
+    data['downvoted'] = Vote.count((Vote.user == user) & (Vote.value == -1))
+    User.create(**data)
+
+
+def _dbmap(func, data):
+    block_size = 100
+    buffer = []
+    for i in data:
+        buffer.append(i)
+        if len(buffer) == block_size:
+            with db.transaction():
+                for j in buffer:
+                    func(j)
+            buffer = []
+    with db.transaction():
+        for i in buffer:
+            func(i)
+
+
+def generate():
+    time_start = arrow.now()
+    logger.info('Purging tables.')
+    for i in (Page, Revision, Vote, ForumPost, Tag, User):
+        i.drop_table(fail_silently=True)
+        i.create_table()
+    with crawler.Page.from_snapshot() as sn:
+        _dbmap(_process_page, sn.list_all_pages())
+    users = set()
+    for i in (Revision, Vote, ForumPost):
+        users = users.union(set(i.list('user', distinct=True)))
+    _dbmap(_process_user, sorted(users))
+    time_taken = (arrow.now() - time_start)
+    hours, remainder = divmod(time_taken.seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    msg = 'Finished generating statistics. [{:02d}:{:02d}:{:02d}]'
+    msg = msg.format(hours, minutes, seconds)
+    logger.info(msg)
+
+###############################################################################
+# Output Functions
+###############################################################################
+
+
+def print_basic():
+    msgs = (
+        '~ Pages', '~ Users', 'Authors', 'Voters', 'Editors', '~ Votes',
+        'Upvotes', 'Downvotes', '~ Rating', 'Average', 'Mode', 'Deviation',
+        '~ Wordcount', 'Average', '~ Comments', '~ Revisions', '~ Images')
+    funcs = (
+        lambda x: Page.count(Page.pageid << x),
+        lambda x: len(set.union(
+            set(Page.list('author', Page.pageid << x)),
+            *[set(i.list('user', i.pageid << x))
+              for i in (Vote, Revision, ForumPost)])),
+        lambda x: Page.count(Page.pageid << x, distinct=Page.author),
+        lambda x: Vote.count(Vote.pageid << x, distinct=Vote.user),
+        lambda x: Revision.count(Revision.pageid << x, distinct=Revision.user),
+        lambda x: Vote.count(Vote.pageid << x),
+        lambda x: Vote.count((Vote.pageid << x) & (Vote.value == 1)),
+        lambda x: Vote.count((Vote.pageid << x) & (Vote.value == -1)),
+        lambda x: Page.sum('rating', Page.pageid << x),
+        lambda x: Page.mean('rating', Page.pageid << x),
+        lambda x: mode(Page.list('rating', Page.pageid << x)),
+        lambda x: pstdev(Page.list('rating', Page.pageid << x)),
+        lambda x: Page.sum('wordcount', Page.pageid << x),
+        lambda x: Page.mean('wordcount', Page.pageid << x),
+        lambda x: Page.sum('comments', Page.pageid << x),
+        lambda x: Page.sum('revisions', Page.pageid << x),
+        lambda x: Page.sum('images', Page.pageid << x))
+    pages = Page.list('pageid')
+    skips = Tag.list('pageid', Tag.tag == 'scp')
+    tales = Tag.list('pageid', Tag.tag == 'tale')
+    header = '||~ {} ||~ {} ||~ {} ||~ {} ||'
+    header = header.format('Field', 'Total', 'Skips', 'Tales')
+    print(header)
+    row = '||{} || {:.0f} || {:.0f} || {:.0f} ||'
+    for msg, func in zip(msgs, funcs):
+        print(row.format(msg, func(pages), func(skips), func(tales)))
+
+
+def _days_on_the_site(user):
+    user = User.get(User.name == user)
+    if user.first_activity is None:
+        return None
+    return (arrow.now() - arrow.get(user.first_activity)).days
+
+
+def _dict_to_csv(filename, data):
+    if not os.path.exists(CSV_OUT_PATH):
+        os.mkdir(CSV_OUT_PATH)
+    fullname = CSV_OUT_PATH + filename
+    with open(fullname, 'w') as F:
+        fields = data[0].keys()
+        fields = [i.upper() for i in fields]
+        writer = csv.DictWriter(F, fieldnames=fields)
+        writer.writeheader()
+        for row in data:
+            formatted_row = {}
+            for k, v in row.items():
+                formatted_row[k.upper()] = v
+            writer.writerow(formatted_row)
+    logger.info('Updated statistics data in {}'.format(filename))
+
+
+def create_table_authors():
+    data = []
+    for i in Page.list('author', distinct=True):
+        try:
+            user = User.get(User.name == i)
+        except User.DoesNotExist:
+            # deleted or anonymous
+            continue
+        user_dict = collections.OrderedDict()
+        user_dict['user'] = i
+        user_dict['pages created'] = user.pages
+        user_dict['net rating'] = user.rating
+        user_dict['average rating'] = round(user.rating / user.pages, 2)
+        if _days_on_the_site(i) is not None:
+            user_dict['rating per day'] = round(
+                user.rating / _days_on_the_site(i),
+                4)
+        else:
+            user_dict['rating per day'] = None
+        user_dict['wordcount'] = user.wordcount
+        user_dict['average wordcount'] = round(user.wordcount / user.pages, 0)
+        user_dict['image count'] = Page.sum('images', Page.author == i)
+        data.append(user_dict)
+    _dict_to_csv('authors.csv', data)
+
+
+def create_table_ratings():
+    data = []
+    contributors = Page.list('author', distinct=True)
+    is_newbie = lambda x: x is not None and x < 180
+    newbies = [i for i in User.list('name') if is_newbie(_days_on_the_site(i))]
+    staff = []
+    with open('stafflist.txt') as F:
+        for i in F.readlines():
+            staff.append(i.strip())
+    for n, p in enumerate(Page.select()):
+        logger.info('Processing page {}/{}'.format(n, Page.count()))
+        page_dict = collections.OrderedDict()
+        page_dict['url'] = p.url
+        page_dict['title'] = p.title
+        page_dict['full rating'] = p.rating
+        page_dict['contributor rating'] = Vote.sum(
+            'value',
+            (Vote.pageid == p.pageid) &
+            (Vote.user << contributors))
+        page_dict['newbie rating'] = Vote.sum(
+            'value',
+            (Vote.pageid == p.pageid) &
+            (Vote.user << newbies))
+        page_dict['staff rating'] = Vote.sum(
+            'value',
+            (Vote.pageid == p.pageid) &
+            (Vote.user << staff))
+        data.append(page_dict)
+    _dict_to_csv('ratings.csv', data)
 
 ###############################################################################
 
 
 def main():
-    gen = StatGenerator()
-    gen.load()
-    gen.create_table_ratings()
-    #gen.print_basic()
-    #print(gen.basic_lists['unique authors'])
-    #gen.print_basic()
-    #print(gen.basic_lists['ratings'])
+    #generate()
+    create_table_ratings()
+    #print_basic()
     pass
 
 if __name__ == "__main__":
