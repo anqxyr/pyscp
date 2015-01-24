@@ -6,15 +6,18 @@
 
 import logging
 import peewee
-
-from os import path
+import concurrent.futures
+import queue
 
 ###############################################################################
-# Global Constants
+# Global Constants And Variables
 ###############################################################################
 
-DBPATH = '/home/anqxyr/heap/_scp/'
 logger = logging.getLogger('scp.crawler.orm')
+executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+queue = queue.Queue()
+buffer = []
+buffer_index = 1
 
 ###############################################################################
 # Database ORM Classes
@@ -27,6 +30,24 @@ class BaseModel(peewee.Model):
 
     class Meta:
         database = db
+
+    @classmethod
+    def create(cls, **kwargs):
+        queue.put({'func': super().create, 'kwargs': kwargs})
+        executor.submit(async_write)
+
+    @classmethod
+    def create_table(cls):
+        queue.put({'func': super().create_table})
+        executor.submit(async_write)
+
+    @classmethod
+    def insert_many(cls, data):
+        super_insert = super().insert_many
+        insert = lambda x: super_insert(x).execute()
+        for idx in range(0, len(data), 500):
+            queue.put({'func': insert, 'args': (data[idx:idx + 500], )})
+            executor.submit(async_write)
 
 
 class Page(BaseModel):
@@ -96,10 +117,41 @@ class Tag(BaseModel):
 ###############################################################################
 
 
-def connect(filename):
-    logger.info('Connecting to the database.')
-    dbpath = path.join(DBPATH, filename)
-    logger.info('Database is located at {}'.format(dbpath))
+def async_write():
+    item = queue.get()
+    buffer.append(item)
+    if len(buffer) > 500 or queue.empty():
+        flush_buffer()
+
+
+def flush_buffer():
+    global buffer, buffer_index
+    buffer_size = len(buffer)
+    logger.debug(
+        'Processing queue items #{}-{}'
+        .format(buffer_index, buffer_index + buffer_size))
+    buffer_index += buffer_size
+    with db.transaction():
+        for item in buffer:
+            func = item['func']
+            args = item.get('args', ())
+            kwargs = item.get('kwargs', {})
+            try:
+                func(*args, **kwargs)
+            except:
+                logger.exception('Exception while processing queue item.')
+            queue.task_done()
+    buffer = []
+
+
+def wait():
+    if queue.qsize() > 500:
+        logger.info('Queue full, pausing.')
+        queue.join()
+
+
+def connect(dbpath):
+    logger.info('Connecting to the database at {}'.format(dbpath))
     db.init(dbpath)
     db.connect()
 
