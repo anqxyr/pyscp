@@ -265,16 +265,16 @@ def _days_on_the_site(user):
     return (arrow.now() - arrow.get(user.first_activity)).days
 
 
-def _dict_to_csv(filename, data):
+def _save_to_csv(filename, table):
     if not os.path.exists(CSV_OUT_PATH):
         os.mkdir(CSV_OUT_PATH)
     fullname = CSV_OUT_PATH + filename
     with open(fullname, 'w') as F:
-        fields = data[0].keys()
+        fields = table[0].keys()
         fields = [i.upper() for i in fields]
         writer = csv.DictWriter(F, fieldnames=fields)
         writer.writeheader()
-        for row in data:
+        for row in table:
             formatted_row = {}
             for k, v in row.items():
                 formatted_row[k.upper()] = v
@@ -282,34 +282,100 @@ def _dict_to_csv(filename, data):
     logger.info('Updated statistics data in {}'.format(filename))
 
 
-def create_table_authors():
-    data = []
+def t_authors():
+    table = []
     for i in Page.list('author', distinct=True):
         try:
             user = User.get(User.name == i)
         except User.DoesNotExist:
             # deleted or anonymous
             continue
-        user_dict = collections.OrderedDict()
-        user_dict['user'] = i
-        user_dict['pages created'] = user.pages
-        user_dict['net rating'] = user.rating
-        user_dict['average rating'] = round(user.rating / user.pages, 2)
+        row = collections.OrderedDict()
+        row['user'] = i
+        row['pages created'] = user.pages
+        row['net rating'] = user.rating
+        row['average rating'] = round(user.rating / user.pages, 2)
         if _days_on_the_site(i) is not None:
-            user_dict['rating per day'] = round(
+            row['rating per day'] = round(
                 user.rating / _days_on_the_site(i),
                 4)
         else:
-            user_dict['rating per day'] = None
-        user_dict['wordcount'] = user.wordcount
-        user_dict['average wordcount'] = round(user.wordcount / user.pages, 0)
-        user_dict['image count'] = Page.sum('images', Page.author == i)
-        data.append(user_dict)
-    _dict_to_csv('authors.csv', data)
+            row['rating per day'] = None
+        row['wordcount'] = user.wordcount
+        row['average wordcount'] = round(user.wordcount / user.pages, 0)
+        row['image count'] = Page.sum('images', Page.author == i)
+        table.append(row)
+    _save_to_csv('authors.csv', table)
 
 
-def create_table_ratings():
-    data = []
+def t_users():
+    table = []
+    for i in User.select():
+        row = collections.OrderedDict()
+        row['user'] = i.name
+        row['revisions'] = i.edits
+        row['total votes'] = i.upvoted + i.downvoted
+        row['net vote rating'] = i.upvoted - i.downvoted
+        row['upvotes'] = i.upvoted
+        row['downvotes'] = i.downvoted
+        row['upvote %'] = round(100 * i.upvoted / row['total votes'], 2)
+        table.append(row)
+    _save_to_csv('users.csv', table)
+
+
+def t_tags_user():
+    table = []
+    for i in User.select():
+        row = collections.OrderedDict()
+        row['user'] = i.name
+        cn = collections.Counter()
+        for v in Vote.select().where(Vote.user == i.name):
+            for t in Tag.list('tag', Tag.pageid == v.pageid):
+                cn[t] += v.value
+        for n, (k, v) in enumerate(cn.most_common(10)):
+            row_key = 'favorite tag #{}'.format(n + 1)
+            row[row_key] = '{} ({})'.format(k, v)
+        for n, (k, v) in enumerate(cn.most_common()[:-6:-1]):
+            row_key = 'unfavorite tag #{}'.format(n + 1)
+            row[row_key] = '{} ({})'.format(k, v)
+        table.append(row)
+    _save_to_csv('tags_user.csv', table)
+
+
+def t_tags_author():
+    table = []
+    for i in Page.list('author', distinct=True):
+        row = collections.OrderedDict()
+        row['user'] = i
+        cn = collections.Counter()
+        pageids = Page.list('pageid', Page.author == i)
+        for t in Tag.list('tag', Tag.pageid << pageids):
+            cn[t] += 1
+        for n, (k, v) in enumerate(cn.most_common(10)):
+            row_key = 'most used tag #{}'.format(n + 1)
+            row[row_key] = '{} ({})'.format(k, v)
+        table.append(row)
+    _save_to_csv('tags_author.csv', table)
+
+
+def t_yearly_votes():
+    table = []
+    for i in User.list('name'):
+        row = collections.OrderedDict()
+        row['user'] == i
+        votes = collections.defaultdict(list)
+        for v in Vote.select().where(Vote.user == i):
+            year = Page.get(Page.pageid == v.pageid).created.year
+            votes[year].append(v.value)
+        for k, v in votes.items():
+            row['{} total'.format(k)] = len(v)
+            row['{} net'.format(k)] = sum(v)
+        table.append(row)
+    _save_to_csv('yearly_votes.csv', table)
+
+
+def t_ratings():
+    table = []
     contributors = Page.list('author', distinct=True)
     is_newbie = lambda x: x is not None and x < 180
     newbies = [i for i in User.list('name') if is_newbie(_days_on_the_site(i))]
@@ -317,24 +383,24 @@ def create_table_ratings():
         staff = [i.strip() for i in f]
     for n, p in enumerate(Page.select()):
         logger.info('Processing page {}/{}'.format(n, Page.count()))
-        page_dict = collections.OrderedDict()
-        page_dict['url'] = p.url
-        page_dict['title'] = p.title
-        page_dict['full rating'] = p.rating
-        page_dict['contributor rating'] = Vote.sum(
+        row = collections.OrderedDict()
+        row['url'] = p.url
+        row['title'] = p.title
+        row['full rating'] = p.rating
+        row['contributor rating'] = Vote.sum(
             'value',
             (Vote.pageid == p.pageid) &
             (Vote.user << contributors))
-        page_dict['newbie rating'] = Vote.sum(
+        row['newbie rating'] = Vote.sum(
             'value',
             (Vote.pageid == p.pageid) &
             (Vote.user << newbies))
-        page_dict['staff rating'] = Vote.sum(
+        row['staff rating'] = Vote.sum(
             'value',
             (Vote.pageid == p.pageid) &
             (Vote.user << staff))
-        data.append(page_dict)
-    _dict_to_csv('ratings.csv', data)
+        table.append(row)
+    _save_to_csv('ratings.csv', table)
 
 ###############################################################################
 # Plotting Functions
@@ -342,12 +408,6 @@ def create_table_ratings():
 
 
 def plot_user_activity(user):
-    plot = pygal.Line(
-        fill=True,
-        style=pygal.style.NeonStyle,
-        x_label_rotation=35,
-        show_dots=False,
-        title='User Activity: {}'.format(user))
     rev_cn = collections.Counter()
     for rev in Revision.select().where(Revision.user == user):
         key = '{}-{:02}'.format(rev.time.year, rev.time.month)
@@ -371,6 +431,12 @@ def plot_user_activity(user):
         for i, _ in arrow.Arrow.span_range('month', start, end)]
     # the data from last month is usually only partial, discard it
     x_axis = x_axis[:-1]
+    plot = pygal.Line(
+        fill=True,
+        style=pygal.style.NeonStyle,
+        x_label_rotation=35,
+        show_dots=False,
+        title='User Activity: {}'.format(user))
     plot.x_labels = x_axis
     plot.x_labels_major = [i for i in x_axis if i[-2:] == '01']
     plot.width = max(50 * len(x_axis), 800)
@@ -381,14 +447,93 @@ def plot_user_activity(user):
         os.mkdir('plots/activity/')
     plot.render_to_png('plots/activity/{}.png'.format(user))
 
+
+def plot_active_users():
+    data = collections.defaultdict(lambda: collections.defaultdict(set))
+    count = User.count()
+    for n, u in enumerate(User.select(User.name, User.first_activity)):
+        logger.info('Processing user {}/{}'.format(n + 1, count))
+        time_new = u.first_activity
+        if time_new is not None:
+            time_new = arrow.get(time_new).replace(months=+6).naive
+        authored = Page.list('created', Page.author == u.name)
+        time_contrib = min(authored) if authored else None
+        for i in (Revision.list('time', Revision.user == u.name) +
+                  ForumPost.list('time', ForumPost.user == u.name)):
+            key = '{}-{:02}'.format(i.year, i.month)
+            data['All Members'][key].add(u.name)
+            if time_contrib is not None and i > time_contrib:
+                data['Contributors'][key].add(u.name)
+            if time_new is not None and i < time_new:
+                data['Newbies'][key].add(u.name)
+    for k, v in data.items():
+        data[k] = {i: len(j) for i, j in v.items()}
+    x_axis = sorted(data['All Members'])[:-1]
+    plot = pygal.Line(
+        fill=True,
+        style=pygal.style.NeonStyle,
+        x_label_rotation=35,
+        show_dots=False,
+        title='Active Site Members')
+    plot.x_labels = x_axis
+    plot.x_labels_major = [i for i in x_axis if i[-2:] == '01']
+    plot.width = 50 * len(x_axis)
+    for i in ('All Members', 'Newbies', 'Contributors'):
+        plot.add(i, [data[i][j] for j in x_axis])
+    plot.render_to_png('plots/active_users.png')
+
+
+def plot_active_ratio():
+    data = collections.defaultdict(
+        lambda: collections.defaultdict(
+            collections.Counter))
+    count = User.count()
+    for n, u in enumerate(User.select(User.name, User.first_activity)):
+        if (n + 1) % 50 == 0:
+            logger.info('Processing user {}/{}'.format(n + 1, count))
+        first_activity = u.first_activity
+        if first_activity is None:
+            continue
+        key = '{}-{:02}'.format(first_activity.year, first_activity.month)
+        last_activity = first_activity
+        for i in (Revision.list('time', Revision.user == u.name) +
+                  ForumPost.list('time', ForumPost.user == u.name)):
+            if i > last_activity:
+                last_activity = i
+        for i in (30, 180, 365):
+            data[i][key]['total'] += 1
+            if (last_activity - first_activity).days > i:
+                data[i][key]['active'] += 1
+    x_axis = sorted(data[30])[:-1]
+    plot = pygal.Line(
+        fill=True,
+        style=pygal.style.NeonStyle,
+        x_label_rotation=35,
+        show_dots=False,
+        title='Active Members Ratio')
+    plot.x_labels = x_axis
+    plot.x_labels_major = [i for i in x_axis if i[-2:] == '01']
+    plot.width = 50 * len(x_axis)
+    plot.range = (0, 1)
+    plot.add(
+        'After 30 Days',
+        [data[30][i]['active'] / data[30][i]['total'] for i in x_axis])
+    plot.add(
+        'After 6 Months',
+        [data[180][i]['active'] / data[180][i]['total'] for i in x_axis])
+    plot.add(
+        'After 1 Year',
+        [data[365][i]['active'] / data[365][i]['total'] for i in x_axis])
+    plot.render_to_png('plots/active_ratio.png')
+
 ###############################################################################
 
 
 def main():
     #generate()
-    #create_table_ratings()
+    t_yearly_votes()
     #print_basic()
-    plot_user_activity('Aelanna')
+    #plot_active_ratio()
     pass
 
 if __name__ == "__main__":
