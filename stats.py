@@ -14,8 +14,9 @@ import os
 import peewee
 import pygal
 import re
+import orm
 
-from statistics import mode, pstdev
+from statistics import mode, pstdev, mean, median
 
 ###############################################################################
 # Global Constants And Variables
@@ -23,7 +24,8 @@ from statistics import mode, pstdev
 
 logger = logging.getLogger('scp.stats')
 logger.setLevel(logging.DEBUG)
-CSV_OUT_PATH = '/home/anqxyr/heap/_scp/csv_stats/'
+CSV_OUTPUT_PATH = '/home/anqxyr/heap/_scp/csv_stats/'
+PLOT_OUTPUT_PATH = '/home/anqxyr/heap/_scp/plots/'
 
 ###############################################################################
 # Database ORM Classes
@@ -99,7 +101,8 @@ class Vote(BaseModel):
 
 
 class ForumPost(BaseModel):
-    pageid = peewee.IntegerField(index=True)
+    post_id = peewee.IntegerField(primary_key=True)
+    pageid = peewee.IntegerField(index=True, null=True)
     title = peewee.CharField()
     wordcount = peewee.IntegerField()
     user = peewee.CharField(index=True)
@@ -145,8 +148,11 @@ def _process_page(url):
         Revision.create(pageid=p._pageid, user=i.user, time=i.time)
     for i in p.votes:
         Vote.create(pageid=p._pageid, user=i.user, value=i.value)
+    for i in p.tags:
+        Tag.create(pageid=p._pageid, tag=i)
     for i in p.comments:
         ForumPost.create(
+            post_id=i.post_id,
             pageid=p._pageid,
             title=i.title,
             user=i.user,
@@ -154,8 +160,6 @@ def _process_page(url):
             wordcount=len(re.findall(
                 r"[\w'█_-]+",
                 bs4.BeautifulSoup(i.content).text)))
-    for i in p.tags:
-        Tag.create(pageid=p._pageid, tag=i)
 
 
 def _process_user(user):
@@ -175,15 +179,29 @@ def _process_user(user):
         .where(ForumPost.user == user)
         .scalar()]
     activities = [i for i in activities if i is not None]
-    data['first_activity'] = min(activities) if activities else None
+    data['first activity'] = min(activities) if activities else None
     data['rating'] = Page.sum('rating', Page.author == user)
     data['upvoted'] = Vote.count((Vote.user == user) & (Vote.value == 1))
     data['downvoted'] = Vote.count((Vote.user == user) & (Vote.value == -1))
     User.create(**data)
 
 
+def _process_post(post):
+    if ForumPost.select().where(ForumPost.post_id == post.post_id).exists():
+        return
+    ForumPost.create(
+        post_id=post.post_id,
+        pageid=None,
+        title=post.title,
+        user=post.user,
+        time=post.time,
+        wordcount=len(re.findall(
+            r"[\w'█_-]+",
+            bs4.BeautifulSoup(post.content).text)))
+
+
 def _dbmap(func, data):
-    block_size = 100
+    block_size = 500
     buffer = []
     for i in data:
         buffer.append(i)
@@ -205,6 +223,8 @@ def generate():
         i.create_table()
     with crawler.Page.from_snapshot() as sn:
         _dbmap(_process_page, sn.list_all_pages())
+        logger.info('Processing standalone posts')
+        _dbmap(_process_post, orm.ForumPost.select())
     users = set()
     for i in (Revision, Vote, ForumPost):
         users = users.union(set(i.list('user', distinct=True)))
@@ -223,9 +243,10 @@ def generate():
 
 def print_basic():
     msgs = (
-        '~ Pages', '~ Users', 'Authors', 'Voters', 'Editors', '~ Votes',
-        'Upvotes', 'Downvotes', '~ Rating', 'Average', 'Mode', 'Deviation',
-        '~ Wordcount', 'Average', '~ Comments', '~ Revisions', '~ Images')
+        '~ Pages', '~ Users', 'Authors', 'Voters', 'Editors', 'Commenters',
+        '~ Votes', 'Upvotes', 'Downvotes', '~ Rating', 'Average', 'Median',
+        'Mode', 'Deviation', '~ Wordcount', 'Average', 'Median', '~ Comments',
+        '~ Revisions', '~ Images')
     funcs = (
         lambda x: Page.count(Page.pageid << x),
         lambda x: len(set.union(
@@ -235,15 +256,19 @@ def print_basic():
         lambda x: Page.count(Page.pageid << x, distinct=Page.author),
         lambda x: Vote.count(Vote.pageid << x, distinct=Vote.user),
         lambda x: Revision.count(Revision.pageid << x, distinct=Revision.user),
+        lambda x:
+            ForumPost.count(ForumPost.pageid << x, distinct=ForumPost.user),
         lambda x: Vote.count(Vote.pageid << x),
         lambda x: Vote.count((Vote.pageid << x) & (Vote.value == 1)),
         lambda x: Vote.count((Vote.pageid << x) & (Vote.value == -1)),
         lambda x: Page.sum('rating', Page.pageid << x),
         lambda x: Page.mean('rating', Page.pageid << x),
+        lambda x: median(Page.list('rating', Page.pageid << x)),
         lambda x: mode(Page.list('rating', Page.pageid << x)),
         lambda x: pstdev(Page.list('rating', Page.pageid << x)),
         lambda x: Page.sum('wordcount', Page.pageid << x),
         lambda x: Page.mean('wordcount', Page.pageid << x),
+        lambda x: median(Page.list('wordcount', Page.pageid << x)),
         lambda x: Page.sum('comments', Page.pageid << x),
         lambda x: Page.sum('revisions', Page.pageid << x),
         lambda x: Page.sum('images', Page.pageid << x))
@@ -258,6 +283,20 @@ def print_basic():
         print(row.format(msg, func(pages), func(skips), func(tales)))
 
 
+def print_longest_posts(number_of_posts):
+    cn = collections.Counter()
+    for i in ForumPost.select().where(ForumPost.wordcount > 1000):
+        cn[i.post_id] = i.wordcount
+    with crawler.Page.from_snapshot():
+        for post_id, wordcount in cn.most_common(number_of_posts):
+            p = ForumPost.get(ForumPost.post_id == post_id)
+            op = orm.ForumPost.get(orm.ForumPost.post_id == post_id)
+            link = 'http://www.scp-wiki.net/forum/t-{}/#post-{}'
+            link = link.format(op.thread_id, post_id)
+            print('[{} "{}"], {}, {} words.'.format(
+                link, p.title, p.user, p.wordcount))
+
+
 def _days_on_the_site(user):
     user = User.get(User.name == user)
     if user.first_activity is None:
@@ -266,9 +305,9 @@ def _days_on_the_site(user):
 
 
 def _save_to_csv(filename, table):
-    if not os.path.exists(CSV_OUT_PATH):
-        os.mkdir(CSV_OUT_PATH)
-    fullname = CSV_OUT_PATH + filename
+    if not os.path.exists(CSV_OUTPUT_PATH):
+        os.mkdir(CSV_OUTPUT_PATH)
+    fullname = CSV_OUTPUT_PATH + filename
     with open(fullname, 'w') as F:
         fields = table[0].keys()
         fields = [i.upper() for i in fields]
@@ -294,8 +333,11 @@ def t_authors():
         row['user'] = i
         row['pages created'] = user.pages
         row['net rating'] = user.rating
-        row['average rating'] = round(user.rating / user.pages, 2)
-        if _days_on_the_site(i) is not None:
+        if user.rating is not None:
+            row['average rating'] = round(user.rating / user.pages, 2)
+        else:
+            row['average rating'] = None
+        if _days_on_the_site(i) is not None and user.rating is not None:
             row['rating per day'] = round(
                 user.rating / _days_on_the_site(i),
                 4)
@@ -314,11 +356,15 @@ def t_users():
         row = collections.OrderedDict()
         row['user'] = i.name
         row['revisions'] = i.edits
+        row['first_activity'] = i.first_activity
         row['total votes'] = i.upvoted + i.downvoted
         row['net vote rating'] = i.upvoted - i.downvoted
         row['upvotes'] = i.upvoted
         row['downvotes'] = i.downvoted
-        row['upvote %'] = round(100 * i.upvoted / row['total votes'], 2)
+        if row['total votes'] != 0:
+            row['upvote %'] = round(100 * i.upvoted / row['total votes'], 2)
+        else:
+            row['upvote %'] = None
         table.append(row)
     _save_to_csv('users.csv', table)
 
@@ -345,6 +391,8 @@ def t_tags_user():
 def t_tags_author():
     table = []
     for i in Page.list('author', distinct=True):
+        if i == '(account deleted)' or i.startswith('Anonymous ('):
+            continue
         row = collections.OrderedDict()
         row['user'] = i
         cn = collections.Counter()
@@ -362,16 +410,52 @@ def t_yearly_votes():
     table = []
     for i in User.list('name'):
         row = collections.OrderedDict()
-        row['user'] == i
+        row['user'] = i
         votes = collections.defaultdict(list)
         for v in Vote.select().where(Vote.user == i):
             year = Page.get(Page.pageid == v.pageid).created.year
             votes[year].append(v.value)
-        for k, v in votes.items():
-            row['{} total'.format(k)] = len(v)
-            row['{} net'.format(k)] = sum(v)
+        for i in range(2008, 2016):
+            if i in votes:
+                row['{} total'.format(i)] = len(votes[i])
+                row['{} net'.format(i)] = sum(votes[i])
+            else:
+                row['{} total'.format(i)] = None
+                row['{} net'.format(i)] = None
         table.append(row)
     _save_to_csv('yearly_votes.csv', table)
+
+
+def t_posts():
+    table = []
+    for i in User.list('name'):
+        row = collections.OrderedDict()
+        row['user'] = i
+        row['total posts'] = ForumPost.count(ForumPost.user == i)
+        post_wc_avg = ForumPost.mean('wordcount', ForumPost.user == i)
+        if post_wc_avg is not None:
+            row['average post wordcount'] = round(post_wc_avg, 2)
+        else:
+            row['average post wordcount'] = None
+        wordcounts = ForumPost.list('wordcount', ForumPost.user == i)
+        row['highest post wordcount'] = max(wordcounts) if wordcounts else None
+        post_times = ForumPost.list('time', ForumPost.user == i)
+        time_deltas = []
+        for x, y in zip(post_times[1:], post_times[:-1]):
+            time = x - y
+            time = time.days * 86400 + time.seconds
+            time_deltas.append(time)
+        if not time_deltas:
+            row['average time between posts'] = None
+        else:
+            days, remainder = divmod(int(mean(time_deltas)), 86400)
+            hours, remainder = divmod(remainder, 3600)
+            minutes, seconds = divmod(remainder, 60)
+            row['average time between posts'] = (
+                '{:04d} days, {:02d}:{:02d}:{:02d}'
+                .format(days, hours, minutes, seconds))
+        table.append(row)
+    _save_to_csv('posts.csv', table)
 
 
 def t_ratings():
@@ -382,7 +466,7 @@ def t_ratings():
     with open('stafflist.txt') as f:
         staff = [i.strip() for i in f]
     for n, p in enumerate(Page.select()):
-        logger.info('Processing page {}/{}'.format(n, Page.count()))
+        #logger.info('Processing page {}/{}'.format(n, Page.count()))
         row = collections.OrderedDict()
         row['url'] = p.url
         row['title'] = p.title
@@ -402,85 +486,206 @@ def t_ratings():
         table.append(row)
     _save_to_csv('ratings.csv', table)
 
+
+def make_tables():
+    tables = (
+        t_authors, t_users, t_tags_author, t_tags_user, t_yearly_votes,
+        t_posts, t_ratings)
+    for n, i in enumerate(tables):
+        logger.info('Generating table {}/{}'.format(n, len(tables)))
+        i()
+    logger.info('Finished.')
+
+
 ###############################################################################
 # Plotting Functions
 ###############################################################################
 
-
-def plot_user_activity(user):
-    rev_cn = collections.Counter()
-    for rev in Revision.select().where(Revision.user == user):
-        key = '{}-{:02}'.format(rev.time.year, rev.time.month)
-        rev_cn[key] += 1
-    post_cn = collections.Counter()
-    for post in ForumPost.select().where(ForumPost.user == user):
-        key = '{}-{:02}'.format(post.time.year, post.time.month)
-        post_cn[key] += 1
-    page_cn = collections.Counter()
-    for page in Page.select().where(Page.author == user):
-        key = '{}-{:02}'.format(page.created.year, page.created.month)
-        page_cn[key] += 20
-    dates = set.union(*map(set, (rev_cn, post_cn, page_cn)))
-    if not dates:
-        print('ERROR: {}'.format(user))
-        return
-    start = arrow.get(min(dates), 'YYYY-MM')
-    end = arrow.get(max(dates), 'YYYY-MM')
-    x_axis = [
-        '{}-{:02}'.format(i.year, i.month)
-        for i, _ in arrow.Arrow.span_range('month', start, end)]
-    # the data from last month is usually only partial, discard it
-    x_axis = x_axis[:-1]
+def create_plot(title, x_axis, labels, lines, **kwargs):
     plot = pygal.Line(
         fill=True,
         style=pygal.style.NeonStyle,
         x_label_rotation=35,
         show_dots=False,
-        title='User Activity: {}'.format(user))
-    plot.x_labels = x_axis
-    plot.x_labels_major = [i for i in x_axis if i[-2:] == '01']
-    plot.width = max(50 * len(x_axis), 800)
-    plot.add('Revisions', [rev_cn[i] for i in x_axis])
-    plot.add('Comments', [post_cn[i] for i in x_axis])
-    plot.add('Pages Authored', [page_cn[i] for i in x_axis])
-    if not os.path.exists('plots/activity/'):
-        os.mkdir('plots/activity/')
-    plot.render_to_png('plots/activity/{}.png'.format(user))
+        truncate_legend=25,
+        width=1800,
+        include_x_axis=True,
+        title=title,
+        x_labels=x_axis)
+    if kwargs.get('timeline', False):
+        plot.x_labels_major = [i for i in x_axis if i[-2:] == '01']
+        plot.show_minor_x_labels = False
+    if kwargs.get('range', False):
+        plot.range = kwargs['range']
+    for label, line in zip(labels, lines):
+        plot.add(label, line)
+    plot.render_to_png('{}{}.png'.format(
+        PLOT_OUTPUT_PATH,
+        title.lower().replace(' ', '_').replace(':', '')))
+    logger.info('Plot created: {}'.format(title))
+
+
+def plot_user_activity(user):
+    data = collections.defaultdict(collections.Counter)
+    key = lambda x: '{}-{:02}'.format(x.year, x.month)
+    for i in Revision.list('time', Revision.user == user):
+        data['Revisions'][key(i)] += 1
+    for i in ForumPost.list('time', ForumPost.user == user):
+        data['Forum Posts'][key(i)] += 1
+    for i in Page.list('created', Page.author == user):
+        data['Pages (x10)'][key(i)] += 10
+    dates = set.union(*map(set, data.values()))
+    if not dates:
+        logger.warning('User activity is empty: {}'.format(user))
+        return
+    start = arrow.get(min(dates), 'YYYY-MM')
+    end = arrow.get(max(dates), 'YYYY-MM')
+    x_axis = [key(i) for i, _ in arrow.Arrow.span_range('month', start, end)]
+    labels = ('Forum Posts', 'Revisions', 'Pages (x10)')
+    create_plot('User Activity: {}'.format(user), x_axis, labels,
+                [data[i] for i in labels], timeline=len(x_axis) > 24)
+
+
+def _user_contributor_since(user):
+    pages = Page.list('created', Page.author == user)
+    if pages:
+        return min(pages)
+
+
+def _user_newbie_until(user):
+    first_activity = User.get(User.name == user).first_activity
+    if first_activity is not None:
+        return arrow.get(first_activity).replace(months=+6).naive
+
+
+def _user_only_forums_until(user):
+    revisions = Revision.list('time', Revision.user == user)
+    first = min(revisions) if revisions else None
+    for i in ForumPost.select().where(ForumPost.user == user):
+        if i.pageid is not None and (first is None or i.time < first):
+            first = i.time
+    return first
 
 
 def plot_active_users():
     data = collections.defaultdict(lambda: collections.defaultdict(set))
-    count = User.count()
-    for n, u in enumerate(User.select(User.name, User.first_activity)):
-        logger.info('Processing user {}/{}'.format(n + 1, count))
-        time_new = u.first_activity
-        if time_new is not None:
-            time_new = arrow.get(time_new).replace(months=+6).naive
-        authored = Page.list('created', Page.author == u.name)
-        time_contrib = min(authored) if authored else None
-        for i in (Revision.list('time', Revision.user == u.name) +
-                  ForumPost.list('time', ForumPost.user == u.name)):
-            key = '{}-{:02}'.format(i.year, i.month)
-            data['All Members'][key].add(u.name)
-            if time_contrib is not None and i > time_contrib:
-                data['Contributors'][key].add(u.name)
-            if time_new is not None and i < time_new:
-                data['Newbies'][key].add(u.name)
-    for k, v in data.items():
-        data[k] = {i: len(j) for i, j in v.items()}
-    x_axis = sorted(data['All Members'])[:-1]
-    plot = pygal.Line(
-        fill=True,
-        style=pygal.style.NeonStyle,
-        x_label_rotation=35,
-        show_dots=False,
-        title='Active Site Members')
-    plot.x_labels = x_axis
-    plot.x_labels_major = [i for i in x_axis if i[-2:] == '01']
-    plot.width = 50 * len(x_axis)
-    for i in ('All Members', 'Newbies', 'Contributors'):
-        plot.add(i, [data[i][j] for j in x_axis])
-    plot.render_to_png('plots/active_users.png')
+    key = lambda x: '{}-{:02}'.format(x.year, x.month)
+    for user in User.list('name'):
+        contrib = _user_contributor_since(user)
+        newbie = _user_newbie_until(user)
+        forums = _user_only_forums_until(user)
+        for i in (Revision.list('time', Revision.user == user) +
+                  ForumPost.list('time', ForumPost.user == user)):
+            data['All Members'][key(i)].add(user)
+            if contrib is not None and i > contrib:
+                data['Contributors'][key(i)].add(user)
+            if i < newbie:
+                data['Newbies'][key(i)].add(user)
+            if forums is None or i < forums:
+                data['Forums Only'][key(i)].add(user)
+    x_axis = sorted(data['All Members'])
+    labels = ('All Members', 'Newbies', 'Contributors', 'Forums Only')
+    for i in labels:
+        for j in x_axis:
+            data[i][j] = len(data[i][j])
+    create_plot('Active Users', x_axis, labels,
+                [data[i] for i in labels], timeline=True)
+
+
+def plot_posts_per_capita():
+    posts = collections.defaultdict(collections.Counter)
+    users = collections.defaultdict(lambda: collections.defaultdict(set))
+    key = lambda x: '{}-{:02}'.format(x.year, x.month)
+    for user in User.list('name'):
+        contrib = _user_contributor_since(user)
+        newbie = _user_newbie_until(user)
+        for i in ForumPost.list('time', ForumPost.user == user):
+            posts['All Members'][key(i)] += 1
+            users['All Members'][key(i)].add(user)
+            if contrib is not None and i > contrib:
+                posts['Contributors'][key(i)] += 1
+                users['Contributors'][key(i)].add(user)
+            if newbie is not None and i < newbie:
+                posts['Newbies'][key(i)] += 1
+                users['Newbies'][key(i)].add(user)
+    x_axis = sorted(posts['All Members'])
+    labels = ('Contributors', 'All Members', 'Newbies')
+    create_plot(
+        'Posts Per Capita', x_axis, labels,
+        [[(posts[i][j] / len(users[i][j])) for j in x_axis] for i in labels],
+        timeline=True)
+
+
+def plot_site_activity(timerange='total'):
+    timerange_values = ('total', 'yearly', 'monthly', 'weekly', 'dayly')
+    keys = (
+        lambda x: '{}-{:02}'.format(x.year, x.month),
+        lambda x: arrow.get(x).format('MMMM'),
+        lambda x: arrow.get(x).format('DD'),
+        lambda x: arrow.get(x).format('dddd'),
+        lambda x: '{:02}'.format(x.hour))
+    for value, func in zip(timerange_values, keys):
+        if timerange == value:
+            key = func
+            break
+    data = collections.defaultdict(collections.Counter)
+    for i in Revision.list('time'):
+        data['Revisions'][key(i)] += 1
+    for i in ForumPost.list('time'):
+        data['Forum Posts'][key(i)] += 1
+    for i in Page.list('created'):
+        data['Pages (x10)'][key(i)] += 10
+    x_axis = sorted(data['Revisions'])
+    if timerange == 'yearly':
+        x_axis = [arrow.get(str(i), 'M').format('MMMM') for i in range(1, 13)]
+    if timerange == 'weekly':
+        x_axis = [
+            arrow.locales.get_locale('en').day_name(i) for i in range(1, 8)]
+    labels = ('Forum Posts', 'Revisions', 'Pages (x10)')
+    create_plot('Site Activity: {}'.format(timerange.title()), x_axis,
+                labels, [data[i] for i in labels],
+                timeline=(timerange == 'total'))
+
+
+def plot_users_still_active(relative=False):
+    data = collections.defaultdict(lambda: collections.defaultdict(set))
+    for user in User.select(User.name, User.first_activity):
+        if user.first_activity is None:
+            continue
+        key = '{}-{:02}'.format(
+            user.first_activity.year, user.first_activity.month)
+        data['Control'][key].add(user.name)
+        posts = ForumPost.list('time', ForumPost.user == user.name)
+        edits = Revision.list('time', Revision.user == user.name)
+        last_post = max(posts) if posts else None
+        last_edit = max(edits) if edits else None
+        last_activity = [i for i in (last_post, last_edit) if i is not None]
+        if last_activity:
+            last_activity = max(last_activity)
+        else:
+            continue
+        days = (31, 90, 180, 365)
+        labels = ('Last Month', 'Three Months', 'Six Months', 'A Year')
+        for i, j in zip(days, labels):
+            if (arrow.now().naive - last_activity).days <= i:
+                data[j][key].add(user.name)
+    x_axis = sorted(data['Control'])
+    for i in labels:
+        for j in x_axis:
+            if not relative:
+                data[i][j] = len(data[i][j])
+            else:
+                data[i][j] = len(data[i][j]) / len(data['Control'][j])
+    title = 'Users Still Active'
+    if relative:
+        title += ' (Relative)'
+    labels = list(reversed(labels))
+    create_plot(title, x_axis, labels, [data[i] for i in labels],
+                timeline=True)
+
+
+def plot_post_distribution():
+    pass
 
 
 def plot_active_ratio():
@@ -524,16 +729,21 @@ def plot_active_ratio():
     plot.add(
         'After 1 Year',
         [data[365][i]['active'] / data[365][i]['total'] for i in x_axis])
-    plot.render_to_png('plots/active_ratio.png')
+    output_path = PLOT_OUTPUT_PATH + 'active_ratio.png'
+    plot.render_to_png(output_path)
 
 ###############################################################################
 
 
 def main():
     #generate()
-    t_yearly_votes()
+    #for i in ('total', 'yearly', 'monthly', 'weekly', 'dayly'):
+    #    plot_site_activity(i)
+    #plot_active_users()
+    #plot_posts_per_capita()
+    plot_users_still_active(relative=False)
+    #plot_user_activity('anqxyr')
     #print_basic()
-    #plot_active_ratio()
     pass
 
 if __name__ == "__main__":
