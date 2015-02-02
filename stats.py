@@ -502,18 +502,27 @@ def make_tables():
 ###############################################################################
 
 def create_plot(title, x_axis, labels, lines, **kwargs):
-    plot = pygal.Line(
+    if kwargs.get('plot_type', False):
+        plot_type = kwargs['plot_type']
+    else:
+        plot_type = pygal.Line
+    plot = plot_type(
         fill=True,
         style=pygal.style.NeonStyle,
-        x_label_rotation=35,
         show_dots=False,
         truncate_legend=25,
+        truncate_label=25,
         width=1800,
         include_x_axis=True,
         title=title,
         x_labels=x_axis)
+    plot.x_label_rotation = 35
     if kwargs.get('timeline', False):
         plot.x_labels_major = [i for i in x_axis if i[-2:] == '01']
+        plot.show_minor_x_labels = False
+        plot.x_label_rotation = 35
+    if kwargs.get('x_labels_major', False):
+        plot.x_labels_major = kwargs['x_labels_major']
         plot.show_minor_x_labels = False
     if kwargs.get('range', False):
         plot.range = kwargs['range']
@@ -542,6 +551,10 @@ def plot_user_activity(user):
     end = arrow.get(max(dates), 'YYYY-MM')
     x_axis = [key(i) for i, _ in arrow.Arrow.span_range('month', start, end)]
     labels = ('Forum Posts', 'Revisions', 'Pages (x10)')
+    for i in labels:
+        for j in x_axis:
+            if j not in data[i]:
+                data[i][j] = 0
     create_plot('User Activity: {}'.format(user), x_axis, labels,
                 [data[i] for i in labels], timeline=len(x_axis) > 24)
 
@@ -617,7 +630,7 @@ def plot_posts_per_capita():
 
 
 def plot_site_activity(timerange='total'):
-    timerange_values = ('total', 'yearly', 'monthly', 'weekly', 'dayly')
+    timerange_values = ('total', 'yearly', 'monthly', 'weekly', 'daily')
     keys = (
         lambda x: '{}-{:02}'.format(x.year, x.month),
         lambda x: arrow.get(x).format('MMMM'),
@@ -684,8 +697,43 @@ def plot_users_still_active(relative=False):
                 timeline=True)
 
 
-def plot_post_distribution():
-    pass
+def plot_post_distribution(over_time=False):
+    data = collections.defaultdict(collections.Counter)
+    skips = Tag.list('pageid', Tag.tag == 'scp')
+    tales = Tag.list('pageid', Tag.tag == 'tale')
+    for u in User.select(User.name, User.first_activity):
+        if over_time:
+            key = lambda x: '{}-{:02}'.format(x.year, x.month)
+        else:
+            key = lambda x: str((x - u.first_activity).days // 30 * 30)
+        for i in (
+                ForumPost.select(ForumPost.time, ForumPost.pageid)
+                .where(ForumPost.user == u.name)):
+            data['Total'][key(i.time)] += 1
+            if i.pageid is None:
+                data['Forums'][key(i.time)] += 1
+            elif i.pageid in skips:
+                data['Skips'][key(i.time)] += 1
+            elif i.pageid in tales:
+                data['Tales'][key(i.time)] += 1
+            else:
+                data['Other'][key(i.time)] += 1
+    plot_config = {'plot_type': pygal.StackedLine}
+    labels = ('Skips', 'Tales', 'Forums', 'Other')
+    if over_time:
+        x_axis = sorted(data['Total'])
+        title = 'Post Distribution Over Time'
+        plot_config['timeline'] = True
+    else:
+        x_axis = list(map(str, sorted(map(int, data['Total']))))
+        title = 'Post Distribution Per Account Age'
+        plot_config['x_labels_major'] = x_axis[::12]
+    for i in labels:
+        for j in x_axis:
+            data[i][j] = data[i][j] / data['Total'][j]
+    create_plot(title, x_axis, labels,
+                [data[i] for i in labels],
+                **plot_config)
 
 
 def plot_active_ratio():
@@ -736,14 +784,6 @@ def plot_active_ratio():
 
 
 def main():
-    #generate()
-    #for i in ('total', 'yearly', 'monthly', 'weekly', 'dayly'):
-    #    plot_site_activity(i)
-    #plot_active_users()
-    #plot_posts_per_capita()
-    plot_users_still_active(relative=False)
-    #plot_user_activity('anqxyr')
-    #print_basic()
     pass
 
 if __name__ == "__main__":
