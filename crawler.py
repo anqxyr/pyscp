@@ -25,7 +25,7 @@ logger = logging.getLogger('scp.crawler')
 logger.setLevel(logging.DEBUG)
 
 ###############################################################################
-# Primary Classes
+# Classes
 ###############################################################################
 
 
@@ -40,12 +40,6 @@ class WikidotConnector:
     """
 
     def __init__(self, site):
-        """
-        Initialize an instance of the class.
-
-        Args:
-            site (str): Full url of the main page of the site
-        """
         self.site = site.rstrip('/')
         req = requests.Session()
         req.mount(site, requests.adapters.HTTPAdapter(max_retries=5))
@@ -71,11 +65,9 @@ class WikidotConnector:
             # token7 can be any 6-digit number, as long as it's the same
             # in the payload and in the cookie
             'wikidot_token7': '123456'}
+        payload.update(kwargs)
         cookies = {'wikidot_token7': '123456'}
-        for i in self.req.cookies:
-            cookies[i.name] = i.value
-        for k, v in kwargs.items():
-            payload[k] = v
+        cookies.update({i.name: i.value for i in self.req.cookies})
         data = self.req.post(
             self.site + '/ajax-module-connector.php',
             data=payload,
@@ -292,21 +284,32 @@ class WikidotConnector:
 
 class Snapshot:
 
+    """
+    Create and manipulate a snapshot of a wikidot site.
+
+    Snapshots are sqlite db files stored in the
+    'database_directory' (see below). This class uses WikidotConnector to
+    iterate over all the pages of a site, and save the html content,
+    revision history, votes, and discussion page of each. Optionally,
+    standalone forum threads can be saved too.
+
+    In case of the scp-wiki, some additional information is saved:
+    images for which their CC status has been confirmed, and info about
+    overwriting page authorship.
+
+    In general, this class will not save images hosted on the site that is
+    being saved. Only the html content, discussions, and revision/vote
+    metadata is saved.
+    """
+
     database_directory = '/home/anqxyr/heap/_scp/'
 
     def __init__(self, site='http://www.scp-wiki.net', dbname=None):
         if dbname is None:
-            domain = site.split('.')[-2]
-            if domain == 'wikidot':
-                domain = site.split('.')[-3]
-            domain = re.sub(r'^http://', '', domain)
             dbname = '{}.{}.db'.format(
-                domain,
+                re.sub(r'^http://', '', site),
                 arrow.now().format('YYYY-MM-DD'))
-        self.dbname = dbname
-        self.dbpath = self.database_directory + dbname
-        orm.connect(self.dbpath)
-        self.db = orm.db
+        orm.connect(self.database_directory + dbname)
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=20)
         self.site = site
         self.wiki = WikidotConnector(self.site)
@@ -316,6 +319,7 @@ class Snapshot:
     ###########################################################################
 
     def _scrape_images(self):
+        #TODO: rewrite this to get images from the review pages
         url = "http://scpsandbox2.wikidot.com/ebook-image-whitelist"
         req = requests.Session()
         req.mount('http://', requests.adapters.HTTPAdapter(max_retries=5))
@@ -332,30 +336,18 @@ class Snapshot:
         return data
 
     def _scrape_authors(self):
-        url = "http://05command.wikidot.com/alexandra-rewrite"
-        req = requests.Session()
-        site = 'http://05command.wikidot.com'
-        req.mount(site, requests.adapters.HTTPAdapter(max_retries=5))
-        soup = bs4.BeautifulSoup(req.get(url).text)
-        data = []
-        for i in soup.select("tr")[1:]:
-            url = "http://www.scp-wiki.net/{}".format(i.select("td")[0].text)
-            author = i.select("td")[1].text
-            if author.startswith(":override:"):
-                override = True
-                author = author[10:]
-            else:
-                override = False
-            data.append({"url": url, "author": author, "override": override})
-        return data
+        """Download author override metadata from 05command."""
+        soup = bs4.BeautifulSoup(
+            WikidotConnector('http://05command.wikidot.com')
+            .get_page_html('http://05command.wikidot.com/alexandra-rewrite'))
+        for i in soup.select('tr')[1:]:
+            yield {
+                'url': '{}/{}'.format(self.site, i.select('td')[0].text),
+                'author': i.select('td')[1].text.split(':override:')[-1],
+                'override': i.select('td')[1].text.startswith(':override:')}
 
     def _save_page(self, url):
-        exclusion_list = ['http://www.scp-wiki.net/forum:thread']
-        if url in exclusion_list:
-            logger.warning(
-                'Page {} is in the exlusion list and will not be saved'
-                .format(url))
-            return
+        """Download the page and write it to the db."""
         logger.info('Saving page: {}'.format(url))
         html = self.wiki.get_page_html(url)
         if html is None:
@@ -364,42 +356,37 @@ class Snapshot:
         pageid = pageid.group(1) if pageid is not None else None
         soup = bs4.BeautifulSoup(html)
         try:
-            link = soup.select('#discuss-button')[0]['href']
-            thread_id = re.search(r'/forum/t-([0-9]+)/', link).group(1)
+            thread_id = re.search(r'/forum/t-([0-9]+)/', soup.select(
+                '#discuss-button')[0]['href']).group(1)
         except (IndexError, AttributeError):
             thread_id = None
-        html = str(soup.select('#main-content')[0])
+        html = str(soup.select('#main-content')[0])  # cut off side-bar, etc.
         orm.Page.create(pageid=pageid, url=url, html=html, thread_id=thread_id)
         orm.Revision.insert_many(self.wiki.get_page_history(pageid))
         orm.Vote.insert_many(self.wiki.get_page_votes(pageid))
         orm.ForumPost.insert_many(self.wiki.get_forum_thread(thread_id))
-        orm.Tag.insert_many(
-            {'tag': a.string, 'url': url} for a in
-            bs4.BeautifulSoup(html).select("div.page-tags a"))
-        logger.debug('Finished saving page: {}'.format(url))
-
-    def _save_thread(self, thread, msg):
-        logger.info(msg)
-        orm.ForumThread.create(**thread)
-        orm.ForumPost.insert_many(
-            self.wiki.get_forum_thread(thread['thread_id']))
+        orm.Tag.insert_many({'tag': a.string, 'url': url} for a in
+                            bs4.BeautifulSoup(html).select('div.page-tags a'))
 
     def _save_forums(self,):
+        """Download and save standalone forum threads."""
         orm.ForumThread.create_table()
         orm.ForumCategory.create_table()
         categories = [
             i for i in self.wiki.list_categories()
             if i['title'] != 'Per page discussions']
-        total_threads = sum([i['threads'] for i in categories])
-        index = 1
+        total = sum([i['threads'] for i in categories])
+        index = itertools.count(1)
         futures = []
-        for c in categories:
-            orm.ForumCategory.create(**c)
-            for t in self.wiki.list_threads(c['category_id']):
-                msg = 'Saving forum thread #{}/{}: {}'
-                msg = msg.format(index, total_threads, t['title'])
-                index += 1
-                futures.append(self.executor.submit(self._save_thread, t, msg))
+        _save = lambda x: (orm.ForumPost.insert_many(
+            self.wiki.get_forum_thread(x['thread_id'])))
+        for category in categories:
+            orm.ForumCategory.create(**category)
+            for thread in self.wiki.list_threads(category['category_id']):
+                orm.ForumThread.create(**thread)
+                logger.info('Saving forum thread #{}/{}: {}'
+                            .format(next(index), total, thread['title']))
+                futures.append(self.executor.submit(_save, thread))
         return futures
 
     ###########################################################################
@@ -436,11 +423,8 @@ class Snapshot:
         return history
 
     def get_page_votes(self, pageid):
-        query = orm.Vote.select().where(orm.Vote.pageid == pageid)
-        votes = []
-        for i in query:
-            votes.append({'pageid': pageid, 'user': i.user, 'vote': i.vote})
-        return votes
+        for i in orm.Vote.select().where(orm.Vote.pageid == pageid):
+            yield {a: getattr(i, a) for a in ('pageid', 'user', 'value')}
 
     def get_page_tags(self, url):
         query = orm.Tag.select().where(orm.Tag.url == url)
@@ -471,11 +455,11 @@ class Snapshot:
 
     def take(self, include_forums=False):
         time_start = arrow.now()
-        orm.purge(self.dbpath)
+        orm.purge()
         for i in [orm.Page, orm.Revision, orm.Vote, orm.ForumPost, orm.Tag]:
             i.create_table()
         ftrs = [self.executor.submit(self._save_page, i)
-                for i in itertools.islice(self.wiki.list_all_pages(), 10)]
+                for i in self.wiki.list_all_pages()]
         concurrent.futures.wait(ftrs)
         if include_forums:
             ftrs = self._save_forums()
@@ -721,7 +705,7 @@ class Page:
         vote = collections.namedtuple('Vote', 'user value')
         votes = []
         for i in data:
-            votes.append(vote(i['user'], i['vote']))
+            votes.append(vote(i['user'], i['value']))
         return votes
 
     @cached_property.cached_property
@@ -775,13 +759,13 @@ class Page:
         return []
 
 ###############################################################################
-# Main Methods
+# Module-level Functions
 ###############################################################################
 
 
 def enable_logging(logger):
     console = logging.StreamHandler()
-    console.setLevel(logging.DEBUG)
+    console.setLevel(logging.INFO)
     formatter = logging.Formatter('%(name)-12s: %(levelname)-8s %(message)s')
     console.setFormatter(formatter)
     logging.getLogger('scp').addHandler(console)
@@ -794,7 +778,7 @@ def enable_logging(logger):
 
 
 def main():
-    Snapshot(dbname='test.db').take()
+    Snapshot().take(include_forums=True)
     pass
 
 
