@@ -10,10 +10,10 @@ import cached_property
 import collections
 import concurrent.futures
 import contextlib
+import functools
 import itertools
 import logging
 import orm
-import os
 import re
 import requests
 
@@ -129,6 +129,7 @@ class WikidotConnector:
 
     def get_page_html(self, url):
         """Download the html data of the page."""
+        logger.debug('Downloading page html: {}'.format(url))
         data = self.req.get(url, allow_redirects=False, timeout=30)
         if data.status_code == 200:
             return data.text
@@ -160,7 +161,7 @@ class WikidotConnector:
         data = self._module(name='pagerate/WhoRatedPageModule',
                             pageid=pageid)['body']
         for i in bs4.BeautifulSoup(data).select('span.printuser'):
-            yield {'pageid': pageid, 'user': i.text, 'vote': (
+            yield {'pageid': pageid, 'user': i.text, 'value': (
                 1 if i.next_sibling.next_sibling.text.strip() == '+'
                 else -1)}
 
@@ -225,6 +226,14 @@ class WikidotConnector:
                     'title': i.select('div.title')[0].text.strip(),
                     'description': i.select('div.description')[0].text.strip(),
                     'category_id': category_id}
+
+    @functools.lru_cache()
+    def list_tagged_pages(self, tag):
+        """Return a list of all pages with a given tag"""
+        url = '{}/system:page-tags/tag/{}'.format(self.site, tag)
+        soup = bs4.BeautifulSoup(self.get_page_html(url))
+        return [self.site + i['href'] for i in
+                soup.select('div.pages-list-item a')]
 
     ###########################################################################
     # Methods Requiring Authorization
@@ -304,15 +313,12 @@ class Snapshot:
 
     database_directory = '/home/anqxyr/heap/_scp/'
 
-    def __init__(self, site='http://www.scp-wiki.net', dbname=None):
+    def __init__(self, dbname=None):
         if dbname is None:
-            dbname = '{}.{}.db'.format(
-                re.sub(r'^http://', '', site),
-                arrow.now().format('YYYY-MM-DD'))
+            dbname = 'scp-wiki.{}.db'.format(arrow.now().format('YYYY-MM-DD'))
         orm.connect(self.database_directory + dbname)
-        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=20)
-        self.site = site
-        self.wiki = WikidotConnector(self.site)
+        self.dbname = dbname
+        self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=20)
 
     ###########################################################################
     # Internal Methods
@@ -335,31 +341,14 @@ class Snapshot:
                 "data": image_data})
         return data
 
-    def _scrape_authors(self):
-        """Download author override metadata from 05command."""
-        soup = bs4.BeautifulSoup(
-            WikidotConnector('http://05command.wikidot.com')
-            .get_page_html('http://05command.wikidot.com/alexandra-rewrite'))
-        for i in soup.select('tr')[1:]:
-            yield {
-                'url': '{}/{}'.format(self.site, i.select('td')[0].text),
-                'author': i.select('td')[1].text.split(':override:')[-1],
-                'override': i.select('td')[1].text.startswith(':override:')}
-
     def _save_page(self, url):
         """Download the page and write it to the db."""
         logger.info('Saving page: {}'.format(url))
         html = self.wiki.get_page_html(url)
         if html is None:
             return
-        pageid = re.search('pageId = ([^;]*);', html)
-        pageid = pageid.group(1) if pageid is not None else None
+        pageid, thread_id = _parse_html_for_ids(html)
         soup = bs4.BeautifulSoup(html)
-        try:
-            thread_id = re.search(r'/forum/t-([0-9]+)/', soup.select(
-                '#discuss-button')[0]['href']).group(1)
-        except (IndexError, AttributeError):
-            thread_id = None
         html = str(soup.select('#main-content')[0])  # cut off side-bar, etc.
         orm.Page.create(pageid=pageid, url=url, html=html, thread_id=thread_id)
         orm.Revision.insert_many(self.wiki.get_page_history(pageid))
@@ -386,7 +375,7 @@ class Snapshot:
                 orm.ForumThread.create(**thread)
                 logger.info('Saving forum thread #{}/{}: {}'
                             .format(next(index), total, thread['title']))
-                futures.append(self.executor.submit(_save, thread))
+                futures.append(self.pool.submit(_save, thread))
         return futures
 
     ###########################################################################
@@ -453,24 +442,25 @@ class Snapshot:
     # Public Methods
     ###########################################################################
 
-    def take(self, include_forums=False):
+    def take(self, site='http://www.scp-wiki.net', include_forums=False):
+        self.wiki = WikidotConnector(site)
         time_start = arrow.now()
         orm.purge()
         for i in [orm.Page, orm.Revision, orm.Vote, orm.ForumPost, orm.Tag]:
             i.create_table()
-        ftrs = [self.executor.submit(self._save_page, i)
+        ftrs = [self.pool.submit(self._save_page, i)
                 for i in self.wiki.list_all_pages()]
         concurrent.futures.wait(ftrs)
         if include_forums:
             ftrs = self._save_forums()
             concurrent.futures.wait(ftrs)
-        if self.site == 'http://www.scp-wiki.net':
+        if site == 'http://www.scp-wiki.net':
             orm.Image.create_table()
             logger.info('Downloading image metadata.')
             orm.Image.insert_many(self._scrape_images())
             orm.Author.create_table()
             logger.info('Downloading author metadata.')
-            orm.Author.insert_many(self._scrape_authors())
+            orm.Author.insert_many(_get_rewrite_list())
         orm.queue.join()
         time_taken = (arrow.now() - time_start)
         hours, remainder = divmod(time_taken.seconds, 3600)
@@ -479,17 +469,14 @@ class Snapshot:
         msg = msg.format(hours, minutes, seconds)
         logger.info(msg)
 
-    def get_tag(self, tag):
+    def list_tagged_pages(self, tag):
         """Retrieve list of pages with the tag from the database"""
         for i in orm.Tag.select().where(orm.Tag.tag == tag):
             yield i.url
 
-    def get_author_metadata(self, url):
-        try:
-            au = orm.Author.get(orm.Author.url == url)
-            return {'user': au.author, 'override': au.override}
-        except orm.Author.DoesNotExist:
-            return None
+    def get_rewrite_list(self):
+        for au in orm.Author.select():
+            yield {i: getattr(au, i) for i in ('url', 'author', 'override')}
 
     def get_image_metadata(self, url):
         try:
@@ -510,10 +497,9 @@ class Snapshot:
 
 class Page:
 
-    """Scrape and store contents and metadata of a page."""
+    """ """
 
-    sn = None   # Snapshot instance used to init the pages
-    _title_index = None
+    source = None
 
     ###########################################################################
     # Constructors
@@ -531,17 +517,14 @@ class Page:
 
     @classmethod
     @contextlib.contextmanager
-    def from_snapshot(cls, name=None):
-        previous_sn = cls.sn
-        if name is None:
-            name = sorted([
-                i for i in os.listdir(Snapshot.database_directory)
-                if i.startswith('scp-wiki') and i.endswith('.db')])[-1]
-        cls.sn = Snapshot(dbname=name)
-        yield cls.sn
-        if previous_sn is not None:
-            orm.connect(previous_sn.dbname)
-        cls.sn = previous_sn
+    def from_source(cls, source):
+        prev_source = cls.source
+        cls.source = source
+        yield cls.source
+        if hasattr(prev_source, 'dbname'):
+            # Snapshots need to explicitely reconnect to their db
+            orm.connect(prev_source.dbname)
+        cls.source = prev_source
 
     ###########################################################################
     # Internal Methods
@@ -577,8 +560,9 @@ class Page:
             return maybe_children
 
     @classmethod
-    def _construct_title_index(cls):
-        logger.info('constructing title index')
+    @functools.lru_cache()
+    def _title_index(cls):
+        logger.debug('Constructing title index.')
         index_pages = ['scp-series', 'scp-series-2', 'scp-series-3']
         index = {}
         for url in index_pages:
@@ -586,18 +570,26 @@ class Page:
             items = [i for i in soup.select('ul > li')
                      if re.search('[SCP]+-[0-9]+', i.text)]
             for i in items:
-                url = cls.sn.site + i.a['href']
+                url = cls.source.site + i.a['href']
                 try:
                     skip, title = i.text.split(' - ', maxsplit=1)
                 except ValueError:
                     skip, title = i.text.split(', ', maxsplit=1)
-                    #skip, title = i.text.split('- ', maxsplit=1)
-                if url not in cls.sn.get_tag('splash'):
+                if url not in cls.source.list_tagged_pages('splash'):
                     index[url] = title
                 else:
-                    true_url = '{}/{}'.format(cls.sn.site, skip.lower())
+                    true_url = '{}/{}'.format(cls.source.site, skip.lower())
                     index[true_url] = title
-        cls._title_index = index
+        return index
+
+    @classmethod
+    @functools.lru_cache()
+    def _rewrite_list(cls):
+        try:
+            rewrite_list = cls.get_rewrite_list()
+        except AttributeError:
+            rewrite_list = _get_rewrite_list()
+        return {i['url']: (i['author'], i['override']) for i in rewrite_list}
 
     ###########################################################################
     # Internal Properties
@@ -605,11 +597,19 @@ class Page:
 
     @cached_property.cached_property
     def _pageid(self):
-        return self.sn.get_pageid(self.url)
+        if hasattr(self.source, 'get_pageid'):
+            return self.source.get_pageid(self.url)
+        pageid, thread_id = _parse_html_for_ids(self.html)
+        self._thread_id = thread_id
+        return pageid
 
     @cached_property.cached_property
     def _thread_id(self):
-        return self.sn.get_thread_id(self.url)
+        if hasattr(self.source, 'get_thread_id'):
+            return self.source.get_thread_id(self.url)
+        pageid, thread_id = _parse_html_for_ids(self.html)
+        self._pageid = pageid
+        return thread_id
 
     @cached_property.cached_property
     def _wikidot_title(self):
@@ -626,7 +626,7 @@ class Page:
 
     @cached_property.cached_property
     def html(self):
-        return self.sn.get_page_html(self.url)
+        return self.source.get_page_html(self.url)
 
     @cached_property.cached_property
     def text(self):
@@ -643,17 +643,15 @@ class Page:
     @cached_property.cached_property
     def title(self):
         if 'scp' in self.tags and re.search('[scp]+-[0-9]+$', self.url):
-            if self._title_index is None:
-                self._construct_title_index()
             title = '{}: {}'.format(
                 self._wikidot_title,
-                self._title_index[self.url])
+                self._title_index()[self.url])
             return title
         return self._wikidot_title
 
     @cached_property.cached_property
     def history(self):
-        data = self.sn.get_page_history(self._pageid)
+        data = self.source.get_page_history(self._pageid)
         rev = collections.namedtuple('Revision', 'number user time comment')
         history = []
         for i in data:
@@ -672,18 +670,13 @@ class Page:
     def authors(self):
         if self.url is None:
             return None
-        authors = []
-        author = collections.namedtuple('Author', 'user status')
-        second_author = self.sn.get_author_metadata(self.url)
-        if ((second_author is None
-                or not second_author['override'])):
-            authors.append(author(self.history[0].user, 'original'))
-        if second_author is not None:
-            if second_author['override']:
-                authors.append(author(second_author['user'], 'override'))
-            else:
-                authors.append(author(second_author['user'], 'rewrite'))
-        return authors
+        Author = collections.namedtuple('Author', 'user status')
+        author_original = Author(self.history[0].user, 'original')
+        if self.url not in self._rewrite_list():
+            return [author_original]
+        author, override = self._rewrite_list()[self.url]
+        new_author = Author(author, 'override' if override else 'rewrite')
+        return [author_original, new_author]
 
     @cached_property.cached_property
     def author(self):
@@ -701,7 +694,7 @@ class Page:
 
     @cached_property.cached_property
     def votes(self):
-        data = self.sn.get_page_votes(self._pageid)
+        data = self.source.get_page_votes(self._pageid)
         vote = collections.namedtuple('Vote', 'user value')
         votes = []
         for i in data:
@@ -717,29 +710,24 @@ class Page:
 
     @cached_property.cached_property
     def tags(self):
-        return self.sn.get_page_tags(self.url)
+        try:
+            return self.source.get_page_tags(self.url)
+        except AttributeError:
+            return [a.string for a in
+                    bs4.BeautifulSoup(self.html).select('div.page-tags a')]
 
     @cached_property.cached_property
     def comments(self):
-        data = self.sn.get_forum_thread(self._thread_id)
-        com = collections.namedtuple(
-            'Comment', 'post_id parent title user time content')
-        comments = []
-        for i in data:
-            comments.append(com(
-                i['post_id'],
-                i['parent'],
-                i['title'],
-                i['user'],
-                i['time'],
-                i['content']))
-        return comments
+        attributes = 'post_id parent title user time content'
+        ForumPost = collections.namedtuple('ForumPost', attributes)
+        return [ForumPost(*[i[k] for k in attributes.split(' ')])
+                for i in self.source.get_forum_thread(self._thread_id)]
 
     @cached_property.cached_property
     def links(self):
         if self.html is None:
             return []
-        links = {}
+        links = set()
         for a in bs4.BeautifulSoup(self.html).select('#page-content a'):
             if (('href' not in a.attrs) or
                 (a['href'][0] != '/') or
@@ -763,6 +751,30 @@ class Page:
 ###############################################################################
 
 
+def _get_rewrite_list():
+    """Download author override metadata from 05command."""
+    soup = bs4.BeautifulSoup(
+        WikidotConnector('http://05command.wikidot.com')
+        .get_page_html('http://05command.wikidot.com/alexandra-rewrite'))
+    for i in soup.select('tr')[1:]:
+        yield {
+            'url': 'http://www.scp-wiki.net/{}'.format(i.select('td')[0].text),
+            'author': i.select('td')[1].text.split(':override:')[-1],
+            'override': i.select('td')[1].text.startswith(':override:')}
+
+
+def _parse_html_for_ids(html):
+    pageid = re.search('pageId = ([^;]*);', html)
+    pageid = pageid.group(1) if pageid is not None else None
+    soup = bs4.BeautifulSoup(html)
+    try:
+        thread_id = re.search(r'/forum/t-([0-9]+)/', soup.select(
+            '#discuss-button')[0]['href']).group(1)
+    except (IndexError, AttributeError):
+        thread_id = None
+    return pageid, thread_id
+
+
 def enable_logging(logger):
     console = logging.StreamHandler()
     console.setLevel(logging.INFO)
@@ -778,7 +790,7 @@ def enable_logging(logger):
 
 
 def main():
-    Snapshot().take(include_forums=True)
+    Snapshot().take()
     pass
 
 
