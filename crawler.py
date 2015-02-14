@@ -21,8 +21,7 @@ import requests
 # Global Constants And Variables
 ###############################################################################
 
-logger = logging.getLogger('scp.crawler')
-logger.setLevel(logging.DEBUG)
+log = logging.getLogger('scp.crawler')
 
 ###############################################################################
 # Classes
@@ -57,7 +56,7 @@ class WikidotConnector:
         Almost all other methods of the class are using _module in one way
         or another.
         """
-        logger.debug('_module call: {} ({}) {}'.format(name, pageid, kwargs))
+        log.debug('_module call: {} ({}) {}'.format(name, pageid, kwargs))
         payload = {
             'page_id': pageid,
             'pageId': pageid,  # fuck wikidot
@@ -74,7 +73,7 @@ class WikidotConnector:
             headers={'Content-Type': 'application/x-www-form-urlencoded;'},
             cookies=cookies, timeout=30)
         if data.status_code != 200:
-            logger.warning(
+            log.warning(
                 'Status code {} recieved from _module call: {} ({}) {}'
                 .format(data.status_code, name, pageid, kwargs))
         return data.json()
@@ -108,7 +107,7 @@ class WikidotConnector:
         discussion pages actually use separate calls to the
         ForumViewThreadPostsModule.
         """
-        logger.debug('Paging through {}'.format(baseurl))
+        log.debug('Paging through {}'.format(baseurl))
         first_page = self.get_page_html(baseurl)
         yield first_page
         soup = bs4.BeautifulSoup(first_page)
@@ -118,7 +117,7 @@ class WikidotConnector:
             return
         last_page_index = int(counter.split(' ')[-1])
         for index in range(2, last_page_index + 1):
-            logger.debug('Paging through {} ({}/{})'.format(
+            log.debug('Paging through {} ({}/{})'.format(
                 baseurl, index, last_page_index))
             url = '{}/p/{}'.format(baseurl, index)
             yield self.get_page_html(url)
@@ -129,13 +128,13 @@ class WikidotConnector:
 
     def get_page_html(self, url):
         """Download the html data of the page."""
-        logger.debug('Downloading page html: {}'.format(url))
+        log.debug('Downloading page html: {}'.format(url))
         data = self.req.get(url, allow_redirects=False, timeout=30)
         if data.status_code == 200:
             return data.text
         else:
             msg = 'Page {} returned http status code {}'
-            logger.warning(msg.format(url, data.status_code))
+            log.warning(msg.format(url, data.status_code))
             return None
 
     def get_page_history(self, pageid):
@@ -343,7 +342,7 @@ class Snapshot:
 
     def _save_page(self, url):
         """Download the page and write it to the db."""
-        logger.info('Saving page: {}'.format(url))
+        log.info('Saving page: {}'.format(url))
         html = self.wiki.get_page_html(url)
         if html is None:
             return
@@ -373,8 +372,9 @@ class Snapshot:
             orm.ForumCategory.create(**category)
             for thread in self.wiki.list_threads(category['category_id']):
                 orm.ForumThread.create(**thread)
-                logger.info('Saving forum thread #{}/{}: {}'
-                            .format(next(index), total, thread['title']))
+                log.info(
+                    'Saving forum thread #{}/{}: {}'
+                    .format(next(index), total, thread['title']))
                 futures.append(self.pool.submit(_save, thread))
         return futures
 
@@ -456,10 +456,10 @@ class Snapshot:
             concurrent.futures.wait(ftrs)
         if site == 'http://www.scp-wiki.net':
             orm.Image.create_table()
-            logger.info('Downloading image metadata.')
+            log.info('Downloading image metadata.')
             orm.Image.insert_many(self._scrape_images())
             orm.Author.create_table()
-            logger.info('Downloading author metadata.')
+            log.info('Downloading author metadata.')
             orm.Author.insert_many(_get_rewrite_list())
         orm.queue.join()
         time_taken = (arrow.now() - time_start)
@@ -467,7 +467,7 @@ class Snapshot:
         minutes, seconds = divmod(remainder, 60)
         msg = 'Snapshot succesfully taken. [{:02d}:{:02d}:{:02d}]'
         msg = msg.format(hours, minutes, seconds)
-        logger.info(msg)
+        log.info(msg)
 
     def list_tagged_pages(self, tag):
         """Retrieve list of pages with the tag from the database"""
@@ -499,7 +499,7 @@ class Page:
 
     """ """
 
-    source = None
+    _connector = None
 
     ###########################################################################
     # Constructors
@@ -517,14 +517,14 @@ class Page:
 
     @classmethod
     @contextlib.contextmanager
-    def from_source(cls, source):
-        prev_source = cls.source
-        cls.source = source
-        yield cls.source
-        if hasattr(prev_source, 'dbname'):
+    def load_from(cls, connector):
+        previous_connector = cls._connector
+        cls._connector = connector
+        yield connector
+        if hasattr(previous_connector, 'dbname'):
             # Snapshots need to explicitely reconnect to their db
-            orm.connect(prev_source.dbname)
-        cls.source = prev_source
+            orm.connect(previous_connector.dbname)
+        cls._connector = previous_connector
 
     ###########################################################################
     # Internal Methods
@@ -562,7 +562,7 @@ class Page:
     @classmethod
     @functools.lru_cache()
     def _title_index(cls):
-        logger.debug('Constructing title index.')
+        log.debug('Constructing title index.')
         index_pages = ['scp-series', 'scp-series-2', 'scp-series-3']
         index = {}
         for url in index_pages:
@@ -570,15 +570,16 @@ class Page:
             items = [i for i in soup.select('ul > li')
                      if re.search('[SCP]+-[0-9]+', i.text)]
             for i in items:
-                url = cls.source.site + i.a['href']
+                url = cls._connector.site + i.a['href']
                 try:
                     skip, title = i.text.split(' - ', maxsplit=1)
                 except ValueError:
                     skip, title = i.text.split(', ', maxsplit=1)
-                if url not in cls.source.list_tagged_pages('splash'):
+                if url not in cls._connector.list_tagged_pages('splash'):
                     index[url] = title
                 else:
-                    true_url = '{}/{}'.format(cls.source.site, skip.lower())
+                    true_url = '{}/{}'.format(
+                        cls._connector.site, skip.lower())
                     index[true_url] = title
         return index
 
@@ -597,16 +598,16 @@ class Page:
 
     @cached_property.cached_property
     def _pageid(self):
-        if hasattr(self.source, 'get_pageid'):
-            return self.source.get_pageid(self.url)
+        if hasattr(self._connector, 'get_pageid'):
+            return self._connector.get_pageid(self.url)
         pageid, thread_id = _parse_html_for_ids(self.html)
         self._thread_id = thread_id
         return pageid
 
     @cached_property.cached_property
     def _thread_id(self):
-        if hasattr(self.source, 'get_thread_id'):
-            return self.source.get_thread_id(self.url)
+        if hasattr(self._connector, 'get_thread_id'):
+            return self._connector.get_thread_id(self.url)
         pageid, thread_id = _parse_html_for_ids(self.html)
         self._pageid = pageid
         return thread_id
@@ -626,7 +627,7 @@ class Page:
 
     @cached_property.cached_property
     def html(self):
-        return self.source.get_page_html(self.url)
+        return self._connector.get_page_html(self.url)
 
     @cached_property.cached_property
     def text(self):
@@ -651,7 +652,7 @@ class Page:
 
     @cached_property.cached_property
     def history(self):
-        data = self.source.get_page_history(self._pageid)
+        data = self._connector.get_page_history(self._pageid)
         rev = collections.namedtuple('Revision', 'number user time comment')
         history = []
         for i in data:
@@ -694,7 +695,7 @@ class Page:
 
     @cached_property.cached_property
     def votes(self):
-        data = self.source.get_page_votes(self._pageid)
+        data = self._connector.get_page_votes(self._pageid)
         vote = collections.namedtuple('Vote', 'user value')
         votes = []
         for i in data:
@@ -711,7 +712,7 @@ class Page:
     @cached_property.cached_property
     def tags(self):
         try:
-            return self.source.get_page_tags(self.url)
+            return self._connector.get_page_tags(self.url)
         except AttributeError:
             return [a.string for a in
                     bs4.BeautifulSoup(self.html).select('div.page-tags a')]
@@ -721,7 +722,7 @@ class Page:
         attributes = 'post_id parent title user time content'
         ForumPost = collections.namedtuple('ForumPost', attributes)
         return [ForumPost(*[i[k] for k in attributes.split(' ')])
-                for i in self.source.get_forum_thread(self._thread_id)]
+                for i in self._connector.get_forum_thread(self._thread_id)]
 
     @cached_property.cached_property
     def links(self):
@@ -775,18 +776,17 @@ def _parse_html_for_ids(html):
     return pageid, thread_id
 
 
-def enable_logging(logger):
+def configure_logging(log):
+    log.setLevel(logging.DEBUG)
     console = logging.StreamHandler()
     console.setLevel(logging.INFO)
-    formatter = logging.Formatter('%(name)-12s: %(levelname)-8s %(message)s')
-    console.setFormatter(formatter)
+    console.setFormatter(logging.Formatter('%(levelname)s %(message)s'))
     logging.getLogger('scp').addHandler(console)
-    logfile = logging.FileHandler('logfile.txt', mode='w', delay=True)
-    logfile.setLevel(logging.WARNING)
-    file_format = '%(asctime)s %(name)-12s %(levelname)-8s %(message)s'
-    file_formatter = logging.Formatter(file_format)
-    logfile.setFormatter(file_formatter)
-    logging.getLogger('scp').addHandler(logfile)
+    file = logging.FileHandler('logfile.txt', mode='w', delay=True)
+    file.setLevel(logging.WARNING)
+    file.setFormatter(logging.Formatter(
+        '%(asctime)s %(name)-12s %(levelname)-8s %(message)s'))
+    logging.getLogger('scp').addHandler(file)
 
 
 def main():
@@ -795,5 +795,5 @@ def main():
 
 
 if __name__ == "__main__":
-    enable_logging(logger)
+    configure_logging(log)
     main()
