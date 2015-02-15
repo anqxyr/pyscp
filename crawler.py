@@ -226,13 +226,28 @@ class WikidotConnector:
                     'description': i.select('div.description')[0].text.strip(),
                     'category_id': category_id}
 
-    @functools.lru_cache()
     def list_tagged_pages(self, tag):
-        """Return a list of all pages with a given tag"""
+        """Return a list of all pages with a given tag."""
         url = '{}/system:page-tags/tag/{}'.format(self.site, tag)
         soup = bs4.BeautifulSoup(self.get_page_html(url))
         return [self.site + i['href'] for i in
                 soup.select('div.pages-list-item a')]
+
+    def recent_changes(self, num):
+        """Return the last 'num' revisions on the site."""
+        data = self._module(
+            name='changes/SiteChangesListModule', pageid=None,
+            options={'all': True}, page=1, perpage=num)['body']
+        for tag in bs4.BeautifulSoup(data).select('div.changes-list-item'):
+            revnum = tag.select('td.revision-no')[0].text.strip()
+            time = tag.select('span.odate')[0]['class'][1].split('_')[1]
+            comment = tag.select('div.comments')
+            yield {
+                'url': self.site + tag.select('td.title')[0].a['href'],
+                'number': 0 if revnum == '(new)' else int(revnum[6:-1]),
+                'user': tag.select('span.printuser')[0].text.strip(),
+                'time': arrow.get(time).format('YYYY-MM-DD HH:mm:ss'),
+                'comment': comment[0].text.strip() if comment else ''}
 
     ###########################################################################
     # Methods Requiring Authorization
