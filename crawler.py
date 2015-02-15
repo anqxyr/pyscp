@@ -16,7 +16,7 @@ import logging
 import orm
 import re
 import requests
-import furl
+import urllib.parse
 
 ###############################################################################
 # Global Constants And Variables
@@ -40,12 +40,11 @@ class WikidotConnector:
     """
 
     def __init__(self, site):
-        url = furl.furl(site)
-        if not url.host:
-            if '.' not in site:
-                site += '.wikidot.com'
-            url.set(scheme='http', host=site, path='')
-        self.site = url
+        parsed = urllib.parse.urlparse(site)
+        netloc = parsed.netloc or parsed.path
+        if '.' not in netloc:
+            netloc += '.wikidot.com'
+        self.site = urllib.parse.urlunparse(['http', netloc, '', '', '', ''])
         req = requests.Session()
         req.mount(site, requests.adapters.HTTPAdapter(max_retries=5))
         self.req = req
@@ -74,7 +73,7 @@ class WikidotConnector:
         cookies = {'wikidot_token7': '123456'}
         cookies.update({i.name: i.value for i in self.req.cookies})
         data = self.req.post(
-            self.site.join('/ajax-module-connector.php').url,
+            self.site + '/ajax-module-connector.php',
             data=payload,
             headers={'Content-Type': 'application/x-www-form-urlencoded;'},
             cookies=cookies, timeout=30)
@@ -135,7 +134,7 @@ class WikidotConnector:
     def get_page_html(self, url):
         """Download the html data of the page."""
         log.debug('Downloading page html: {}'.format(url))
-        data = self.req.get(url.url, allow_redirects=False, timeout=30)
+        data = self.req.get(url, allow_redirects=False, timeout=30)
         if data.status_code == 200:
             return data.text
         else:
@@ -528,7 +527,9 @@ class Page:
 
     def __init__(self, url=None):
         if url is not None:
-            url = self._connector.site.join(url)
+            parsed = urllib.parse.urlparse(url)
+            if not parsed.netloc:
+                url = urllib.parse.urljoin(self._connector.site, url)
         self.url = url
 
     ###########################################################################
@@ -785,8 +786,6 @@ def _get_rewrite_list():
 
 
 def _parse_html_for_ids(html):
-    if html is None:
-        return None, None
     pageid = re.search('pageId = ([^;]*);', html)
     pageid = pageid.group(1) if pageid is not None else None
     soup = bs4.BeautifulSoup(html)
