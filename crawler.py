@@ -16,6 +16,7 @@ import logging
 import orm
 import re
 import requests
+import furl
 
 ###############################################################################
 # Global Constants And Variables
@@ -39,7 +40,12 @@ class WikidotConnector:
     """
 
     def __init__(self, site):
-        self.site = site.rstrip('/')
+        url = furl.furl(site)
+        if not url.host:
+            if '.' not in site:
+                site += '.wikidot.com'
+            url.set(scheme='http', host=site, path='')
+        self.site = url
         req = requests.Session()
         req.mount(site, requests.adapters.HTTPAdapter(max_retries=5))
         self.req = req
@@ -68,7 +74,7 @@ class WikidotConnector:
         cookies = {'wikidot_token7': '123456'}
         cookies.update({i.name: i.value for i in self.req.cookies})
         data = self.req.post(
-            self.site + '/ajax-module-connector.php',
+            self.site.join('/ajax-module-connector.php').url,
             data=payload,
             headers={'Content-Type': 'application/x-www-form-urlencoded;'},
             cookies=cookies, timeout=30)
@@ -129,7 +135,7 @@ class WikidotConnector:
     def get_page_html(self, url):
         """Download the html data of the page."""
         log.debug('Downloading page html: {}'.format(url))
-        data = self.req.get(url, allow_redirects=False, timeout=30)
+        data = self.req.get(url.url, allow_redirects=False, timeout=30)
         if data.status_code == 200:
             return data.text
         else:
@@ -521,9 +527,8 @@ class Page:
     ###########################################################################
 
     def __init__(self, url=None):
-        prefix = 'http://www.scp-wiki.net/'
-        if url is not None and not url.startswith(prefix):
-            url = prefix + url
+        if url is not None:
+            url = self._connector.site.join(url)
         self.url = url
 
     ###########################################################################
@@ -780,6 +785,8 @@ def _get_rewrite_list():
 
 
 def _parse_html_for_ids(html):
+    if html is None:
+        return None, None
     pageid = re.search('pageId = ([^;]*);', html)
     pageid = pageid.group(1) if pageid is not None else None
     soup = bs4.BeautifulSoup(html)
