@@ -11,14 +11,13 @@ import logging
 import natsort
 import os
 import re
-import requests
 import shutil
 import tempfile
 
 from bs4 import BeautifulSoup
 from cached_property import cached_property
 from collections import defaultdict, namedtuple, OrderedDict
-from crawler import Page, Snapshot
+from crawler import Page, Snapshot, enable_logging
 from lxml import etree, html
 
 ###############################################################################
@@ -28,8 +27,8 @@ from lxml import etree, html
 SAVEPATH = '/home/anqxyr/heap/_scp/ebook/'
 STATICDATA = os.path.dirname(os.path.abspath(__file__))
 # pick from 'COMPLETE', 'TOMES', and 'DIGEST'
-BOOKTYPE = 'COMPLETE'
-DIGESTMONTH = '2014-12'
+BOOKTYPE = 'DIGEST'
+DIGESTMONTH = '2015-01'
 
 logger = logging.getLogger('scp.ebook')
 logger.setLevel(logging.DEBUG)
@@ -59,18 +58,11 @@ class Epub():
         self.images = {}
 
     def add_page(self, page, parent=None, node=None):
-        #each page can only appear once in the book
-        duplicate = page.url in self.allpages_global
-        empty = page.parsed_html is None
-        try:
-            tale_hub = (page.title.startswith('Author Tales')
-                        or page.title.startswith('Tales by Year'))
-        except AttributeError as e:
-            print(page.url)
-            print(page.title)
-            raise e
-            exit()
-        if duplicate or empty or page.rating < 0 or tale_hub:
+        if (page.url in self.allpages_global or
+            page.parsed_html is None or
+            (page.rating is not None and page.rating < 0) or
+            (page.title.startswith('Author Tales')
+                or page.title.startswith('Tales by Year'))):
             return
         logger.info('Adding page: {}'.format(page.url))
         epub_page = copy.deepcopy(self.templates["page"])
@@ -112,8 +104,8 @@ class Epub():
             self.add_page(p, node=new_node)
 
     def add_to_toc(self, node, page, uid):
-        navpoint = etree.SubElement(node, "navPoint", id=uid, playOrder=
-                                    str(len(self.pageinfo)))
+        navpoint = etree.SubElement(node, "navPoint", id=uid,
+                                    playOrder=str(len(self.pageinfo)))
         navlabel = etree.SubElement(navpoint, "navLabel")
         etree.SubElement(navlabel, "text").text = page.title
         etree.SubElement(navpoint, "content", src="{}.xhtml".format(uid))
@@ -272,7 +264,7 @@ class BookPage(Page):
         if self.url is None:
             return []
         if self.url.endswith('scp-2998'):
-            links = ['{}-{}'.format(self.url, n) for n in range(2, 11)]
+            return ['{}-{}'.format(self.url, n) for n in range(2, 11)]
         if self.url.endswith('wills-and-ways-hub'):
             return [i for i in super().children
                     if not i.endswith('marshall-carter-and-dark-hub')]
@@ -396,7 +388,7 @@ def add_attributions(book):
             continue
         atrb = '<p><b>{}</b> ({}) was written by <b>{}</b>'
         atrb = atrb.format(i.title, i.url, i.authors[0].user)
-        if not i.chapter in atrb_pages:
+        if i.chapter not in atrb_pages:
             atrb_pages[i.chapter] = "<div class='attrib'>"
         atrb_pages[i.chapter] += atrb
         for au in (j.user for j in i.authors if j.status == 'rewrite'):
@@ -436,7 +428,7 @@ def new_book(title):
 def check_chapters(book, chapters):
     """Check if the chapters exist in the book, and create if necessary"""
     for n, chap in enumerate(chapters):
-        if not chap in (i.title for i in book.pageinfo):
+        if chap not in (i.title for i in book.pageinfo):
             p = BookPage()
             p.title = chap
             p.parsed_html = "<div class='title2'>{}</div>".format(chap)
@@ -508,22 +500,8 @@ def add_tomes(books, page):
 ###############################################################################
 
 
-def enable_logging():
-    console = logging.StreamHandler()
-    console.setLevel(logging.INFO)
-    formatter = logging.Formatter('%(name)-12s: %(levelname)-8s %(message)s')
-    console.setFormatter(formatter)
-    logging.getLogger('scp').addHandler(console)
-    logfile = logging.FileHandler('logfile.txt', mode='w', delay=True)
-    logfile.setLevel(logging.WARNING)
-    file_format = '%(asctime)s %(name)-12s %(levelname)-8s %(message)s'
-    file_formatter = logging.Formatter(file_format)
-    logfile.setFormatter(file_formatter)
-    logging.getLogger('scp').addHandler(logfile)
-
-
 def main():
-    BookPage.sn = Snapshot('scp-wiki.2015-01-01.db')
+    BookPage.sn = Snapshot('scp-wiki.2015-02-01.db')
     books = []
     for n, page in enumerate(get_all_in_order()):
         pick_and_add(books, page)
@@ -534,5 +512,5 @@ def main():
 
 
 if __name__ == "__main__":
-    enable_logging()
+    enable_logging(logger)
     main()

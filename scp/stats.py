@@ -784,6 +784,11 @@ def plot_active_ratio():
 
 
 def main():
+    for i in Page.select().where(Page.author == 'Faminepulse'):
+        if Revision.count(
+                (Revision.pageid == i.pageid) &
+                (Revision.user == 'anqxyr')) > 0:
+            print(i.url)
     pass
 
 if __name__ == "__main__":

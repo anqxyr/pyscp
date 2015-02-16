@@ -4,15 +4,17 @@
 # Module Imports
 ###############################################################################
 
-import logging
-import peewee
 import concurrent.futures
+import logging
+import os
+import peewee
 import queue
 
 ###############################################################################
 # Global Constants And Variables
 ###############################################################################
 
+DBPATH = None
 logger = logging.getLogger('scp.crawler.orm')
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 queue = queue.Queue()
@@ -43,6 +45,7 @@ class BaseModel(peewee.Model):
 
     @classmethod
     def insert_many(cls, data):
+        data = list(data)
         super_insert = super().insert_many
         insert = lambda x: super_insert(x).execute()
         for idx in range(0, len(data), 500):
@@ -68,7 +71,7 @@ class Revision(BaseModel):
 class Vote(BaseModel):
     pageid = peewee.IntegerField(index=True)
     user = peewee.CharField(index=True)
-    vote = peewee.IntegerField()
+    value = peewee.IntegerField()
 
 
 class ForumPost(BaseModel):
@@ -118,47 +121,38 @@ class Tag(BaseModel):
 
 
 def async_write():
+    global buffer, buffer_index
     item = queue.get()
     buffer.append(item)
     if len(buffer) > 500 or queue.empty():
-        flush_buffer()
+        buffer_size = len(buffer)
+        logger.debug(
+            'Processing queue items #{}-{}'
+            .format(buffer_index, buffer_index + buffer_size))
+        buffer_index += buffer_size
+        with db.transaction():
+            for item in buffer:
+                func = item['func']
+                args = item.get('args', ())
+                kwargs = item.get('kwargs', {})
+                try:
+                    func(*args, **kwargs)
+                except:
+                    logger.exception('Exception while processing queue item.')
+                queue.task_done()
+        buffer = []
 
 
-def flush_buffer():
-    global buffer, buffer_index
-    buffer_size = len(buffer)
-    logger.debug(
-        'Processing queue items #{}-{}'
-        .format(buffer_index, buffer_index + buffer_size))
-    buffer_index += buffer_size
-    with db.transaction():
-        for item in buffer:
-            func = item['func']
-            args = item.get('args', ())
-            kwargs = item.get('kwargs', {})
-            try:
-                func(*args, **kwargs)
-            except:
-                logger.exception('Exception while processing queue item.')
-            queue.task_done()
-    buffer = []
-
-
-def wait():
-    if queue.qsize() > 500:
-        logger.info('Queue full, pausing.')
-        queue.join()
-
-
-def connect(dbpath):
-    logger.info('Connecting to the database at {}'.format(dbpath))
+def connect(dbpath, silent=False):
+    global DBPATH
+    DBPATH = dbpath
+    if not silent:
+        logger.info('Connecting to the database at {}'.format(dbpath))
     db.init(dbpath)
     db.connect()
 
 
 def purge():
     logger.info('Purging the database.')
-    tables = [Page, Revision, Vote, ForumPost, ForumThread, ForumCategory,
-              Image, Author, Tag]
-    for i in tables:
-        i.drop_table(fail_silently=True)
+    os.remove(DBPATH)
+    connect(DBPATH, silent=True)
