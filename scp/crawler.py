@@ -152,6 +152,7 @@ class WikidotConnector:
                             pageid=pageid, page=1, perpage=1000000)['body']
         for i in bs4.BeautifulSoup(data).select('tr')[1:]:
             yield {
+                'revision_id': int(i['id'].split('-')[-1]),
                 'pageid': pageid,
                 'number': int(i.select('td')[0].text.strip('.')),
                 'user': i.select('td')[4].text,
@@ -270,7 +271,7 @@ class WikidotConnector:
             'https://www.wikidot.com/default--flow/login__LoginPopupScreen',
             data=data)
 
-    def edit_page(self, pageid, url, source, title, comments=None):
+    def edit_page(self, pageid, url, source, title, comment=None):
         """
         Overwrite the page with the new source and title.
 
@@ -281,7 +282,7 @@ class WikidotConnector:
         lock = self._module('edit/PageEditModule', pageid, mode='page')
         params = {
             'source': source,
-            'comments': comments,
+            'comments': comment,
             'title': title,
             'lock_id': lock['lock_id'],
             'lock_secret': lock['lock_secret'],
@@ -309,6 +310,13 @@ class WikidotConnector:
             'tags': ' '.join(tags),
             'action': 'WikiPageAction',
             'event': 'saveTags'}
+        self._module('Empty', pageid, **params)
+
+    def revert_page_to_revision(self, pageid, revision_id):
+        params = {
+            'revisionId': revision_id,
+            'action': 'WikiPageAction',
+            'event': 'revert'}
         self._module('Empty', pageid, **params)
 
 
@@ -464,7 +472,7 @@ class Snapshot:
     # Public Methods
     ###########################################################################
 
-    def take(self, site='http://www.scp-wiki.net', include_forums=False):
+    def take(self, site, include_forums=False):
         self.wiki = WikidotConnector(site)
         time_start = arrow.now()
         scp.orm.purge()
@@ -664,6 +672,14 @@ class Page:
         return len(re.findall(r"[\w'█_-]+", self.text))
 
     @cached_property.cached_property
+    def source(self):
+        if hasattr(self._connector, 'get_page_source'):
+            return self._connector.get_page_source(self._pageid)
+        else:
+            err = "The operation is not supported by the current connector."
+            raise TypeError(err)
+
+    @cached_property.cached_property
     def images(self):
         return [i['src'] for i in bs4.BeautifulSoup(self.html).select('img')]
 
@@ -679,15 +695,17 @@ class Page:
     @cached_property.cached_property
     def history(self):
         data = self._connector.get_page_history(self._pageid)
-        rev = collections.namedtuple('Revision', 'number user time comment')
+        Revision = collections.namedtuple(
+            'Revision', 'revision_id number user time comment')
         history = []
         for i in data:
-            history.append(rev(
+            history.append(Revision(
+                i['revision_id'],
                 i['number'],
                 i['user'],
                 i['time'],
                 i['comment']))
-        return history
+        return list(reversed(history))
 
     @cached_property.cached_property
     def created(self):
@@ -772,6 +790,41 @@ class Page:
         if 'hub' in self.tags and (set(self.tags) & {'tale', 'goi2014'}):
             return self._get_children_if_hub()
         return []
+
+    ###########################################################################
+    # Other Methods
+    ###########################################################################
+
+    def edit(self, source, title=None, comment=None):
+        if title is None:
+            title = self._wikidot_title
+        if hasattr(self._connector, 'edit_page'):
+            self._connector.edit_page(
+                self._pageid, self.url, source, title, comment)
+            # purging the property cache
+            for i in list(self._cache.keys()):
+                if i not in ('url', '_pageid'):
+                    del self._cache[i]
+        else:
+            err = "The operation is not supported by the current connector."
+            raise TypeError(err)
+
+    def set_tags(self, tags):
+        if hasattr(self._connector, 'set_page_tags'):
+            self._connector.set_page_tags(self._pageid, tags)
+            if 'tags' in self._cache:
+                del self._cache['tags']
+        else:
+            err = "The operation is not supported by the current connector."
+            raise TypeError(err)
+
+    def revert_to(self, revision_num):
+        if hasattr(self._connector, 'revert_page_to_revision'):
+            self._connector.revert_page_to_revision(
+                self._pageid, self.history[revision_num].revision_id)
+            for i in list(self._cache.keys()):
+                if i not in ('url', '_pageid'):
+                    del self._cache[i]
 
 ###############################################################################
 # Module-level Functions
