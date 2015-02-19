@@ -17,7 +17,7 @@ import re
 import requests
 import urllib.parse
 
-import scp.orm
+import pyscp.orm as orm
 
 ###############################################################################
 # Global Constants And Variables
@@ -341,8 +341,8 @@ class Snapshot:
 
     def __init__(self, dbpath):
         self.dbpath = dbpath
-        scp.orm.connect(self.dbpath)
-        first_url = scp.orm.Page.select(scp.orm.Page.url).first().url
+        orm.connect(self.dbpath)
+        first_url = orm.Page.select(orm.Page.url).first().url
         netloc = urllib.parse.urlparse(first_url).netloc
         self.site = urllib.parse.urlunparse(['http', netloc, '', '', '', ''])
         self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=20)
@@ -377,31 +377,31 @@ class Snapshot:
         pageid, thread_id = _parse_html_for_ids(html)
         soup = bs4.BeautifulSoup(html)
         html = str(soup.select('#main-content')[0])  # cut off side-bar, etc.
-        scp.orm.Page.create(
+        orm.Page.create(
             pageid=pageid, url=url, html=html, thread_id=thread_id)
-        scp.orm.Revision.insert_many(self.wiki.get_page_history(pageid))
-        scp.orm.Vote.insert_many(self.wiki.get_page_votes(pageid))
-        scp.orm.ForumPost.insert_many(self.wiki.get_forum_thread(thread_id))
-        scp.orm.Tag.insert_many(
+        orm.Revision.insert_many(self.wiki.get_page_history(pageid))
+        orm.Vote.insert_many(self.wiki.get_page_votes(pageid))
+        orm.ForumPost.insert_many(self.wiki.get_forum_thread(thread_id))
+        orm.Tag.insert_many(
             {'tag': a.string, 'url': url} for a in
             bs4.BeautifulSoup(html).select('div.page-tags a'))
 
     def _save_forums(self,):
         """Download and save standalone forum threads."""
-        scp.orm.ForumThread.create_table()
-        scp.orm.ForumCategory.create_table()
+        orm.ForumThread.create_table()
+        orm.ForumCategory.create_table()
         categories = [
             i for i in self.wiki.list_categories()
             if i['title'] != 'Per page discussions']
         total = sum([i['threads'] for i in categories])
         index = itertools.count(1)
         futures = []
-        _save = lambda x: (scp.orm.ForumPost.insert_many(
+        _save = lambda x: (orm.ForumPost.insert_many(
             self.wiki.get_forum_thread(x['thread_id'])))
         for category in categories:
-            scp.orm.ForumCategory.create(**category)
+            orm.ForumCategory.create(**category)
             for thread in self.wiki.list_threads(category['category_id']):
-                scp.orm.ForumThread.create(**thread)
+                orm.ForumThread.create(**thread)
                 log.info(
                     'Saving forum thread #{}/{}: {}'
                     .format(next(index), total, thread['title']))
@@ -414,23 +414,23 @@ class Snapshot:
 
     def get_page_html(self, url):
         try:
-            return scp.orm.Page.get(scp.orm.Page.url == url).html
-        except scp.orm.Page.DoesNotExist:
+            return orm.Page.get(orm.Page.url == url).html
+        except orm.Page.DoesNotExist:
             return None
 
     def get_pageid(self, url):
         try:
-            return scp.orm.Page.get(scp.orm.Page.url == url).pageid
-        except scp.orm.Page.DoesNotExist:
+            return orm.Page.get(orm.Page.url == url).pageid
+        except orm.Page.DoesNotExist:
             return None
 
     def get_thread_id(self, url):
-        return scp.orm.Page.get(scp.orm.Page.url == url).thread_id
+        return orm.Page.get(orm.Page.url == url).thread_id
 
     def get_page_history(self, pageid):
-        query = (scp.orm.Revision.select()
-                 .where(scp.orm.Revision.pageid == pageid)
-                 .order_by(scp.orm.Revision.number))
+        query = (orm.Revision.select()
+                 .where(orm.Revision.pageid == pageid)
+                 .order_by(orm.Revision.number))
         history = []
         for i in query:
             history.append({
@@ -442,20 +442,20 @@ class Snapshot:
         return history
 
     def get_page_votes(self, pageid):
-        for i in scp.orm.Vote.select().where(scp.orm.Vote.pageid == pageid):
+        for i in orm.Vote.select().where(orm.Vote.pageid == pageid):
             yield {a: getattr(i, a) for a in ('pageid', 'user', 'value')}
 
     def get_page_tags(self, url):
-        query = scp.orm.Tag.select().where(scp.orm.Tag.url == url)
+        query = orm.Tag.select().where(orm.Tag.url == url)
         tags = []
         for tag in query:
             tags.append(tag.tag)
         return tags
 
     def get_forum_thread(self, thread_id):
-        query = (scp.orm.ForumPost.select()
-                 .where(scp.orm.ForumPost.thread_id == thread_id)
-                 .order_by(scp.orm.ForumPost.post_id))
+        query = (orm.ForumPost.select()
+                 .where(orm.ForumPost.thread_id == thread_id)
+                 .order_by(orm.ForumPost.post_id))
         posts = []
         for i in query:
             posts.append({
@@ -475,10 +475,10 @@ class Snapshot:
     def take(self, site, include_forums=False):
         self.wiki = WikidotConnector(site)
         time_start = arrow.now()
-        scp.orm.purge()
+        orm.purge()
         for i in [
-                scp.orm.Page, scp.orm.Revision, scp.orm.Vote,
-                scp.orm.ForumPost, scp.orm.Tag]:
+                orm.Page, orm.Revision, orm.Vote,
+                orm.ForumPost, orm.Tag]:
             i.create_table()
         ftrs = [self.pool.submit(self._save_page, i)
                 for i in self.wiki.list_all_pages()]
@@ -487,13 +487,13 @@ class Snapshot:
             ftrs = self._save_forums()
             concurrent.futures.wait(ftrs)
         if site == 'http://www.scp-wiki.net':
-            scp.orm.Image.create_table()
+            orm.Image.create_table()
             log.info('Downloading image metadata.')
-            scp.orm.Image.insert_many(self._scrape_images())
-            scp.orm.Author.create_table()
+            orm.Image.insert_many(self._scrape_images())
+            orm.Author.create_table()
             log.info('Downloading author metadata.')
-            scp.orm.Author.insert_many(_get_rewrite_list())
-        scp.orm.queue.join()
+            orm.Author.insert_many(_get_rewrite_list())
+        orm.queue.join()
         time_taken = (arrow.now() - time_start)
         hours, remainder = divmod(time_taken.seconds, 3600)
         minutes, seconds = divmod(remainder, 60)
@@ -503,26 +503,26 @@ class Snapshot:
 
     def list_tagged_pages(self, tag):
         """Retrieve list of pages with the tag from the database"""
-        for i in scp.orm.Tag.select().where(scp.orm.Tag.tag == tag):
+        for i in orm.Tag.select().where(orm.Tag.tag == tag):
             yield i.url
 
     def get_rewrite_list(self):
-        for au in scp.orm.Author.select():
+        for au in orm.Author.select():
             yield {i: getattr(au, i) for i in ('url', 'author', 'override')}
 
     def get_image_metadata(self, url):
         try:
-            img = scp.orm.Image.get(scp.orm.Image.url == url)
+            img = orm.Image.get(orm.Image.url == url)
             return {'url': img.url, 'source': img.source, 'data': img.data}
-        except scp.orm.Image.DoesNotExist:
+        except orm.Image.DoesNotExist:
             return None
 
     def list_all_pages(self):
-        count = scp.orm.Page.select().count()
+        count = orm.Page.select().count()
         for n in range(1, count // 200 + 2):
-            query = scp.orm.Page.select(
-                scp.orm.Page.url).order_by(
-                scp.orm.Page.url).paginate(n, 200)
+            query = orm.Page.select(
+                orm.Page.url).order_by(
+                orm.Page.url).paginate(n, 200)
             for i in query:
                 yield i.url
 
@@ -543,6 +543,11 @@ class Page:
             if not parsed.netloc:
                 url = urllib.parse.urljoin(self._connector.site, url)
         self.url = url
+        if hasattr(self._connector, 'get_pageid'):
+            self._pageid = self._connector.get_pageid(self.url)
+            self._thread_id = self._connector.get_thread_id(self.url)
+        else:
+            self._pageid, self._thread_id = _parse_html_for_ids(self.html)
 
     ###########################################################################
     # Class Methods
@@ -556,7 +561,7 @@ class Page:
         yield connector
         if hasattr(previous_connector, 'dbpath'):
             # Snapshots need to explicitely reconnect to their db
-            scp.orm.connect(previous_connector.dbpath)
+            orm.connect(previous_connector.dbpath)
         cls._connector = previous_connector
 
     ###########################################################################
@@ -629,22 +634,6 @@ class Page:
     ###########################################################################
     # Internal Properties
     ###########################################################################
-
-    @cached_property.cached_property
-    def _pageid(self):
-        if hasattr(self._connector, 'get_pageid'):
-            return self._connector.get_pageid(self.url)
-        pageid, thread_id = _parse_html_for_ids(self.html)
-        self._thread_id = thread_id
-        return pageid
-
-    @cached_property.cached_property
-    def _thread_id(self):
-        if hasattr(self._connector, 'get_thread_id'):
-            return self._connector.get_thread_id(self.url)
-        pageid, thread_id = _parse_html_for_ids(self.html)
-        self._pageid = pageid
-        return thread_id
 
     @cached_property.cached_property
     def _wikidot_title(self):
@@ -857,7 +846,7 @@ def _parse_html_for_ids(html):
 
 def use_default_logging():
     console = logging.StreamHandler()
-    console.setLevel(logging.INFO)
+    console.setLevel(logging.DEBUG)
     console.setFormatter(logging.Formatter('%(message)s'))
     logging.getLogger('scp').addHandler(console)
     logfile = logging.FileHandler('scp.log', mode='w', delay=True)

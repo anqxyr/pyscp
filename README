@@ -1,0 +1,6 @@
+# SCP Tools
+
+This package provides an easy-to-use python interface to wikidot-hosted websites that does not depend on the official wikidot api. The primary target is www.scp-wiki.net, but the majority of the functionality should work with any other wikidot site.
+
+# Examples
+

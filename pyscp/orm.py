@@ -61,6 +61,7 @@ class Page(BaseModel):
 
 
 class Revision(BaseModel):
+    revision_id = peewee.IntegerField(primary_key=True)
     pageid = peewee.IntegerField(index=True)
     number = peewee.IntegerField()
     user = peewee.CharField(index=True)
