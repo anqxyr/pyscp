@@ -27,7 +27,38 @@ log = logging.getLogger('scp.crawler')
 log.setLevel(logging.DEBUG)
 
 ###############################################################################
-# Classes
+# Utility Classes
+###############################################################################
+
+
+class InsistentRequest(requests.Session):
+
+    """Make an auto-retrying request that handles connection loss."""
+
+    def __init__(self, retry_count=5):
+        super().__init__()
+        self.retry_count = retry_count
+
+    def request(self, method, url, **kwargs):
+        kwargs.setdefault('timeout', 30)
+        kwargs.setdefault('allow_redirects', False)
+        for _ in range(self.retry_count):
+            try:
+                resp = super().request(method=method, url=url, **kwargs)
+            except (requests.ConnectionError, requests.Timeout):
+                continue
+            if 200 <= resp.status_code < 300:
+                return resp
+            elif 300 <= resp.status_code < 400:
+                raise requests.HTTPError(
+                    'Redirect attempted with url: {}'.format(url))
+            elif 400 <= resp.status_code < 600:
+                continue
+        raise requests.ConnectionError(
+            'Max retries exceeded with url: {}'.format(url))
+
+###############################################################################
+# Public Classes
 ###############################################################################
 
 
@@ -47,9 +78,7 @@ class WikidotConnector:
         if '.' not in netloc:
             netloc += '.wikidot.com'
         self.site = urllib.parse.urlunparse(['http', netloc, '', '', '', ''])
-        req = requests.Session()
-        req.mount(site, requests.adapters.HTTPAdapter(max_retries=5))
-        self.req = req
+        self.req = InsistentRequest()
 
     ###########################################################################
     # Internal Methods
@@ -74,16 +103,16 @@ class WikidotConnector:
         payload.update(kwargs)
         cookies = {'wikidot_token7': '123456'}
         cookies.update({i.name: i.value for i in self.req.cookies})
-        data = self.req.post(
-            self.site + '/ajax-module-connector.php',
-            data=payload,
-            headers={'Content-Type': 'application/x-www-form-urlencoded;'},
-            cookies=cookies, timeout=30)
-        if data.status_code != 200:
+        try:
+            return self.req.post(
+                self.site + '/ajax-module-connector.php',
+                data=payload,
+                headers={'Content-Type': 'application/x-www-form-urlencoded;'},
+                cookies=cookies).json()
+        except (requests.ConnectionError, requests.HTTPError) as err:
             log.warning(
-                'Status code {} recieved from _module call: {} ({}) {}'
-                .format(data.status_code, name, pageid, kwargs))
-        return data.json()
+                'Failed module call ({} - {} - {}): {}'
+                .format(name, pageid, kwargs, err))
 
     def _parse_forum_thread_page(self, page_html, thread_id):
         """Parse posts from an html string of a single forum page."""
@@ -136,13 +165,10 @@ class WikidotConnector:
     def get_page_html(self, url):
         """Download the html data of the page."""
         log.debug('Downloading page html: {}'.format(url))
-        data = self.req.get(url, allow_redirects=False, timeout=30)
-        if data.status_code == 200:
-            return data.text
-        else:
-            msg = 'Page {} returned http status code {}'
-            log.warning(msg.format(url, data.status_code))
-            return None
+        try:
+            return self.req.get(url).text
+        except (requests.ConnectionError, requests.HTTPError) as err:
+            log.warning('Failed to get the page: {}'.format(err))
 
     def get_page_history(self, pageid):
         """Download the revision history of the page."""
@@ -342,9 +368,13 @@ class Snapshot:
     def __init__(self, dbpath):
         self.dbpath = dbpath
         orm.connect(self.dbpath)
-        first_url = orm.Page.select(orm.Page.url).first().url
-        netloc = urllib.parse.urlparse(first_url).netloc
-        self.site = urllib.parse.urlunparse(['http', netloc, '', '', '', ''])
+        if orm.Page.table_exists():
+            first_url = orm.Page.select(orm.Page.url).first().url
+            netloc = urllib.parse.urlparse(first_url).netloc
+            self.site = urllib.parse.urlunparse(
+                ['http', netloc, '', '', '', ''])
+        else:
+            self.site = None
         self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=20)
 
     ###########################################################################
@@ -354,8 +384,7 @@ class Snapshot:
     def _scrape_images(self):
         #TODO: rewrite this to get images from the review pages
         url = "http://scpsandbox2.wikidot.com/ebook-image-whitelist"
-        req = requests.Session()
-        req.mount('http://', requests.adapters.HTTPAdapter(max_retries=5))
+        req = InsistentRequest()
         soup = bs4.BeautifulSoup(req.get(url).text)
         data = []
         for i in soup.select("tr")[1:]:
@@ -807,10 +836,10 @@ class Page:
             err = "The operation is not supported by the current connector."
             raise TypeError(err)
 
-    def revert_to(self, revision_num):
+    def revert_to(self, revision_number):
         if hasattr(self._connector, 'revert_page_to_revision'):
             self._connector.revert_page_to_revision(
-                self._pageid, self.history[revision_num].revision_id)
+                self._pageid, self.history[revision_number].revision_id)
             for i in list(self._cache.keys()):
                 if i not in ('url', '_pageid'):
                     del self._cache[i]
@@ -844,9 +873,9 @@ def _parse_html_for_ids(html):
     return pageid, thread_id
 
 
-def use_default_logging():
+def use_default_logging(debug=False):
     console = logging.StreamHandler()
-    console.setLevel(logging.DEBUG)
+    console.setLevel(logging.DEBUG if debug else logging.INFO)
     console.setFormatter(logging.Formatter('%(message)s'))
     logging.getLogger('scp').addHandler(console)
     logfile = logging.FileHandler('scp.log', mode='w', delay=True)
