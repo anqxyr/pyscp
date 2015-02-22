@@ -45,7 +45,7 @@ with Page.load_from(ru_wiki):
 Page "SCP-837 - Глина умножения" was created by Gene R on 2012-12-26 11:12:13.
 ```
 
-Note that neither of "scp-wiki.net" or "www.scpfoundation.ru" will work, since they're both redirecting to a different domains, and **pyscp** does not follow redirects. If the site doesn't use a custom domain, you can use the name of the site instead of the full url. E.g. `WikidotConnector('scpsandbox2')` is the same a `WikidotConnector('scpsandbox2.wikidot.com')`.
+Note that neither of "scp-wiki.net" or "www.scpfoundation.ru" will work, since they're both redirecting to a different domains, and **pyscp** does not follow redirects. If the site doesn't use a custom domain, you can use the name of the site instead of the full url. E.g. `WikidotConnector('scpsandbox2')` is the same as `WikidotConnector('scpsandbox2.wikidot.com')`.
 
 ## Authentication and Editing Pages
 
