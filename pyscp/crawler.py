@@ -714,16 +714,16 @@ class Page:
     def history(self):
         data = self._connector.get_page_history(self._pageid)
         Revision = collections.namedtuple(
-            'Revision', 'revision_id number user time comment')
+            'Revision', 'number user time comment')
         history = []
         for i in data:
             history.append(Revision(
-                i['revision_id'],
+                #i['revision_id'],
                 i['number'],
                 i['user'],
                 i['time'],
                 i['comment']))
-        return list(reversed(history))
+        return list(sorted(history, key=lambda x: x.number))
 
     @cached_property.cached_property
     def created(self):
