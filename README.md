@@ -64,7 +64,7 @@ with Page.load_from(wiki):
     p.edit(
         source='= This is centered **text** that uses Wikidot markup.',
         title="you can skip the title if you don't want changing it",
-        #you can leave out the comment to, but that'd be rude
+        #you can leave out the comment too, but that'd be rude
         comment='testing automated editing'
     )
     print(p.text)   # see if it worked
@@ -93,7 +93,7 @@ sn.take('www.scp-wiki.net')  # that's where we wait half an hour for it to finis
 #sn.take('www.scp-wiki.net', include_forums=True)
 ```
 
-Once a snapshot is created, you can use it 
+Once a snapshot is created, you can use it in place of a `WikidotConnector` instance:
 
 ```python
 with Page.load_from(sn):
