@@ -84,7 +84,7 @@ class WikidotConnector:
     # Internal Methods
     ###########################################################################
 
-    def _module(self, name, pageid, **kwargs):
+    def _module(self, name, **kwargs):
         """
         Call a Wikidot module.
 
@@ -92,7 +92,8 @@ class WikidotConnector:
         Almost all other methods of the class are using _module in one way
         or another.
         """
-        log.debug('_module call: {} ({}) {}'.format(name, pageid, kwargs))
+        log.debug('_module call: {} {}'.format(name, kwargs))
+        pageid = kwargs.get('pageid', None)
         payload = {
             'page_id': pageid,
             'pageId': pageid,  # fuck wikidot
@@ -101,18 +102,15 @@ class WikidotConnector:
             # in the payload and in the cookie
             'wikidot_token7': '123456'}
         payload.update(kwargs)
-        cookies = {'wikidot_token7': '123456'}
-        cookies.update({i.name: i.value for i in self.req.cookies})
         try:
             return self.req.post(
                 self.site + '/ajax-module-connector.php',
                 data=payload,
                 headers={'Content-Type': 'application/x-www-form-urlencoded;'},
-                cookies=cookies).json()
+                cookies={'wikidot_token7': '123456'}).json()
         except (requests.ConnectionError, requests.HTTPError) as err:
-            log.warning(
-                'Failed module call ({} - {} - {}): {}'
-                .format(name, pageid, kwargs, err))
+            log.warning('Failed module call ({} - {} - {}): {}'
+                        .format(name, pageid, kwargs, err))
 
     def _parse_forum_thread_page(self, page_html, thread_id):
         """Parse posts from an html string of a single forum page."""
@@ -133,30 +131,21 @@ class WikidotConnector:
                     .format('YYYY-MM-DD HH:mm:ss')),
                 'parent': parent}
 
-    def _pager(self, baseurl):
+    def _pager(self, name, _next_page, **kwargs):
         """
-        Iterate over multi-page pages.
-
-        Some Wikidot pages that seem to employ the paging mechanism
-        actually don't. For example, discussion pages have a navigation
-        bar that displays '<< previous' and 'next >>' buttons; however,
-        discussion pages actually use separate calls to the
-        ForumViewThreadPostsModule.
+        Iterate over multi-page module results.
         """
-        log.debug('Paging through {}'.format(baseurl))
-        first_page = self.get_page_html(baseurl)
+        first_page = self._module(name, **kwargs)
         yield first_page
-        soup = bs4.BeautifulSoup(first_page)
+        soup = bs4.BeautifulSoup(first_page['body'])
         try:
             counter = soup.select('div.pager span.pager-no')[0].text
         except IndexError:
             return
         last_page_index = int(counter.split(' ')[-1])
-        for index in range(2, last_page_index + 1):
-            log.debug('Paging through {} ({}/{})'.format(
-                baseurl, index, last_page_index))
-            url = '{}/p/{}'.format(baseurl, index)
-            yield self.get_page_html(url)
+        for page in range(2, last_page_index + 1):
+            kwargs.update(_next_page(page))
+            yield self._module(name, **kwargs)
 
     ###########################################################################
     # Data Retrieval Methods
@@ -228,16 +217,25 @@ class WikidotConnector:
     # Site Structure Methods
     ###########################################################################
 
-    def list_all_pages(self):
-        """Yield urls of all the pages on the site."""
-        for page in self._pager(self.site + '/system:list-all-pages'):
-            for l in bs4.BeautifulSoup(page).select('div.list-pages-item a'):
-                yield self.site + l['href']
+    def list_pages(self, **kwargs):
+        """Yield urls of the pages matching the specified criteria."""
+        for page in self._pager(
+                'list/ListPagesModule',
+                _next_page=lambda x: {'offset': 250 * (x - 1)},
+                category='*',
+                tags=kwargs.get('tag', None),
+                created_by=kwargs.get('author', None),
+                order='title',
+                module_body='%%title_linked%%',
+                perPage=250):
+            soup = bs4.BeautifulSoup(page['body'])
+            for i in soup.select('div.list-pages-item a'):
+                yield self.site + i['href']
 
     def list_categories(self):
         """Yield dicts describing all forum categories on the site."""
-        baseurl = '{}/forum:start'.format(self.site)
-        soup = bs4.BeautifulSoup(self.get_page_html(baseurl))
+        soup = bs4.BeautifulSoup(
+            self._module('forum/ForumStartModule')['body'])
         for i in soup.select('td.name'):
             yield {
                 'category_id': re.search(
@@ -249,9 +247,11 @@ class WikidotConnector:
 
     def list_threads(self, category_id):
         """Yield dicts describing all threads in a given category."""
-        baseurl = '{}/forum/c-{}'.format(self.site, category_id)
-        for page in self._pager(baseurl):
-            for i in bs4.BeautifulSoup(page).select('td.name'):
+        for page in self._pager(
+                'forum/ForumViewCategoryModule',
+                _next_page=lambda x: {'p': x},
+                c=category_id):
+            for i in bs4.BeautifulSoup(page['body']).select('td.name'):
                 yield {
                     'thread_id': re.search(
                         r'/forum/t-([0-9]+)',
@@ -259,13 +259,6 @@ class WikidotConnector:
                     'title': i.select('div.title')[0].text.strip(),
                     'description': i.select('div.description')[0].text.strip(),
                     'category_id': category_id}
-
-    def list_tagged_pages(self, tag):
-        """Return a list of all pages with a given tag."""
-        url = '{}/system:page-tags/tag/{}'.format(self.site, tag)
-        soup = bs4.BeautifulSoup(self.get_page_html(url))
-        return [self.site + i['href'] for i in
-                soup.select('div.pages-list-item a')]
 
     def recent_changes(self, num):
         """Return the last 'num' revisions on the site."""
@@ -631,7 +624,7 @@ class Page:
     def _title_index(cls):
         log.debug('Constructing title index.')
         index_pages = ['scp-series', 'scp-series-2', 'scp-series-3']
-        splash = cls._connector.list_tagged_pages('splash')
+        splash = cls._connector.list_pages(tag='splash')
         index = {}
         for url in index_pages:
             soup = bs4.BeautifulSoup(cls(url).html)
