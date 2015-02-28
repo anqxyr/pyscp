@@ -5,19 +5,19 @@
 ###############################################################################
 
 import arrow
-import bs4
-import cached_property
-import collections
 import concurrent.futures
-import contextlib
-import functools
 import itertools
 import logging
 import re
 import requests
-import urllib.parse
 
-import pyscp.orm as orm
+from bs4 import BeautifulSoup as bs4
+from cached_property import cached_property
+from collections import namedtuple
+from contextlib import contextmanager
+from functools import lru_cache
+from pyscp import orm
+from urllib.parse import urlparse, urlunparse, urljoin
 
 ###############################################################################
 # Global Constants And Variables
@@ -73,11 +73,11 @@ class WikidotConnector:
     """
 
     def __init__(self, site):
-        parsed = urllib.parse.urlparse(site)
+        parsed = urlparse(site)
         netloc = parsed.netloc or parsed.path
         if '.' not in netloc:
             netloc += '.wikidot.com'
-        self.site = urllib.parse.urlunparse(['http', netloc, '', '', '', ''])
+        self.site = urlunparse(['http', netloc, '', '', '', ''])
         self.req = InsistentRequest()
 
     ###########################################################################
@@ -114,7 +114,7 @@ class WikidotConnector:
 
     def _parse_forum_thread_page(self, page_html, thread_id):
         """Parse posts from an html string of a single forum page."""
-        for tag in bs4.BeautifulSoup(page_html).select('div.post'):
+        for tag in bs4(page_html).select('div.post'):
             granpa = tag.parent.parent
             if 'class' in granpa.attrs and 'post-container' in granpa['class']:
                 parent = granpa.select('div.post')[0]['id'].split('-')[1]
@@ -137,7 +137,7 @@ class WikidotConnector:
         """
         first_page = self._module(name, **kwargs)
         yield first_page
-        soup = bs4.BeautifulSoup(first_page['body'])
+        soup = bs4(first_page['body'])
         try:
             counter = soup.select('div.pager span.pager-no')[0].text
         except IndexError:
@@ -165,7 +165,7 @@ class WikidotConnector:
             return None
         data = self._module(name='history/PageRevisionListModule',
                             pageid=pageid, page=1, perpage=1000000)['body']
-        for i in bs4.BeautifulSoup(data).select('tr')[1:]:
+        for i in bs4(data).select('tr')[1:]:
             yield {
                 'revision_id': int(i['id'].split('-')[-1]),
                 'pageid': pageid,
@@ -182,7 +182,7 @@ class WikidotConnector:
             return None
         data = self._module(name='pagerate/WhoRatedPageModule',
                             pageid=pageid)['body']
-        for i in bs4.BeautifulSoup(data).select('span.printuser'):
+        for i in bs4(data).select('span.printuser'):
             yield {'pageid': pageid, 'user': i.text, 'value': (
                 1 if i.next_sibling.next_sibling.text.strip() == '+'
                 else -1)}
@@ -194,7 +194,7 @@ class WikidotConnector:
         data = self._module(
             name='viewsource/ViewSourceModule',
             pageid=pageid)['body']
-        return bs4.BeautifulSoup(data).text[11:].strip()
+        return bs4(data).text[11:].strip()
 
     def get_forum_thread(self, thread_id):
         """Download and parse the contents of the forum thread."""
@@ -203,7 +203,7 @@ class WikidotConnector:
         data = self._module(name='forum/ForumViewThreadPostsModule',
                             t=thread_id, pageid=None, pageNo=1)['body']
         try:
-            pager = bs4.BeautifulSoup(data).select('span.pager-no')[0].text
+            pager = bs4(data).select('span.pager-no')[0].text
             num_of_pages = int(pager.split(' of ')[1])
         except IndexError:
             num_of_pages = 1
@@ -228,14 +228,13 @@ class WikidotConnector:
                 order='title',
                 module_body='%%title_linked%%',
                 perPage=250):
-            soup = bs4.BeautifulSoup(page['body'])
+            soup = bs4(page['body'])
             for i in soup.select('div.list-pages-item a'):
                 yield self.site + i['href']
 
     def list_categories(self):
         """Yield dicts describing all forum categories on the site."""
-        soup = bs4.BeautifulSoup(
-            self._module('forum/ForumStartModule')['body'])
+        soup = bs4(self._module('forum/ForumStartModule')['body'])
         for i in soup.select('td.name'):
             yield {
                 'category_id': re.search(
@@ -251,7 +250,7 @@ class WikidotConnector:
                 'forum/ForumViewCategoryModule',
                 _next_page=lambda x: {'p': x},
                 c=category_id):
-            for i in bs4.BeautifulSoup(page['body']).select('td.name'):
+            for i in bs4(page['body']).select('td.name'):
                 yield {
                     'thread_id': re.search(
                         r'/forum/t-([0-9]+)',
@@ -265,7 +264,7 @@ class WikidotConnector:
         data = self._module(
             name='changes/SiteChangesListModule', pageid=None,
             options={'all': True}, page=1, perpage=num)['body']
-        for tag in bs4.BeautifulSoup(data).select('div.changes-list-item'):
+        for tag in bs4(data).select('div.changes-list-item'):
             revnum = tag.select('td.revision-no')[0].text.strip()
             time = tag.select('span.odate')[0]['class'][1].split('_')[1]
             comment = tag.select('div.comments')
@@ -361,12 +360,11 @@ class Snapshot:
     def __init__(self, dbpath):
         self.dbpath = dbpath
         orm.connect(self.dbpath)
-        if orm.Page.table_exists():
+        try:
             first_url = orm.Page.select(orm.Page.url).first().url
-            netloc = urllib.parse.urlparse(first_url).netloc
-            self.site = urllib.parse.urlunparse(
-                ['http', netloc, '', '', '', ''])
-        else:
+            netloc = urlparse(first_url).netloc
+            self.site = urlunparse(['http', netloc, '', '', '', ''])
+        except AttributeError:
             self.site = None
         self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=20)
 
@@ -378,9 +376,8 @@ class Snapshot:
         #TODO: rewrite this to get images from the review pages
         url = "http://scpsandbox2.wikidot.com/ebook-image-whitelist"
         req = InsistentRequest()
-        soup = bs4.BeautifulSoup(req.get(url).text)
         data = []
-        for i in soup.select("tr")[1:]:
+        for i in bs4(req.get(url).text).select("tr")[1:]:
             image_url = i.select("td")[0].text
             image_source = i.select("td")[1].text
             image_data = req.get(image_url).content
@@ -397,7 +394,7 @@ class Snapshot:
         if html is None:
             return
         pageid, thread_id = _parse_html_for_ids(html)
-        soup = bs4.BeautifulSoup(html)
+        soup = bs4(html)
         html = str(soup.select('#main-content')[0])  # cut off side-bar, etc.
         orm.Page.create(
             pageid=pageid, url=url, html=html, thread_id=thread_id)
@@ -406,7 +403,7 @@ class Snapshot:
         orm.ForumPost.insert_many(self.wiki.get_forum_thread(thread_id))
         orm.Tag.insert_many(
             {'tag': a.string, 'url': url} for a in
-            bs4.BeautifulSoup(html).select('div.page-tags a'))
+            bs4(html).select('div.page-tags a'))
 
     def _save_forums(self,):
         """Download and save standalone forum threads."""
@@ -503,7 +500,7 @@ class Snapshot:
                 orm.ForumPost, orm.Tag]:
             i.create_table()
         ftrs = [self.pool.submit(self._save_page, i)
-                for i in self.wiki.list_all_pages()]
+                for i in self.wiki.list_pages()]
         concurrent.futures.wait(ftrs)
         if include_forums:
             ftrs = self._save_forums()
@@ -539,7 +536,7 @@ class Snapshot:
         except orm.Image.DoesNotExist:
             return None
 
-    def list_all_pages(self):
+    def list_pages(self):
         count = orm.Page.select().count()
         for n in range(1, count // 200 + 2):
             query = orm.Page.select(
@@ -561,9 +558,9 @@ class Page:
 
     def __init__(self, url=None):
         if url is not None:
-            parsed = urllib.parse.urlparse(url)
+            parsed = urlparse(url)
             if not parsed.netloc:
-                url = urllib.parse.urljoin(self._connector.site, url)
+                url = urljoin(self._connector.site, url)
         self.url = url
         if hasattr(self._connector, 'get_pageid'):
             self._pageid = self._connector.get_pageid(self.url)
@@ -576,7 +573,7 @@ class Page:
     ###########################################################################
 
     @classmethod
-    @contextlib.contextmanager
+    @contextmanager
     def load_from(cls, connector):
         previous_connector = cls._connector
         cls._connector = connector
@@ -608,7 +605,7 @@ class Page:
             if self.url in p.links:
                 confirmed_children.append(p.url)
             elif p.html:
-                crumb = bs4.BeautifulSoup(p.html).select('#breadcrumbs a')
+                crumb = bs4(p.html).select('#breadcrumbs a')
                 if crumb:
                     parent = crumb[-1]
                     parent = 'http://www.scp-wiki.net{}'.format(parent['href'])
@@ -620,14 +617,14 @@ class Page:
             return maybe_children
 
     @classmethod
-    @functools.lru_cache()
+    @lru_cache()
     def _title_index(cls):
         log.debug('Constructing title index.')
         index_pages = ['scp-series', 'scp-series-2', 'scp-series-3']
         splash = cls._connector.list_pages(tag='splash')
         index = {}
         for url in index_pages:
-            soup = bs4.BeautifulSoup(cls(url).html)
+            soup = bs4(cls(url).html)
             items = [i for i in soup.select('ul > li')
                      if re.search('[SCP]+-[0-9]+', i.text)]
             for i in items:
@@ -645,7 +642,7 @@ class Page:
         return index
 
     @classmethod
-    @functools.lru_cache()
+    @lru_cache()
     def _rewrite_list(cls):
         try:
             rewrite_list = cls.get_rewrite_list()
@@ -657,32 +654,32 @@ class Page:
     # Internal Properties
     ###########################################################################
 
-    @cached_property.cached_property
+    @cached_property
     def _wikidot_title(self):
         '''
         Page title as used by wikidot. Should only be used by the self.title
         property or when editing the page. In all other cases, use self.title.
         '''
-        tag = bs4.BeautifulSoup(self.html).select('#page-title')
+        tag = bs4(self.html).select('#page-title')
         return tag[0].text.strip() if tag else ''
 
     ###########################################################################
     # Public Properties
     ###########################################################################
 
-    @cached_property.cached_property
+    @cached_property
     def html(self):
         return self._connector.get_page_html(self.url)
 
-    @cached_property.cached_property
+    @cached_property
     def text(self):
-        return bs4.BeautifulSoup(self.html).select('#page-content')[0].text
+        return bs4(self.html).select('#page-content')[0].text
 
-    @cached_property.cached_property
+    @cached_property
     def wordcount(self):
         return len(re.findall(r"[\w'█_-]+", self.text))
 
-    @cached_property.cached_property
+    @cached_property
     def source(self):
         if hasattr(self._connector, 'get_page_source'):
             return self._connector.get_page_source(self._pageid)
@@ -690,11 +687,11 @@ class Page:
             err = "The operation is not supported by the current connector."
             raise TypeError(err)
 
-    @cached_property.cached_property
+    @cached_property
     def images(self):
-        return [i['src'] for i in bs4.BeautifulSoup(self.html).select('img')]
+        return [i['src'] for i in bs4(self.html).select('img')]
 
-    @cached_property.cached_property
+    @cached_property
     def title(self):
         if 'scp' in self.tags and re.search('[scp]+-[0-9]+$', self.url):
             title = '{}: {}'.format(
@@ -703,11 +700,10 @@ class Page:
             return title
         return self._wikidot_title
 
-    @cached_property.cached_property
+    @cached_property
     def history(self):
         data = self._connector.get_page_history(self._pageid)
-        Revision = collections.namedtuple(
-            'Revision', 'number user time comment')
+        Revision = namedtuple('Revision', 'number user time comment')
         history = []
         for i in data:
             history.append(Revision(
@@ -718,15 +714,15 @@ class Page:
                 i['comment']))
         return list(sorted(history, key=lambda x: x.number))
 
-    @cached_property.cached_property
+    @cached_property
     def created(self):
         return self.history[0].time
 
-    @cached_property.cached_property
+    @cached_property
     def authors(self):
         if self.url is None:
             return None
-        Author = collections.namedtuple('Author', 'user status')
+        Author = namedtuple('Author', 'user status')
         author_original = Author(self.history[0].user, 'original')
         if self.url not in self._rewrite_list():
             return [author_original]
@@ -734,7 +730,7 @@ class Page:
         new_author = Author(author, 'override' if override else 'rewrite')
         return [author_original, new_author]
 
-    @cached_property.cached_property
+    @cached_property
     def author(self):
         if len(self.authors) == 0:
             return None
@@ -748,43 +744,43 @@ class Page:
                     original_author = i.user
             return original_author
 
-    @cached_property.cached_property
+    @cached_property
     def votes(self):
         data = self._connector.get_page_votes(self._pageid)
-        vote = collections.namedtuple('Vote', 'user value')
+        vote = namedtuple('Vote', 'user value')
         votes = []
         for i in data:
             votes.append(vote(i['user'], i['value']))
         return votes
 
-    @cached_property.cached_property
+    @cached_property
     def rating(self):
         if not self.votes:
             return None
         return sum(vote.value for vote in self.votes
                    if vote.user != '(account deleted)')
 
-    @cached_property.cached_property
+    @cached_property
     def tags(self):
         try:
             return self._connector.get_page_tags(self.url)
         except AttributeError:
             return [a.string for a in
-                    bs4.BeautifulSoup(self.html).select('div.page-tags a')]
+                    bs4(self.html).select('div.page-tags a')]
 
-    @cached_property.cached_property
+    @cached_property
     def comments(self):
         attributes = 'post_id parent title user time content'
-        ForumPost = collections.namedtuple('ForumPost', attributes)
+        ForumPost = namedtuple('ForumPost', attributes)
         return [ForumPost(*[i[k] for k in attributes.split(' ')])
                 for i in self._connector.get_forum_thread(self._thread_id)]
 
-    @cached_property.cached_property
+    @cached_property
     def links(self):
         if self.html is None:
             return []
         links = set()
-        for a in bs4.BeautifulSoup(self.html).select('#page-content a'):
+        for a in bs4(self.html).select('#page-content a'):
             if (('href' not in a.attrs) or
                 (a['href'][0] != '/') or
                     (a['href'][-4:] in ['.png', '.jpg', '.gif'])):
@@ -794,7 +790,7 @@ class Page:
             links.add(url)
         return list(links)
 
-    @cached_property.cached_property
+    @cached_property
     def children(self):
         if 'scp' in self.tags or 'splash' in self.tags:
             return self._get_children_if_skip()
@@ -844,9 +840,8 @@ class Page:
 
 def _get_rewrite_list():
     """Download author override metadata from 05command."""
-    soup = bs4.BeautifulSoup(
-        WikidotConnector('http://05command.wikidot.com')
-        .get_page_html('http://05command.wikidot.com/alexandra-rewrite'))
+    with Page.load_from(WikidotConnector('05command')):
+        soup = bs4(Page('alexandra-rewrite').html)
     for i in soup.select('tr')[1:]:
         yield {
             'url': 'http://www.scp-wiki.net/{}'.format(i.select('td')[0].text),
@@ -857,7 +852,7 @@ def _get_rewrite_list():
 def _parse_html_for_ids(html):
     pageid = re.search('pageId = ([^;]*);', html)
     pageid = pageid.group(1) if pageid is not None else None
-    soup = bs4.BeautifulSoup(html)
+    soup = bs4(html)
     try:
         thread_id = re.search(r'/forum/t-([0-9]+)/', soup.select(
             '#discuss-button')[0]['href']).group(1)
