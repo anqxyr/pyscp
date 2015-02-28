@@ -505,7 +505,7 @@ class Snapshot:
         if include_forums:
             ftrs = self._save_forums()
             concurrent.futures.wait(ftrs)
-        if site == 'http://www.scp-wiki.net':
+        if self.wiki.site == 'http://www.scp-wiki.net':
             orm.Image.create_table()
             log.info('Downloading image metadata.')
             orm.Image.insert_many(self._scrape_images())
@@ -536,14 +536,31 @@ class Snapshot:
         except orm.Image.DoesNotExist:
             return None
 
-    def list_pages(self):
-        count = orm.Page.select().count()
-        for n in range(1, count // 200 + 2):
-            query = orm.Page.select(
-                orm.Page.url).order_by(
-                orm.Page.url).paginate(n, 200)
-            for i in query:
-                yield i.url
+    def list_pages(self, **kwargs):
+        query = orm.Page.select(orm.Page.url)
+        tag = kwargs.get('tag', None)
+        if tag:
+            with_tag = orm.Tag.select(orm.Tag.url).where(orm.Tag.tag == tag)
+            query = query.where(orm.Page.url << with_tag)
+        author = kwargs.get('author', None)
+        if author:
+            created_pages = (
+                orm.Revision.select(orm.Revision.pageid)
+                .where(orm.Revision.user == author)
+                .where(orm.Revision.number == 0))
+            rewrite_list = list(self.get_rewrite_list())
+            exclude_pages = [
+                i['url'] for i in rewrite_list
+                if i['author'] != author and i['override']]
+            include_pages = [
+                i['url'] for i in rewrite_list
+                if i['author'] == author]
+            query = query.where((
+                (orm.Page.pageid << created_pages) |
+                (orm.Page.url << include_pages)) &
+                ~(orm.Page.url << exclude_pages))
+        for i in query.order_by(orm.Page.url):
+            yield i.url
 
 
 class Page:
