@@ -520,11 +520,6 @@ class Snapshot:
         msg = msg.format(hours, minutes, seconds)
         log.info(msg)
 
-    def list_tagged_pages(self, tag):
-        """Retrieve list of pages with the tag from the database"""
-        for i in orm.Tag.select().where(orm.Tag.tag == tag):
-            yield i.url
-
     def get_rewrite_list(self):
         for au in orm.Author.select():
             yield {i: getattr(au, i) for i in ('url', 'author', 'override')}
