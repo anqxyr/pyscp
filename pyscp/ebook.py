@@ -13,11 +13,12 @@ import os
 import re
 import shutil
 import tempfile
+import pkgutil
 
 from bs4 import BeautifulSoup
 from cached_property import cached_property
 from collections import defaultdict, namedtuple, OrderedDict
-from crawler import Page, Snapshot, enable_logging
+from pyscp import Page, Snapshot, use_default_logging
 from lxml import etree, html
 
 ###############################################################################
@@ -28,7 +29,7 @@ SAVEPATH = '/home/anqxyr/heap/_scp/ebook/'
 STATICDATA = os.path.dirname(os.path.abspath(__file__))
 # pick from 'COMPLETE', 'TOMES', and 'DIGEST'
 BOOKTYPE = 'DIGEST'
-DIGESTMONTH = '2015-01'
+DIGESTMONTH = '2015-02'
 
 logger = logging.getLogger('scp.ebook')
 logger.setLevel(logging.DEBUG)
@@ -47,10 +48,13 @@ class Epub():
     def __init__(self, title):
         self.title = title
         self.dir = tempfile.TemporaryDirectory()
-        self.templates = {}
-        for i in os.listdir("templates"):
-            self.templates[i.split(".")[0]] = etree.parse(
-                "{}/templates/{}".format(os.getcwd(), i))
+        templates = (
+            'container.xml', 'content.opf', 'page.xhtml', 'toc.ncx')
+        templates = {i.split('.')[0]: i for i in templates}
+        self.templates = {
+            k: etree.ElementTree(etree.fromstring(
+                pkgutil.get_data('pyscp', 'resources/templates/' + v)))
+            for k, v in templates.items()}
         self.pageinfo = []
         #pre-building toc
         self.toc = self.templates["toc"]
@@ -134,7 +138,7 @@ class Epub():
         for i in self.images:
             path = "_".join([i.split("/")[-2], i.split("/")[-1]])
             with open(os.path.join(imagedir, path), "wb") as F:
-                F.write(BookPage.sn.get_image_metadata(i)['data'])
+                F.write(BookPage._connector.get_image_metadata(i)['data'])
         spine.write(self.dir.name + "/content.opf", xml_declaration=True,
                     encoding="utf-8", pretty_print=True)
         #other necessary files
@@ -145,8 +149,10 @@ class Epub():
                         pretty_print=True)
         with open(self.dir.name + "/mimetype", "w") as F:
             F.write("application/epub+zip")
-        shutil.copy("stylesheet.css", self.dir.name)
-        shutil.copy("cover.png", self.dir.name)
+        with open(self.dir.name + '/stylesheet.css', 'wb') as file:
+            file.write(pkgutil.get_data('pyscp', 'resources/stylesheet.css'))
+        with open(self.dir.name + '/cover.png', 'wb') as file:
+            file.write(pkgutil.get_data('pyscp', 'resources/cover.png'))
         shutil.make_archive(filename, "zip", self.dir.name)
         shutil.move(filename + ".zip", filename + ".epub")
 
@@ -231,7 +237,7 @@ class BookPage(Page):
         for i in html.select('img'):
             if i.name is None or 'src' not in i.attrs:
                 continue
-            img_meta = self.sn.get_image_metadata(i['src'])
+            img_meta = self._connector.get_image_metadata(i['src'])
             if img_meta is None:
                 #loop through the image's parents, until we find what to cut
                 for p in i.parents:
@@ -303,7 +309,7 @@ class BookPage(Page):
 
 
 def get_skips():
-    tagged = BookPage.sn.get_tag('scp')
+    tagged = BookPage._connector.list_pages(tag='scp')
     mainlist = [i for i in tagged if re.search("scp-[0-9]*$", i)]
     skips = natsort.natsorted(mainlist, signed=False)
     scp_blocks = defaultdict(list)
@@ -326,8 +332,10 @@ def get_extra_categories():
     proposals_hub = BookPage(baseurl)
     categories = (
         ("SCP Database/001 Proposals", proposals_hub.links),
-        ("SCP Database/Explained Phenomena", BookPage.sn.get_tag("explained")),
-        ("SCP Database/Joke Articles", BookPage.sn.get_tag("joke")))
+        ("SCP Database/Explained Phenomena",
+            BookPage._connector.list_pages(tag="explained")),
+        ("SCP Database/Joke Articles",
+            BookPage._connector.list_pages(tag="joke")))
     for k, v in categories:
         for url in v:
             p = BookPage(url)
@@ -340,9 +348,9 @@ def get_hubs():
                "http://www.scp-wiki.net/goi-contest-2014",
                "http://www.scp-wiki.net/acidverse"]
     nested_hubs = [i for k in hubhubs for i in BookPage(k).children]
-    hubs = [i for i in BookPage.sn.get_tag("hub")
-            if i in BookPage.sn.get_tag("tale")
-            or i in BookPage.sn.get_tag("goi2014")]
+    hubs = [i for i in BookPage._connector.list_pages(tag="hub")
+            if i in BookPage._connector.list_pages(tag="tale")
+            or i in BookPage._connector.list_pages(tag="goi2014")]
     for url in hubs:
         if url not in nested_hubs:
             p = BookPage(url)
@@ -351,7 +359,7 @@ def get_hubs():
 
 
 def get_tales():
-    for url in BookPage.sn.get_tag("tale"):
+    for url in BookPage._connector.list_pages(tag="tale"):
         try:
             p = BookPage(url)
         except:
@@ -397,7 +405,7 @@ def add_attributions(book):
     if book.images:
         atrb_pages['Images'] = "<div class='attrib'>"
     for i in book.images:
-        source = BookPage.sn.get_image_metadata(i)['source']
+        source = BookPage._connector.get_image_metadata(i)['source']
         if source != 'PUBLIC DOMAIN':
             atrb = ('<p>The image {}_{}, which appears on the page <b>{}</b>, '
                     'is a CC image available at <u>{}</u>.</p>')
@@ -414,12 +422,11 @@ def add_attributions(book):
 
 def new_book(title):
     book = Epub(title)
-    pagedir = os.path.join(STATICDATA, 'pages')
-    for filename in sorted(os.listdir(pagedir)):
+    for i in 'Cover Page', 'Introduction', 'License', 'Title Page':
         p = BookPage()
-        p.title = filename[3:-6]
-        with open(os.path.join(pagedir, filename)) as F:
-            p.parsed_html = F.read()
+        p.title = i
+        p.parsed_html = pkgutil.get_data(
+            'pyscp', 'resources/pages/{}.xhtml'.format(i))
         book.add_page(p)
     book.chapters = []   # ?
     return book
@@ -501,7 +508,8 @@ def add_tomes(books, page):
 
 
 def main():
-    BookPage.sn = Snapshot('scp-wiki.2015-02-01.db')
+    BookPage._connector = Snapshot(
+        '/home/anqxyr/heap/_scp/scp-wiki.2015-03-01.db')
     books = []
     for n, page in enumerate(get_all_in_order()):
         pick_and_add(books, page)
@@ -512,5 +520,5 @@ def main():
 
 
 if __name__ == "__main__":
-    enable_logging(logger)
+    use_default_logging()
     main()
