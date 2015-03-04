@@ -16,6 +16,7 @@ from cached_property import cached_property
 from collections import namedtuple
 from contextlib import contextmanager
 from functools import lru_cache
+from peewee import OperationalError
 from pyscp import orm
 from urllib.parse import urlparse, urlunparse, urljoin
 
@@ -41,7 +42,7 @@ class InsistentRequest(requests.Session):
 
     def request(self, method, url, **kwargs):
         kwargs.setdefault('timeout', 30)
-        kwargs.setdefault('allow_redirects', False)
+        kwargs['allow_redirects'] = False
         for _ in range(self.retry_count):
             try:
                 resp = super().request(method=method, url=url, **kwargs)
@@ -364,7 +365,7 @@ class Snapshot:
             first_url = orm.Page.select(orm.Page.url).first().url
             netloc = urlparse(first_url).netloc
             self.site = urlunparse(['http', netloc, '', '', '', ''])
-        except AttributeError:
+        except (AttributeError, OperationalError):
             self.site = None
         self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=20)
 
@@ -380,7 +381,10 @@ class Snapshot:
         for i in bs4(req.get(url).text).select("tr")[1:]:
             image_url = i.select("td")[0].text
             image_source = i.select("td")[1].text
-            image_data = req.get(image_url).content
+            try:
+                image_data = req.get(image_url).content
+            except requests.HTTPError as err:
+                log.warning('Image not saved: {}'.format(err))
             data.append({
                 "url": image_url,
                 "source": image_source,
@@ -405,7 +409,7 @@ class Snapshot:
             {'tag': a.string, 'url': url} for a in
             bs4(html).select('div.page-tags a'))
 
-    def _save_forums(self,):
+    def _save_forums(self):
         """Download and save standalone forum threads."""
         orm.ForumThread.create_table()
         orm.ForumCategory.create_table()
@@ -574,11 +578,14 @@ class Page:
             if not parsed.netloc:
                 url = urljoin(self._connector.site, url)
         self.url = url
-        if hasattr(self._connector, 'get_pageid'):
-            self._pageid = self._connector.get_pageid(self.url)
-            self._thread_id = self._connector.get_thread_id(self.url)
-        else:
-            self._pageid, self._thread_id = _parse_html_for_ids(self.html)
+        try:
+            if hasattr(self._connector, 'get_pageid'):
+                self._pageid = self._connector.get_pageid(self.url)
+                self._thread_id = self._connector.get_thread_id(self.url)
+            else:
+                self._pageid, self._thread_id = _parse_html_for_ids(self.html)
+        except:
+            pass
 
     ###########################################################################
     # Class Methods
@@ -706,10 +713,14 @@ class Page:
     @cached_property
     def title(self):
         if 'scp' in self.tags and re.search('[scp]+-[0-9]+$', self.url):
-            title = '{}: {}'.format(
-                self._wikidot_title,
-                self._title_index()[self.url])
-            return title
+            try:
+                return '{}: {}'.format(
+                    self._wikidot_title,
+                    self._title_index()[self.url])
+            except KeyError:
+                log.warning(
+                    'Title not found in the index for url: {}'
+                    .format(self.url))
         return self._wikidot_title
 
     @cached_property
