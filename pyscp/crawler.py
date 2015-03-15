@@ -33,7 +33,7 @@ class InsistentRequest(requests.Session):
 
     """Make an auto-retrying request that handles connection loss."""
 
-    def __init__(self, retry_count=5):
+    def __init__(self, retry_count=10):
         super().__init__()
         self.retry_count = retry_count
 
@@ -44,7 +44,7 @@ class InsistentRequest(requests.Session):
         log.debug(log_message)
         kwargs.setdefault('timeout', 30)
         kwargs.setdefault('allow_redirects', False)
-        for _ in range(self.retry_count):
+        for _ in range(self.retry_count + 1):
             try:
                 resp = super().request(method=method, url=url, **kwargs)
             except (requests.ConnectionError, requests.Timeout):
@@ -65,14 +65,9 @@ class InsistentRequest(requests.Session):
     def post(self, url, **kwargs):
         return self.request('POST', url, **kwargs)
 
-
 ###############################################################################
 # Public Classes
 ###############################################################################
-
-
-class ConnectorError(Exception):
-    pass
 
 
 class WikidotConnector:
@@ -112,12 +107,15 @@ class WikidotConnector:
     ###########################################################################
 
     def _page_id(self, url, html):
-        pageid = re.search('pageId = ([^;]*);', html)
-        return pageid.group(1) if pageid is not None else None
+        page_id = re.search('pageId = ([^;]*);', html)
+        return page_id.group(1) if page_id is not None else None
 
     def _thread_id(self, page_id, html):
         link = bs4(html).find(id='discuss-button')
-        return link['href'].split('/')[2].split('-')[1] if link else None
+        if not link or link['href'] == 'javascript:;':
+            return None
+        else:
+            return link['href'].split('/')[2].split('-')[1]
 
     def _html(self, url):
         """Download the html data of the page."""
@@ -253,9 +251,6 @@ class WikidotConnector:
         for elem in (
                 bs4(self._module('forum/ForumStartModule')['body'])
                 (class_='name')):
-            yield int(
-                elem.find(class_='title').a['href']
-                .split('/')[2].split('-')[1])
             yield dict(
                 category_id=int(elem.find(class_='title').a['href']
                                 .split('/')[2].split('-')[1]),
@@ -315,9 +310,11 @@ class WikidotConnector:
         if 'scp-wiki' not in self.site:
             return None
         for index in range(1, 28):
-            for elem in bs4(self._html(
-                    'http://scpsandbox2.wikidot.com/image-review-{}'
-                    .format(index)))('tr'):
+            page = self._html(
+                'http://scpsandbox2.wikidot.com/image-review-{}'.format(index))
+            if page is None:
+                break
+            for elem in bs4(page)('tr'):
                 if not elem('td'):
                     continue
                 source = elem('td')[3].find('a')
@@ -325,7 +322,6 @@ class WikidotConnector:
                 notes = elem('td')[5].text
                 yield dict(
                     url=elem('td')[0].img['src'],
-                    page=elem('td')[1].a['href'],
                     source=source['href'] if source else None,
                     status=status if status else None,
                     notes=notes if notes else None)
@@ -376,8 +372,6 @@ class WikidotConnector:
             title = elem.find(class_='title').text.strip()
             content = elem.find(class_='content')
             content.attrs.clear()
-            for i in list(content.strings):
-                i.replace_with(i.strip())
             yield {
                 'post_id': elem['id'].split('-')[1],
                 'title': title if title else None,
@@ -389,12 +383,18 @@ class WikidotConnector:
     def _pager(self, name, _next, **kwargs):
         """Iterate over multi-page module results."""
         first_page = self._module(name, **kwargs)
+        if first_page is None:
+            return
         yield first_page
         counter = bs4(first_page['body']).find(class_='pager-no')
         if counter:
-            for page in range(2, int(counter.text.split(' ')[-1]) + 1):
-                kwargs.update(_next(page))
-                yield self._module(name, **kwargs)
+            for index in range(2, int(counter.text.split(' ')[-1]) + 1):
+                kwargs.update(_next(index))
+                page = self._module(name, **kwargs)
+                if page is not None:
+                    yield page
+                else:
+                    return
 
 
 class SnapshotConnector:
@@ -425,7 +425,7 @@ class SnapshotConnector:
         self.dbpath = dbpath
         orm.connect(self.dbpath)
         self.wiki = WikidotConnector(site)
-        self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=25)
+        self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=20)
 
     def __call__(self, url):
         return Page(url, self)
@@ -455,9 +455,6 @@ class SnapshotConnector:
         except orm.Page.DoesNotExist:
             return None
 
-    def _source(self, page_id):
-        raise ConnectorError
-
     def _history(self, page_id):
         for i in orm.Revision.select().where(orm.Revision.page_id == page_id):
             yield dict(
@@ -478,20 +475,6 @@ class SnapshotConnector:
 
     ###########################################################################
 
-    def _edit(self, page_id, url, source, title, comment):
-        raise ConnectorError
-
-    def _revert_to(self, page_id, revision_id):
-        raise ConnectorError
-
-    def _set_tags(self, page_id, tags):
-        raise ConnectorError
-
-    def _set_vote(self, page_id, value, force=False):
-        raise ConnectorError
-
-    ###########################################################################
-
     def _posts(self, thread_id):
         for i in orm.ForumPost.select().where(
                 orm.ForumPost.thread_id == thread_id):
@@ -504,9 +487,6 @@ class SnapshotConnector:
                 time=i.time,
                 parent=i.parent)
 
-    def reply_to(self, thread_id, post_id, source, title):
-        raise ConnectorError
-
     ###########################################################################
     # Connector Public API
     ###########################################################################
@@ -518,27 +498,38 @@ class SnapshotConnector:
         query = orm.Page.select(orm.Page.url)
         tag = kwargs.get('tag', None)
         if tag:
-            with_tag = orm.Tag.select(orm.Tag.url).where(orm.Tag.tag == tag)
-            query = query.where(orm.Page.url << with_tag)
+            query = query.where(
+                orm.Page.page_id << orm.Tag.select(orm.Tag.page_id)
+                .where(orm.Tag.tag == tag))
         author = kwargs.get('author', None)
         if author:
             created_pages = (
-                orm.Revision.select(orm.Revision.pageid)
+                orm.Revision.select(orm.Revision.page_id)
                 .where(orm.Revision.user == author)
                 .where(orm.Revision.number == 0))
-            rewrite_list = list(self.get_rewrite_list())
+            rewrite_list = list(self.rewrites())
             exclude_pages = [
                 i['url'] for i in rewrite_list
-                if i['author'] != author and i['override']]
+                if i['author'] != author and i['status'] == 'override']
             include_pages = [
                 i['url'] for i in rewrite_list
                 if i['author'] == author]
             query = query.where((
-                (orm.Page._id << created_pages) |
+                (orm.Page.page_id << created_pages) |
                 (orm.Page.url << include_pages)) &
                 ~(orm.Page.url << exclude_pages))
         for i in query.order_by(orm.Page.url):
             yield i.url
+
+    def rewrites(self):
+        for row in orm.Rewrite.select():
+            yield dict(url=row.url, author=row.author, status=row.status)
+
+    def images(self):
+        for row in orm.Image.select():
+            yield dict(
+                url=row.url, source=row.source, status=row.status,
+                notes=row.notes)
 
     ###########################################################################
     # Internal Methods
@@ -565,22 +556,25 @@ class SnapshotConnector:
         orm.ForumThread.create_table()
         orm.ForumCategory.create_table()
         categories = [
-            i for i in self.wiki.list_categories()
+            i for i in self.wiki.categories()
             if i['title'] != 'Per page discussions']
-        total = sum([i['threads'] for i in categories])
-        index = itertools.count(1)
-        futures = []
-        _save = lambda x: (orm.ForumPost.insert_many(
-            self.wiki.get_forum_thread(x['thread_id'])))
-        for category in categories:
-            orm.ForumCategory.create(**category)
-            for thread in self.wiki.list_threads(category['category_id']):
-                orm.ForumThread.create(**thread)
-                log.info(
-                    'Saving forum thread #{}/{}: {}'
-                    .format(next(index), total, thread['title']))
-                futures.append(self.pool.submit(_save, thread))
-        return futures
+        log.info('Saving Forum Categories.')
+        for i in categories:
+            orm.ForumCategory.create(**i)
+        threads = (
+            i for j in categories for i in self.wiki.threads(j['category_id']))
+        for index, _ in enumerate(self.pool.map(
+                self._save_thread, threads,
+                itertools.count(1),
+                itertools.repeat(sum([i['threads'] for i in categories])))):
+            pass
+
+    def _save_thread(self, thread, index, total):
+        log.info(
+            'Saving thread {}/{}: {}'
+            .format(index, total, thread['title']))
+        orm.ForumThread.create(**thread)
+        orm.ForumPost.insert_many(self.wiki._posts(thread['thread_id']))
 
     def _save_meta(self):
         log.info('Downloading image metadata.')
@@ -590,17 +584,21 @@ class SnapshotConnector:
             'BY-NC-SA CC',
             'BY-SA CC',
             'PUBLIC DOMAIN')]
-        total = len(images)
-        for index, _ in enumerate(self.pool.map(self._save_image, images)):
-            log.info('Saved image {}/{}.'.format(index + 1, total))
+        for _ in self.pool.map(
+                self._save_image, images, itertools.count(1),
+                itertools.repeat(len(images))):
+            pass
         log.info('Downloading author metadata.')
         orm.Rewrite.create_table()
         orm.Rewrite.insert_many(self.wiki.rewrites())
 
-    def _save_image(self, image):
+    def _save_image(self, image, index, total):
         if not image['source']:
-            log.info('Image skipped: source not specified: {}'.format(image))
+            log.info(
+                'Aborted image {}: source not specified: {}'
+                .format(index, image))
             return
+        log.info('Saving image {}/{}.'.format(index, total))
         try:
             data = self.wiki.req.get(image['url']).content
         except requests.HTTPError as err:
@@ -613,19 +611,17 @@ class SnapshotConnector:
     # Public Methods
     ###########################################################################
 
-    def take(self, include_forums=False):
+    def take_snapshot(self, include_forums=False):
         time_start = arrow.now()
         orm.purge()
         for i in [
                 orm.Page, orm.Revision, orm.Vote,
                 orm.ForumPost, orm.Tag]:
             i.create_table()
-        #concurrent.futures.wait([
-        #    self.pool.submit(self._save_page, i)
-        #    for i in self.wiki.list_pages()])
+        #for i in self.pool.map(self._save_page, self.wiki.list_pages()):
+        #    pass
         if include_forums:
-            ftrs = self._save_forums()
-            concurrent.futures.wait(ftrs)
+            self._save_forums()
         if 'scp-wiki' in self.site:
             self._save_meta()
         orm.queue.join()
@@ -635,17 +631,6 @@ class SnapshotConnector:
         msg = 'Snapshot succesfully taken. [{:02d}:{:02d}:{:02d}]'
         msg = msg.format(hours, minutes, seconds)
         log.info(msg)
-
-    def get_rewrite_list(self):
-        for au in orm.Author.select():
-            yield {i: getattr(au, i) for i in ('url', 'author', 'override')}
-
-    def get_image_metadata(self, url):
-        try:
-            img = orm.Image.get(orm.Image.url == url)
-            return {'url': img.url, 'source': img.source, 'data': img.data}
-        except orm.Image.DoesNotExist:
-            return None
 
 
 class Page:
@@ -658,7 +643,7 @@ class Page:
 
     def __init__(self, url, connector):
         if url is not None and not urlparse(url).netloc:
-            url = urljoin(connector.site, url)
+            url = '{}/{}'.format(connector.site, url)
         self.url = url.lower()
         self._cn = connector
 
@@ -682,11 +667,11 @@ class Page:
 
     @cached_property
     def page_id(self):
-        return self._cn._pageid(self.url, self.html)
+        return self._cn._page_id(self.url, self.html)
 
     @cached_property
     def thread_id(self):
-        return self._cn._thread_id(self.url, self.html)
+        return self._cn._thread_id(self.page_id, self.html)
 
     @cached_property
     def html(self):
@@ -698,13 +683,13 @@ class Page:
 
     @cached_property
     def history(self):
-        data = self._cn._history(self)
+        data = self._cn._history(self.page_id)
         history = [Revision(**i) for i in data]
         return list(sorted(history, key=lambda x: x.number))
 
     @cached_property
     def votes(self):
-        data = self._cn._votes(self)
+        data = self._cn._votes(self.page_id)
         Vote = namedtuple('Vote', 'user value')
         return [Vote(i['user'], i['value']) for i in data]
 
@@ -829,7 +814,7 @@ class ForumPost:
 
     @property
     def text(self):
-        return '\n\n'.join(bs4(self.content).stripped_strings)
+        return bs4(self.content).text
 
     @property
     def wordcount(self):
@@ -838,7 +823,7 @@ class ForumPost:
 
 class Revision:
 
-    def __init__(self, revision_id, number, user, time, comment):
+    def __init__(self, revision_id, page_id, number, user, time, comment):
         for k, v in locals().items():
             if k != 'self':
                 setattr(self, k, v)
