@@ -33,9 +33,9 @@ class InsistentRequest(requests.Session):
 
     """Make an auto-retrying request that handles connection loss."""
 
-    def __init__(self, retry_count=10):
+    def __init__(self, max_attempts=10):
         super().__init__()
-        self.retry_count = retry_count
+        self.max_attempts = max_attempts
 
     def request(self, method, url, **kwargs):
         log_message = '<{} request>: {}'.format(method, url)
@@ -44,7 +44,7 @@ class InsistentRequest(requests.Session):
         log.debug(log_message)
         kwargs.setdefault('timeout', 30)
         kwargs.setdefault('allow_redirects', False)
-        for _ in range(self.retry_count + 1):
+        for _ in range(self.max_attempts):
             try:
                 resp = super().request(method=method, url=url, **kwargs)
             except (requests.ConnectionError, requests.Timeout):
@@ -68,6 +68,10 @@ class InsistentRequest(requests.Session):
 ###############################################################################
 # Public Classes
 ###############################################################################
+
+
+class ConnectorError(Exception):
+    pass
 
 
 class WikidotConnector:
@@ -108,22 +112,23 @@ class WikidotConnector:
 
     def _page_id(self, url, html):
         page_id = re.search('pageId = ([^;]*);', html)
-        return page_id.group(1) if page_id is not None else None
+        return int(page_id.group(1)) if page_id is not None else None
 
     def _thread_id(self, page_id, html):
         link = bs4(html).find(id='discuss-button')
         if not link or link['href'] == 'javascript:;':
             return None
         else:
-            return link['href'].split('/')[2].split('-')[1]
+            return int(link['href'].split('/')[2].split('-')[1])
 
     def _html(self, url):
         """Download the html data of the page."""
         try:
             return self.req.get(url).text
-        except (requests.ConnectionError, requests.HTTPError) as err:
-            log.warning('Failed to get the page: {}'.format(err))
-            return None
+        except (requests.ConnectionError, requests.HTTPError) as error:
+            message = 'Failed to get the page: {}'.format(error)
+            log.warning(message)
+            raise ConnectorError(message)
 
     def _source(self, page_id):
         """Download page source."""
@@ -139,7 +144,7 @@ class WikidotConnector:
             return None
         data = self._module('history/PageRevisionListModule',
                             page_id=page_id, page=1, perpage=1000000)['body']
-        for elem in bs4(data)('tr')[1:]:
+        for elem in reversed(bs4(data)('tr')[1:]):
             time = elem('td')[5].span['class'][1].split('_')[1]
             yield dict(
                 revision_id=int(elem['id'].split('-')[-1]),
@@ -161,7 +166,8 @@ class WikidotConnector:
             yield dict(
                 page_id=page_id,
                 user=user.text,
-                value=1 if value.text.strip() == '+' else -1)
+                value=int(
+                    value.text.strip().replace('+', '1').replace('-', '-1')))
 
     def _tags(self, page_id, html):
         for elem in bs4(html).select('div.page-tags a'):
@@ -204,6 +210,8 @@ class WikidotConnector:
             return
         for page in self._pager('forum/ForumViewThreadPostsModule',
                                 lambda x: {'pageNo': x}, t=thread_id):
+            if 'body' not in page:
+                raise ConnectorError(page['message'])
             for post in self._parse_thread(page['body']):
                 post.update(thread_id=thread_id)
                 yield post
@@ -232,19 +240,39 @@ class WikidotConnector:
             'https://www.wikidot.com/default--flow/login__LoginPopupScreen',
             data=data)
 
-    def list_pages(self, **kwargs):
+    def _list(self, **kwargs):
         """Yield urls of the pages matching the specified criteria."""
         for page in self._pager(
                 'list/ListPagesModule',
                 _next=lambda x: {'offset': 250 * (x - 1)},
                 category='*',
+                limit=kwargs.get('limit', None),
                 tags=kwargs.get('tag', None),
                 created_by=kwargs.get('author', None),
-                order='title',
+                order=kwargs.get('order', 'title'),
                 module_body='%%title_linked%%',
                 perPage=250):
             for elem in bs4(page['body']).select('div.list-pages-item a'):
                 yield self.site + elem['href']
+
+    def list_pages(self, **kwargs):
+        pages = self._list(**kwargs)
+        author = kwargs.get('author', None)
+        if not author or kwargs.keys() == {'author'}:
+            yield from pages
+            return
+        exclude = []
+        include = []
+        for i in self.rewrites():
+            if i['author'] == author:
+                include.append(i['url'])
+            elif i['status'] == 'override':
+                exclude.append(i['url'])
+        pages = list(pages)
+        del kwargs['author']
+        for url in self._list(**kwargs):
+            if url in pages or url in include and url not in exclude:
+                yield url
 
     def categories(self):
         """Yield dicts describing all forum categories on the site."""
@@ -353,9 +381,12 @@ class WikidotConnector:
                 data=payload,
                 headers={'Content-Type': 'application/x-www-form-urlencoded;'},
                 cookies={'wikidot_token7': '123456'}).json()
-        except (requests.ConnectionError, requests.HTTPError) as err:
-            log.warning('Failed module call ({} - {} - {}): {}'
-                        .format(name, page_id, kwargs, err))
+        except (requests.ConnectionError, requests.HTTPError) as error:
+            message = (
+                'Failed module call ({} - {} - {}): {}'
+                .format(name, page_id, kwargs, error))
+            log.warning(message)
+            raise ConnectorError(message)
 
     def _page_action(self, page_id, event, **kwargs):
         return self._module('Empty', action='WikiPageAction',
@@ -372,29 +403,23 @@ class WikidotConnector:
             title = elem.find(class_='title').text.strip()
             content = elem.find(class_='content')
             content.attrs.clear()
-            yield {
-                'post_id': elem['id'].split('-')[1],
-                'title': title if title else None,
-                'content': str(content),
-                'user': elem.find(class_='printuser').text,
-                'time': arrow.get(time).format('YYYY-MM-DD HH:mm:ss'),
-                'parent': parent}
+            yield dict(
+                post_id=int(elem['id'].split('-')[1]),
+                title=title if title else None,
+                content=str(content),
+                user=elem.find(class_='printuser').text,
+                time=arrow.get(time).format('YYYY-MM-DD HH:mm:ss'),
+                parent=int(parent) if parent else None)
 
     def _pager(self, name, _next, **kwargs):
         """Iterate over multi-page module results."""
         first_page = self._module(name, **kwargs)
-        if first_page is None:
-            return
         yield first_page
         counter = bs4(first_page['body']).find(class_='pager-no')
         if counter:
             for index in range(2, int(counter.text.split(' ')[-1]) + 1):
                 kwargs.update(_next(index))
-                page = self._module(name, **kwargs)
-                if page is not None:
-                    yield page
-                else:
-                    return
+                yield self._module(name, **kwargs)
 
 
 class SnapshotConnector:
@@ -462,7 +487,7 @@ class SnapshotConnector:
                 page_id=page_id,
                 number=i.number,
                 user=i.user,
-                time=i.time,
+                time=str(i.time),
                 comment=i.comment)
 
     def _votes(self, page_id):
@@ -484,7 +509,7 @@ class SnapshotConnector:
                 title=i.title,
                 content=i.content,
                 user=i.user,
-                time=i.time,
+                time=str(i.time),
                 parent=i.parent)
 
     ###########################################################################
@@ -518,7 +543,15 @@ class SnapshotConnector:
                 (orm.Page.page_id << created_pages) |
                 (orm.Page.url << include_pages)) &
                 ~(orm.Page.url << exclude_pages))
-        for i in query.order_by(orm.Page.url):
+        order = kwargs.get('order', None)
+        if order == 'random':
+            query = query.order_by(orm.peewee.fn.Random())
+        else:
+            query = query.order_by(orm.Page.url)
+        limit = kwargs.get('limit', None)
+        if limit:
+            query = query.limit(limit)
+        for i in query:
             yield i.url
 
     def rewrites(self):
@@ -535,9 +568,16 @@ class SnapshotConnector:
     # Internal Methods
     ###########################################################################
 
-    def _save_page(self, url):
+    def _save_pages(self):
+        for i in orm.Page, orm.Revision, orm.Vote, orm.ForumPost, orm.Tag:
+            i.create_table()
+        for _ in self.pool.map(
+                self._save_page, self.wiki.list_pages(), itertools.count(1)):
+            pass
+
+    def _save_page(self, url, index):
         """Download the page and write it to the db."""
-        log.info('Saving page: {}'.format(url))
+        log.info('Saving page {}: {}'.format(index, url))
         html = self.wiki._html(url)
         if html is None:
             return
@@ -614,17 +654,11 @@ class SnapshotConnector:
     def take_snapshot(self, include_forums=False):
         time_start = arrow.now()
         orm.purge()
-        for i in [
-                orm.Page, orm.Revision, orm.Vote,
-                orm.ForumPost, orm.Tag]:
-            i.create_table()
-        #for i in self.pool.map(self._save_page, self.wiki.list_pages()):
-        #    pass
+        self._save_pages()
         if include_forums:
             self._save_forums()
         if 'scp-wiki' in self.site:
             self._save_meta()
-        orm.queue.join()
         time_taken = (arrow.now() - time_start)
         hours, remainder = divmod(time_taken.seconds, 3600)
         minutes, seconds = divmod(remainder, 60)
@@ -658,7 +692,7 @@ class Page:
 
     def _flush(self, *properties):
         for i in properties:
-            if i in self.cache:
+            if i in self._cache:
                 del self._cache[i]
 
     ###########################################################################
@@ -679,19 +713,21 @@ class Page:
 
     @cached_property
     def source(self):
-        return self._cn._source(self)
+        return self._cn._source(self.page_id)
 
     @cached_property
     def history(self):
         data = self._cn._history(self.page_id)
+        Revision = namedtuple(
+            'Revision', 'revision_id page_id number user time comment')
         history = [Revision(**i) for i in data]
         return list(sorted(history, key=lambda x: x.number))
 
     @cached_property
     def votes(self):
         data = self._cn._votes(self.page_id)
-        Vote = namedtuple('Vote', 'user value')
-        return [Vote(i['user'], i['value']) for i in data]
+        Vote = namedtuple('Vote', 'page_id user value')
+        return [Vote(**i) for i in data]
 
     @cached_property
     def tags(self):
@@ -761,7 +797,7 @@ class Page:
     def edit(self, source, title=None, comment=None):
         if title is None:
             title = self.title
-        self._cn._edit(self, source, title, comment)
+        self._cn._edit(self.page_id, self.url, source, title, comment)
         self._flush('html', 'history', 'source')
 
     def revert_to(self, rev_n):
@@ -776,24 +812,27 @@ class Page:
         self._cn._set_vote(self, 0)
         self._flush('votes')
 
-    def upvote(self):
-        self._cn._set_vote(self, 1)
+    def upvote(self, force=False):
+        self._cn._set_vote(self, 1, force)
         self._flush('votes')
 
-    def downvote(self):
-        self._cn._set_vote(self, -1)
+    def downvote(self, force=False):
+        self._cn._set_vote(self, -1, force)
         self._flush('votes')
 
 
 class ForumThread:
 
     def __init__(self, thread_id, title, description, posts):
-        for k, v in locals().items():
-            if k != 'self':
-                setattr(self, k, v)
+        self.thread_id = thread_id
+        self.title = title
+        self.description = description
+        self.posts = sorted(posts, key=lambda x: x.time)
 
     def __repr__(self):
-        return '<{}({})>'.format(self.__class__.__name__, self.thread_id)
+        return '{}(thread_id={}, title={}, description={}, posts={})'.format(
+            self.__class__.__name__,
+            self.thread_id, self.title, self.description, self.posts)
 
     def __getitem__(self, index):
         return self.posts[index]
@@ -801,35 +840,39 @@ class ForumThread:
     def __len__(self):
         return len(self.posts)
 
+    def tree(self):
+        tree = []
+        for i in self.posts:
+            if not i.parent:
+                tree.append(i)
+            else:
+                for index, j in enumerate(tree):
+                    if j.post_id == i.parent:
+                        tree.insert(index + 1, i)
+                        break
+        return tree
 
-class ForumPost:
 
-    def __init__(self, post_id, thread_id, title, content, user, time, parent):
-        for k, v in locals().items():
-            if k != 'self':
-                setattr(self, k, v)
+class ForumPost(namedtuple(
+        'ForumPostBase',
+        'post_id thread_id parent title user time content')):
 
-    def __repr__(self):
-        return '<{}({})>'.format(self.__class__.__name__, self.post_id)
+    def __str__(self):
+        snippet_len = 75 - len(self.user)
+        text = self.text.replace('\n', ' ').strip()
+        if len(text) <= snippet_len + 1:
+            snippet = text
+        else:
+            snippet = text[:snippet_len] + '…'
+        return '<{}: {}>'.format(self.user, snippet)
 
     @property
     def text(self):
-        return bs4(self.content).text
+        return bs4(self.content).text.strip()
 
     @property
     def wordcount(self):
         return len(self.text.split())
-
-
-class Revision:
-
-    def __init__(self, revision_id, page_id, number, user, time, comment):
-        for k, v in locals().items():
-            if k != 'self':
-                setattr(self, k, v)
-
-    def __repr__(self):
-        return '<{}({})>'.format(self.__class__.__name__, self.revision_id)
 
 
 ###############################################################################
