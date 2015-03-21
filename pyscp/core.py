@@ -780,15 +780,15 @@ class Page:
         if self.html is None:
             return []
         links = set()
-        for a in bs4(self.html).select('#page-content a'):
-            if (('href' not in a.attrs) or
-                (a['href'][0] != '/') or
-                    (a['href'][-4:] in ['.png', '.jpg', '.gif'])):
+        for a in bs4(self.html).find(id='page-content')('a'):
+            href = a.get('href', None)
+            if not href or href[0] != '/':  # bad or absolute link
                 continue
-            url = 'http://www.scp-wiki.net{}'.format(a['href'])
-            url = url.rstrip("|")
+            if href[-4:] in ('.png', '.jpg', '.gif'):  # link to image
+                continue
+            url = self._cn.site + href.rstrip('|')
             links.add(url)
-        return list(links)
+        return links
 
     ###########################################################################
     # Methods
@@ -801,12 +801,12 @@ class Page:
         self._flush('html', 'history', 'source')
 
     def revert_to(self, rev_n):
-        self._cn._revert_to(self, self.history[rev_n].revision_id)
+        self._cn._revert_to(self.page_id, self.history[rev_n].revision_id)
         self._flush('html', 'history', 'source', 'tags')
 
     def set_tags(self, tags):
-        self._cn._set_tags(self, tags)
-        self._flush('history', 'tags')
+        self._cn._set_tags(self.page_id, tags)
+        self._flush('html', 'history', 'tags')
 
     def cancel_vote(self):
         self._cn._set_vote(self, 0)
