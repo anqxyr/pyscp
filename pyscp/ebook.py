@@ -30,14 +30,13 @@ log = logging.getLogger('pyscp.ebook')
 
 class Epub:
 
-    item = namedtuple('EbookItem', 'uid children')
+    item = namedtuple('EbookItem', 'uid title children')
 
     def __init__(self, title):
         self.dir = TemporaryDirectory()
         self.title = title
         self.lang = 'en'
         self.root = []
-        self.spine = []
         self.uid = ('{:04}'.format(i) for i in itertools.count(1))
 
     def _template(self, name):
@@ -47,13 +46,13 @@ class Epub:
             get_data('pyscp', 'resources/templates/' + name_to_file[name])))
 
     def _write_to_disk(self, uid, title, content):
-        page_xml = self._template('page')
-        page_xml.xpath("/*/*[1]/*[1]")[0].text = title
-        page_xml.xpath("/*/*[2]")[0].append(html.fromstring(content))
-        page_xml.write("{}/{}.xhtml".format(self.dir.name, uid))
+        page = self._template('page')
+        page.xpath("/*/*[1]/*[1]")[0].text = title
+        page.xpath("/*/*[2]")[0].append(html.fromstring(content))
+        page.write("{}/{}.xhtml".format(self.dir.name, uid))
 
     def add_page(self, title, content, parent=None):
-        item = self.item(next(self.uid), [])
+        item = self.item(next(self.uid), title, [])
         if not parent:
             self.root.append(item)
         else:
@@ -61,41 +60,62 @@ class Epub:
         self._write_to_disk(item.uid, title, content)
         return item
 
-    def _build_spine(self, tree):
+    def _flat_tree(self, tree, flat=[]):
         for item in tree:
-            self.spine.append(item.uid)
-            self._build_spine(item.children)
+            flat.append(item.uid)
+            self._flat_tree(item.children)
+        return flat
 
     def _write_spine(self):
-        spine_xml = self._template('spine')
-        spine_xml.xpath("/*/*[1]/*[1]")[0].text = arrow.utcnow().format(
+        spine = self._template('spine')
+        spine.xpath("/*/*[1]/*[1]")[0].text = arrow.utcnow().format(
             "YYYY-MM-DDTHH:mm:ss")
-        spine_xml.xpath("/*/*[1]/dc:title", namespaces={
+        spine.xpath("/*/*[1]/dc:title", namespaces={
             "dc": "http://purl.org/dc/elements/1.1/"})[0].text = self.title
-        self._build_spine(self.root)
-        for index, uid in enumerate(self.spine):
+        for index, uid in enumerate(self._flat_tree(self.root)):
             index = '{:04}'.format(index)
-            etree.SubElement(spine_xml.xpath("/*/*[2]")[0], "item", **{
+            etree.SubElement(spine.xpath("/*/*[2]")[0], "item", **{
                 "media-type": "application/xhtml+xml",
                 "href": uid + ".xhtml",
                 "id": index})
             etree.SubElement(
-                spine_xml.xpath("/*/*[3]")[0],
+                spine.xpath("/*/*[3]")[0],
                 "itemref", idref=index)
-        spine_xml.write(self.dir.name + "/content.opf", xml_declaration=True,
-                        encoding="utf-8", pretty_print=True)
+        spine.write(self.dir.name + "/content.opf", xml_declaration=True,
+                    encoding="utf-8", pretty_print=True)
 
     def _write_container(self):
-        container_xml = self._template('container')
+        container = self._template('container')
         meta_inf = Path(self.dir.name).resolve() / 'META-INF'
         meta_inf.mkdir()
-        container_xml.write(str(meta_inf / 'container.xml'),
-                            xml_declaration=True, encoding="utf-8",
-                            pretty_print=True)
+        container.write(str(meta_inf / 'container.xml'),
+                        xml_declaration=True, encoding="utf-8",
+                        pretty_print=True)
+
+    def _add_item_to_toc(self, item, node=None):
+        if node is None:
+            node = self.toc.xpath("/*/*[3]")[0]
+        navpoint = etree.SubElement(node, "navPoint", id=item.uid,
+                                    playOrder=str(int(item.uid)))
+        navlabel = etree.SubElement(navpoint, "navLabel")
+        etree.SubElement(navlabel, "text").text = item.title
+        etree.SubElement(navpoint, "content", src="{}.xhtml".format(item.uid))
+        for child in item.children:
+            self._add_item_to_toc(child, navpoint)
+
+    def _write_toc(self):
+        self.toc = self._template('toc')
+        self.toc.xpath("/*/*[2]/*")[0].text = self.title
+        for item in self.root:
+            self._add_item_to_toc(item)
+        self.toc.write(
+            "{}/toc.ncx".format(self.dir.name), xml_declaration=True,
+            encoding="utf-8", pretty_print=True)
 
     def write(self, filename):
         self._write_spine()
         self._write_container()
+        self._write_toc()
         with open(self.dir.name + "/mimetype", "w") as file:
             file.write("application/epub+zip")
         with open(self.dir.name + '/stylesheet.css', 'wb') as file:
