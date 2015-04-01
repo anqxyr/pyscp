@@ -15,11 +15,9 @@ import queue
 ###############################################################################
 
 DBPATH = None
-logger = logging.getLogger('scp.crawler.orm')
-executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+log = logging.getLogger('scp.crawler.orm')
+pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 queue = queue.Queue()
-buffer = []
-buffer_index = 1
 
 ###############################################################################
 # Database ORM Classes
@@ -36,12 +34,12 @@ class BaseModel(peewee.Model):
     @classmethod
     def create(cls, **kwargs):
         queue.put({'func': super().create, 'kwargs': kwargs})
-        executor.submit(async_write)
+        pool.submit(async_write)
 
     @classmethod
     def create_table(cls):
         queue.put({'func': super().create_table})
-        executor.submit(async_write)
+        pool.submit(async_write)
 
     @classmethod
     def insert_many(cls, data):
@@ -50,11 +48,11 @@ class BaseModel(peewee.Model):
         insert = lambda x: super_insert(x).execute()
         for idx in range(0, len(data), 500):
             queue.put({'func': insert, 'args': (data[idx:idx + 500], )})
-            executor.submit(async_write)
+            pool.submit(async_write)
 
 
 class Page(BaseModel):
-    pageid = peewee.IntegerField(primary_key=True)
+    page_id = peewee.IntegerField(primary_key=True)
     url = peewee.CharField(unique=True)
     html = peewee.TextField()
     thread_id = peewee.IntegerField(null=True)
@@ -62,15 +60,15 @@ class Page(BaseModel):
 
 class Revision(BaseModel):
     revision_id = peewee.IntegerField(primary_key=True)
-    pageid = peewee.IntegerField(index=True)
+    page_id = peewee.IntegerField(index=True)
     number = peewee.IntegerField()
     user = peewee.CharField(index=True)
     time = peewee.DateTimeField()
-    comment = peewee.CharField()
+    comment = peewee.CharField(null=True)
 
 
 class Vote(BaseModel):
-    pageid = peewee.IntegerField(index=True)
+    page_id = peewee.IntegerField(index=True)
     user = peewee.CharField(index=True)
     value = peewee.IntegerField()
 
@@ -78,11 +76,11 @@ class Vote(BaseModel):
 class ForumPost(BaseModel):
     post_id = peewee.IntegerField(primary_key=True)
     thread_id = peewee.IntegerField(index=True)
-    title = peewee.CharField()
+    title = peewee.CharField(null=True)
     content = peewee.TextField()
     user = peewee.CharField(index=True)
     time = peewee.DateTimeField()
-    parent = peewee.CharField(null=True)
+    parent = peewee.IntegerField(null=True)
 
 
 class ForumThread(BaseModel):
@@ -98,62 +96,58 @@ class ForumCategory(BaseModel):
     description = peewee.TextField()
 
 
+class Tag(BaseModel):
+    page_id = peewee.CharField(index=True)
+    tag = peewee.CharField(index=True)
+
+
+class Rewrite(BaseModel):
+    url = peewee.CharField(unique=True)
+    author = peewee.CharField()
+    status = peewee.CharField()
+
+
 class Image(BaseModel):
     url = peewee.CharField(unique=True)
     source = peewee.CharField()
     data = peewee.BlobField()
-    # for future use:
-    #status = peewee.CharField()
+    status = peewee.CharField()
+    notes = peewee.TextField(null=True)
 
-
-class Author(BaseModel):
-    url = peewee.CharField(unique=True)
-    author = peewee.CharField()
-    override = peewee.BooleanField()
-
-
-class Tag(BaseModel):
-    tag = peewee.CharField(index=True)
-    url = peewee.CharField(index=True)
 
 ###############################################################################
 # Helper Functions
 ###############################################################################
 
 
-def async_write():
-    global buffer, buffer_index
+def async_write(buffer=[]):
     item = queue.get()
     buffer.append(item)
     if len(buffer) > 500 or queue.empty():
-        buffer_size = len(buffer)
-        logger.debug(
-            'Processing queue items #{}-{}'
-            .format(buffer_index, buffer_index + buffer_size))
-        buffer_index += buffer_size
+        log.debug('Processing {} queue items.'.format(len(buffer)))
         with db.transaction():
             for item in buffer:
-                func = item['func']
-                args = item.get('args', ())
-                kwargs = item.get('kwargs', {})
                 try:
-                    func(*args, **kwargs)
+                    item['func'](
+                        *item.get('args', ()), **item.get('kwargs', {}))
                 except:
-                    logger.exception('Exception while processing queue item.')
+                    log.exception(
+                        'Exception while processing queue item: {}'
+                        .format(item))
                 queue.task_done()
-        buffer = []
+        buffer.clear()
 
 
 def connect(dbpath, silent=False):
     global DBPATH
     DBPATH = dbpath
     if not silent:
-        logger.info('Connecting to the database at {}'.format(dbpath))
+        log.info('Connecting to the database at {}'.format(dbpath))
     db.init(dbpath)
     db.connect()
 
 
 def purge():
-    logger.info('Purging the database.')
+    log.info('Purging the database.')
     os.remove(DBPATH)
     connect(DBPATH, silent=True)
