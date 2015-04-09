@@ -51,67 +51,80 @@ class BaseModel(peewee.Model):
             pool.submit(async_write)
 
 
+class ForumCategory(BaseModel):
+    title = peewee.CharField()
+    description = peewee.TextField()
+
+
+class ForumThread(BaseModel):
+    category = peewee.ForeignKeyField(ForumCategory, null=True)
+    title = peewee.CharField(null=True)
+    description = peewee.TextField(null=True)
+
+
 class Page(BaseModel):
-    page_id = peewee.IntegerField(primary_key=True)
     url = peewee.CharField(unique=True)
     html = peewee.TextField()
-    thread_id = peewee.IntegerField(null=True)
+    thread = peewee.ForeignKeyField(
+        ForumThread, related_name='page', null=True)
+
+
+class User(BaseModel):
+    name = peewee.CharField(unique=True)
 
 
 class Revision(BaseModel):
-    revision_id = peewee.IntegerField(primary_key=True)
-    page_id = peewee.IntegerField(index=True)
+    page = peewee.ForeignKeyField(Page, related_name='revisions', index=True)
+    user = peewee.ForeignKeyField(User, related_name='revisions', index=True)
     number = peewee.IntegerField()
-    user = peewee.CharField(index=True)
     time = peewee.DateTimeField()
     comment = peewee.CharField(null=True)
 
 
 class Vote(BaseModel):
-    page_id = peewee.IntegerField(index=True)
-    user = peewee.CharField(index=True)
+    page = peewee.ForeignKeyField(Page, related_name='votes', index=True)
+    user = peewee.ForeignKeyField(User, related_name='votes', index=True)
     value = peewee.IntegerField()
 
 
 class ForumPost(BaseModel):
-    post_id = peewee.IntegerField(primary_key=True)
-    thread_id = peewee.IntegerField(index=True)
+    thread = peewee.ForeignKeyField(
+        ForumThread, related_name='posts', index=True)
+    user = peewee.ForeignKeyField(User, related_name='posts', index=True)
+    parent = peewee.ForeignKeyField('self', null=True)
     title = peewee.CharField(null=True)
-    content = peewee.TextField()
-    user = peewee.CharField(index=True)
     time = peewee.DateTimeField()
-    parent = peewee.IntegerField(null=True)
-
-
-class ForumThread(BaseModel):
-    thread_id = peewee.IntegerField(primary_key=True)
-    title = peewee.CharField()
-    description = peewee.TextField()
-    category_id = peewee.IntegerField()
-
-
-class ForumCategory(BaseModel):
-    category_id = peewee.IntegerField(primary_key=True)
-    title = peewee.CharField()
-    description = peewee.TextField()
+    content = peewee.TextField()
 
 
 class Tag(BaseModel):
-    page_id = peewee.CharField(index=True)
-    tag = peewee.CharField(index=True)
+    name = peewee.CharField(index=True)
+
+
+class PageTag(BaseModel):
+    page = peewee.ForeignKeyField(Page, index=True)
+    tag = peewee.ForeignKeyField(Tag, index=True)
+
+
+class RewriteStatus(BaseModel):
+    name = peewee.CharField(unique=True)
 
 
 class Rewrite(BaseModel):
-    url = peewee.CharField(unique=True)
-    author = peewee.CharField()
-    status = peewee.CharField()
+    page = peewee.ForeignKeyField(Page, to_field=Page.url, index=True)
+    user = peewee.ForeignKeyField(User, index=True)
+    status = peewee.ForeignKeyField(RewriteStatus, index=True)
+
+
+class ImageStatus(BaseModel):
+    name = peewee.CharField(unique=True)
 
 
 class Image(BaseModel):
     url = peewee.CharField(unique=True)
     source = peewee.CharField()
     data = peewee.BlobField()
-    status = peewee.CharField()
+    status = peewee.ForeignKeyField(ImageStatus)
     notes = peewee.TextField(null=True)
 
 

@@ -13,16 +13,17 @@ import requests
 
 from bs4 import BeautifulSoup as bs4
 from cached_property import cached_property
-from collections import namedtuple
+from collections import namedtuple, defaultdict
 from pyscp import orm
+from pyscp.utils import listify
 from urllib.parse import urlparse, urlunparse, urljoin
+from functools import lru_cache, wraps
 
 ###############################################################################
 # Global Constants And Variables
 ###############################################################################
 
-log = logging.getLogger('scp.crawler')
-log.setLevel(logging.DEBUG)
+log = logging.getLogger('pyscp')
 
 ###############################################################################
 # Utility Classes
@@ -111,7 +112,7 @@ class WikidotConnector:
     ###########################################################################
 
     def _page_id(self, url, html):
-        page_id = re.search('pageId = ([^;]*);', html)
+        page_id = re.search('pageId = ([0-9]+);', html)
         return int(page_id.group(1)) if page_id is not None else None
 
     def _thread_id(self, page_id, html):
@@ -248,6 +249,7 @@ class WikidotConnector:
                 category='*',
                 limit=kwargs.get('limit', None),
                 tags=kwargs.get('tag', None),
+                rating=kwargs.get('rating', None),
                 created_by=kwargs.get('author', None),
                 order=kwargs.get('order', 'title'),
                 module_body='%%title_linked%%',
@@ -257,7 +259,7 @@ class WikidotConnector:
 
     def list_pages(self, **kwargs):
         pages = self._list(**kwargs)
-        author = kwargs.get('author', None)
+        author = kwargs.pop('author', None)
         if not author or kwargs.keys() == {'author'}:
             yield from pages
             return
@@ -269,7 +271,6 @@ class WikidotConnector:
             elif i['status'] == 'override':
                 exclude.append(i['url'])
         pages = list(pages)
-        del kwargs['author']
         for url in self._list(**kwargs):
             if url in pages or url in include and url not in exclude:
                 yield url
@@ -451,6 +452,7 @@ class SnapshotConnector:
         orm.connect(self.dbpath)
         self.wiki = WikidotConnector(site)
         self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=20)
+        self._remap_queue = defaultdict(list)
 
     def __call__(self, url):
         return Page(url, self)
@@ -462,55 +464,67 @@ class SnapshotConnector:
             self.dbpath)
 
     ###########################################################################
+    # Decorators
+    ###########################################################################
+
+    def _must_exist(func):
+        @wraps(func)
+        def wrapped(*args, **kwargs):
+            try:
+                return func(*args, **kwargs)
+            except orm.peewee.DoesNotExist:
+                raise ConnectorError(
+                    'The requested page does not exist in the snapshot.')
+        return wrapped
+
+    ###########################################################################
     # Connector Page API
     ###########################################################################
 
+    @_must_exist
     def _page_id(self, url, html):
-        try:
-            return orm.Page.get(orm.Page.url == url).page_id
-        except orm.Page.DoesNotExist:
-            return None
+        return orm.Page.get(orm.Page.url == url).id
 
+    @_must_exist
     def _thread_id(self, page_id, html):
-        return orm.Page.get(orm.Page.page_id == page_id).thread_id
+        return orm.Page.get(orm.Page.id == page_id).thread.id
 
+    @_must_exist
     def _html(self, url):
-        try:
-            return orm.Page.get(orm.Page.url == url).html
-        except orm.Page.DoesNotExist:
-            return None
+        return orm.Page.get(orm.Page.url == url).html
 
+    @_must_exist
     def _history(self, page_id):
-        for i in orm.Revision.select().where(orm.Revision.page_id == page_id):
+        for revision in orm.Page.get(orm.Page.id == page_id).revisions:
             yield dict(
-                revision_id=i.revision_id,
+                revision_id=revision.id,
                 page_id=page_id,
-                number=i.number,
-                user=i.user,
-                time=str(i.time),
-                comment=i.comment)
+                number=revision.number,
+                user=revision.user.name,
+                time=str(revision.time),
+                comment=revision.comment)
 
+    @_must_exist
     def _votes(self, page_id):
-        for i in orm.Vote.select().where(orm.Vote.page_id == page_id):
-            yield dict(page_id=page_id, user=i.user, value=i.value)
+        for vote in orm.Page.get(orm.Page.id == page_id).votes:
+            yield dict(page_id=page_id, user=vote.user.name, value=vote.value)
 
     def _tags(self, page_id, html):
-        for i in orm.Tag.select().where(orm.Tag.page_id == page_id):
-            yield i.tag
+        for tag in orm.Page.get(orm.Page.id == page_id).tags:
+            yield tag.tag.name
 
     ###########################################################################
 
     def _posts(self, thread_id):
-        for i in orm.ForumPost.select().where(
-                orm.ForumPost.thread_id == thread_id):
+        for post in orm.ForumThread.get(orm.ForumThread.id == thread_id).posts:
             yield dict(
                 thread_id=thread_id,
-                post_id=i.post_id,
-                title=i.title,
-                content=i.content,
-                user=i.user,
-                time=str(i.time),
-                parent=i.parent)
+                post_id=post.id,
+                title=post.title,
+                content=post.content,
+                user=post.user.name,
+                time=str(post.time),
+                parent=post.parent)
 
     ###########################################################################
     # Connector Public API
@@ -519,30 +533,44 @@ class SnapshotConnector:
     def auth(self, username, password):
         return self.wiki.auth(username, password)
 
+    def _list_author(self, author):
+        query = (
+            orm.Page.select(orm.Page.url)
+            .join(orm.Revision).join(orm.User)
+            .where(orm.Revision.number == 0)
+            .where(orm.User.name == author))
+        include, exclude = [], []
+        for item in self.rewrites():
+            if item['author'] == author:
+                include.append(item['url'])
+            elif item['status'] == 'override':
+                exclude.append(item['url'])
+        return (query.where(~(orm.Page.url << exclude)) |
+                orm.Page.select(orm.Page.url).where(orm.Page.url << include))
+
+    def _list_rating(self, rating):
+        action, value, *_ = re.split('([0-9]+)', rating)
+        if action not in ('>', '<', '>=', '<=', '=', ''):
+            raise ValueError
+        if not action or action == '=':
+            action = '=='
+        return (orm.Page.select(orm.Page.url)
+                .join(orm.Vote).group_by(orm.Page.url)
+                .having(eval(
+                    'orm.peewee.fn.sum(orm.Vote.value) {} {}'
+                    .format(action, value))))
+
     def list_pages(self, **kwargs):
         query = orm.Page.select(orm.Page.url)
-        tag = kwargs.get('tag', None)
-        if tag:
-            query = query.where(
-                orm.Page.page_id << orm.Tag.select(orm.Tag.page_id)
-                .where(orm.Tag.tag == tag))
-        author = kwargs.get('author', None)
-        if author:
-            created_pages = (
-                orm.Revision.select(orm.Revision.page_id)
-                .where(orm.Revision.user == author)
-                .where(orm.Revision.number == 0))
-            rewrite_list = list(self.rewrites())
-            exclude_pages = [
-                i['url'] for i in rewrite_list
-                if i['author'] != author and i['status'] == 'override']
-            include_pages = [
-                i['url'] for i in rewrite_list
-                if i['author'] == author]
-            query = query.where((
-                (orm.Page.page_id << created_pages) |
-                (orm.Page.url << include_pages)) &
-                ~(orm.Page.url << exclude_pages))
+        if 'tag' in kwargs:
+            query = query & (
+                orm.Page.select(orm.Page.url)
+                .join(orm.PageTag).join(orm.Tag)
+                .where(orm.Tag.name == kwargs['tag']))
+        if 'author' in kwargs:
+            query = query & self._list_author(kwargs['author'])
+        if 'rating' in kwargs:
+            query = query & self._list_rating(kwargs['rating'])
         order = kwargs.get('order', None)
         if order == 'random':
             query = query.order_by(orm.peewee.fn.Random())
@@ -556,20 +584,28 @@ class SnapshotConnector:
 
     def rewrites(self):
         for row in orm.Rewrite.select():
-            yield dict(url=row.url, author=row.author, status=row.status)
+            try:
+                yield dict(
+                    url=row.page.url,
+                    author=row.user.name,
+                    status=row.status.name)
+            except orm.peewee.DoesNotExist:
+                pass
 
     def images(self):
         for row in orm.Image.select():
             yield dict(
                 url=row.url, source=row.source, status=row.status,
-                notes=row.notes)
+                notes=row.notes, data=row.data)
 
     ###########################################################################
     # Internal Methods
     ###########################################################################
 
     def _save_pages(self):
-        for i in orm.Page, orm.Revision, orm.Vote, orm.ForumPost, orm.Tag:
+        for i in (
+                orm.Page, orm.Revision, orm.Vote, orm.ForumPost,
+                orm.PageTag, orm.ForumThread):
             i.create_table()
         for _ in self.pool.map(
                 self._save_page, self.wiki.list_pages(), itertools.count(1)):
@@ -578,21 +614,52 @@ class SnapshotConnector:
     def _save_page(self, url, index):
         """Download the page and write it to the db."""
         log.info('Saving page {}: {}'.format(index, url))
-        html = self.wiki._html(url)
-        if html is None:
+        try:
+            html = self.wiki._html(url)
+        except ConnectorError:
             return
         page_id = self.wiki._page_id(None, html)
         thread_id = self.wiki._thread_id(None, html)
-        orm.Page.create(url=url, page_id=page_id, thread_id=thread_id,
-                        html=str(bs4(html).find(id='main-content')))
-        orm.Revision.insert_many(self.wiki._history(page_id))
-        orm.Vote.insert_many(self.wiki._votes(page_id))
-        orm.ForumPost.insert_many(self.wiki._posts(thread_id))
-        orm.Tag.insert_many(dict(page_id=page_id, tag=i)
-                            for i in self.wiki._tags(None, html))
+        orm.Page.create(
+            id=page_id,
+            url=url,
+            thread=thread_id,
+            html=str(bs4(html).find(id='main-content')))
+        orm.Revision.insert_many(dict(
+            id=i['revision_id'],
+            page=page_id,
+            user=self._remap(orm.User, i['user']),
+            number=i['number'],
+            time=i['time'],
+            comment=i['comment'])
+            for i in self.wiki._history(page_id))
+        orm.Vote.insert_many(dict(
+            page=page_id,
+            user=self._remap(orm.User, i['user']),
+            value=i['value'])
+            for i in self.wiki._votes(page_id))
+        self._save_thread(dict(thread_id=thread_id))
+        orm.PageTag.insert_many(dict(
+            page=page_id,
+            tag=self._remap(orm.Tag, i))
+            for i in self.wiki._tags(None, html))
+
+    def _remap(self, orm_cls, item):
+        if item in self._remap_queue[orm_cls]:
+            return self._remap_queue[orm_cls].index(item) + 1
+        self._remap_queue[orm_cls].append(item)
+        return len(self._remap_queue[orm_cls])
+
+    def _save_remaps(self):
+        for orm_cls, items in self._remap_queue.items():
+            orm_cls.create_table()
+            orm_cls.insert_many(dict(
+                id=index + 1,
+                name=name) for index, name in enumerate(items))
 
     def _save_forums(self):
         """Download and save standalone forum threads."""
+        orm.ForumPost.create_table()
         orm.ForumThread.create_table()
         orm.ForumCategory.create_table()
         categories = [
@@ -600,21 +667,35 @@ class SnapshotConnector:
             if i['title'] != 'Per page discussions']
         log.info('Saving Forum Categories.')
         for i in categories:
-            orm.ForumCategory.create(**i)
+            orm.ForumCategory.create(
+                id=i['category_id'],
+                title=i['title'],
+                description=i['description'])
         threads = (
             i for j in categories for i in self.wiki.threads(j['category_id']))
-        for index, _ in enumerate(self.pool.map(
-                self._save_thread, threads,
-                itertools.count(1),
-                itertools.repeat(sum([i['threads'] for i in categories])))):
+        for _ in self.pool.map(
+                self._save_thread, threads, itertools.count(1),
+                itertools.repeat(sum([i['threads'] for i in categories]))):
             pass
 
-    def _save_thread(self, thread, index, total):
-        log.info(
-            'Saving thread {}/{}: {}'
-            .format(index, total, thread['title']))
-        orm.ForumThread.create(**thread)
-        orm.ForumPost.insert_many(self.wiki._posts(thread['thread_id']))
+    def _save_thread(self, thread, index=None, total=None):
+        if index:
+            log.info('Saving thread {}/{}: {}'.format(
+                index, total, thread['title']))
+        orm.ForumThread.create(
+            id=thread['thread_id'],
+            category=thread.get('category_id', None),
+            title=thread.get('title', None),
+            description=thread.get('description', None))
+        orm.ForumPost.insert_many(dict(
+            id=i['post_id'],
+            thread=thread['thread_id'],
+            user=self._remap(orm.User, i['user']),
+            parent=i['parent'],
+            title=i['title'],
+            time=i['time'],
+            content=i['content'])
+            for i in self.wiki._posts(thread['thread_id']))
 
     def _save_meta(self):
         log.info('Downloading image metadata.')
@@ -630,7 +711,11 @@ class SnapshotConnector:
             pass
         log.info('Downloading author metadata.')
         orm.Rewrite.create_table()
-        orm.Rewrite.insert_many(self.wiki.rewrites())
+        orm.Rewrite.insert_many(dict(
+            page=i['url'],
+            user=self._remap(orm.User, i['author']),
+            status=self._remap(orm.RewriteStatus, i['status']))
+            for i in self.wiki.rewrites())
 
     def _save_image(self, image, index, total):
         if not image['source']:
@@ -644,8 +729,12 @@ class SnapshotConnector:
         except requests.HTTPError as err:
             log.warning('Failed to download the image: {}'.format(err))
             return
-        image.update(data=data)
-        orm.Image.create(**image)
+        orm.Image.create(
+            url=image['url'],
+            source=image['source'],
+            data=data,
+            status=self._remap(orm.ImageStatus, image['status']),
+            notes=image['notes'])
 
     ###########################################################################
     # Public Methods
@@ -659,6 +748,7 @@ class SnapshotConnector:
             self._save_forums()
         if 'scp-wiki' in self.site:
             self._save_meta()
+        self._save_remaps()
         time_taken = (arrow.now() - time_start)
         hours, remainder = divmod(time_taken.seconds, 3600)
         minutes, seconds = divmod(remainder, 60)
@@ -676,7 +766,7 @@ class Page:
     ###########################################################################
 
     def __init__(self, url, connector):
-        if url is not None and not urlparse(url).netloc:
+        if not urlparse(url).netloc:
             url = '{}/{}'.format(connector.site, url)
         self.url = url.lower()
         self._cn = connector
@@ -687,13 +777,39 @@ class Page:
         return "{}('{}', {})".format(cls_name, short, repr(self._cn))
 
     ###########################################################################
-    # Special Methods
+    # Internal Methods
     ###########################################################################
 
     def _flush(self, *properties):
         for i in properties:
             if i in self._cache:
                 del self._cache[i]
+
+    @classmethod
+    @lru_cache()
+    @listify(wrapper=dict)
+    def _scp_titles(cls, connector):
+        log.debug('Constructing title index.')
+        splash = list(connector.list_pages(tag='splash'))
+        for url in ('scp-series', 'scp-series-2', 'scp-series-3'):
+            for element in bs4(connector(url).html).select('ul > li'):
+                if not re.search('[SCP]+-[0-9]+', element.text):
+                    continue
+                url = connector.site + element.a['href']
+                try:
+                    skip, title = element.text.split(' - ', maxsplit=1)
+                except ValueError:
+                    skip, title = element.text.split(', ', maxsplit=1)
+                if url not in splash:
+                    yield url, title
+                else:
+                    yield '{}/{}'.format(connector.site, skip.lower()), title
+
+    @property
+    def _onpage_title(self):
+        """Title as displayed on the page."""
+        title = bs4(self.html).find(id='page-title')
+        return title.text.strip() if title else ''
 
     ###########################################################################
     # Core Properties
@@ -757,16 +873,32 @@ class Page:
 
     @property
     def title(self):
-        elems = bs4(self.html).select('#page-title')
-        return elems[0].text.strip() if elems else ''
+        if 'scp' in self.tags and re.search('[scp]+-[0-9]+$', self.url):
+            return '{}: {}'.format(
+                self._onpage_title, self._scp_titles(self._cn)[self.url])
+        return self._onpage_title
 
     @property
     def created(self):
         return self.history[0].time
 
     @property
+    def authors(self):
+        Author = namedtuple('Author', 'user status')
+        first_author = Author(self.history[0].user, 'original')
+        for item in self._cn.rewrites():
+            if item['url'] == self.url:
+                new_author = Author(item['author'], item['status'])
+                return [first_author, new_author]
+        else:
+            return [first_author]
+
+    @property
     def author(self):
-        return self.history[0].user
+        if len(self.authors) == 1 or self.authors[1].status == 'rewrite':
+            return self.authors[0].user
+        else:
+            return self.authors[1].user
 
     @property
     def rating(self):
@@ -776,10 +908,11 @@ class Page:
                    if vote.user != '(account deleted)')
 
     @property
+    @listify
     def links(self):
         if self.html is None:
             return []
-        links = set()
+        unique = []
         for a in bs4(self.html).find(id='page-content')('a'):
             href = a.get('href', None)
             if not href or href[0] != '/':  # bad or absolute link
@@ -787,8 +920,9 @@ class Page:
             if href[-4:] in ('.png', '.jpg', '.gif'):  # link to image
                 continue
             url = self._cn.site + href.rstrip('|')
-            links.add(url)
-        return links
+            if url not in unique:
+                unique.append(url)
+                yield url
 
     ###########################################################################
     # Methods
@@ -796,7 +930,7 @@ class Page:
 
     def edit(self, source, title=None, comment=None):
         if title is None:
-            title = self.title
+            title = self._onpage_title
         self._cn._edit(self.page_id, self.url, source, title, comment)
         self._flush('html', 'history', 'source')
 
@@ -884,9 +1018,11 @@ def use_default_logging(debug=False):
     console = logging.StreamHandler()
     console.setLevel(logging.DEBUG if debug else logging.INFO)
     console.setFormatter(logging.Formatter('%(message)s'))
-    logging.getLogger('scp').addHandler(console)
     logfile = logging.FileHandler('scp.log', mode='w', delay=True)
     logfile.setLevel(logging.WARNING)
     logfile.setFormatter(logging.Formatter(
         '%(asctime)s %(name)-12s %(levelname)-8s %(message)s'))
-    logging.getLogger('scp').addHandler(logfile)
+    logger = logging.getLogger('pyscp')
+    logger.setLevel(logging.DEBUG)
+    logger.addHandler(console)
+    logger.addHandler(logfile)
