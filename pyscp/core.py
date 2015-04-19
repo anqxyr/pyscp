@@ -15,9 +15,9 @@ from bs4 import BeautifulSoup as bs4
 from cached_property import cached_property
 from collections import namedtuple, defaultdict
 from pyscp import orm
-from pyscp.utils import listify
+from pyscp.utils import listify, morph_exc
 from urllib.parse import urlparse, urlunparse, urljoin
-from functools import lru_cache, wraps
+from functools import lru_cache
 
 ###############################################################################
 # Global Constants And Variables
@@ -319,6 +319,7 @@ class WikidotConnector:
     # SCP-Wiki Specific Methods
     ###########################################################################
 
+    @lru_cache()
     def rewrites(self):
         if 'scp-wiki' not in self.site:
             return None
@@ -334,6 +335,7 @@ class WikidotConnector:
                 author=elem('td')[1].text.split(':override:')[-1],
                 status=status)
 
+    @lru_cache()
     def images(self):
         if 'scp-wiki' not in self.site:
             return None
@@ -463,36 +465,25 @@ class SnapshotConnector:
             self.dbpath)
 
     ###########################################################################
-    # Decorators
-    ###########################################################################
-
-    def _must_exist(func):
-        @wraps(func)
-        def wrapped(*args, **kwargs):
-            try:
-                return func(*args, **kwargs)
-            except orm.peewee.DoesNotExist:
-                raise ConnectorError(
-                    'The requested page does not exist in the snapshot.')
-        return wrapped
-
-    ###########################################################################
     # Connector Page API
     ###########################################################################
 
-    @_must_exist
+    _morph_DNE = morph_exc(
+        orm.peewee.DoesNotExist, ConnectorError, 'Page not in the snapshot.')
+
+    @_morph_DNE
     def _page_id(self, url, html):
         return orm.Page.get(orm.Page.url == url).id
 
-    @_must_exist
+    @_morph_DNE
     def _thread_id(self, page_id, html):
         return orm.Page.get(orm.Page.id == page_id).thread.id
 
-    @_must_exist
+    @_morph_DNE
     def _html(self, url):
         return orm.Page.get(orm.Page.url == url).html
 
-    @_must_exist
+    @_morph_DNE
     def _history(self, page_id):
         for revision in orm.Page.get(orm.Page.id == page_id).revisions:
             yield dict(
@@ -503,11 +494,12 @@ class SnapshotConnector:
                 time=str(revision.time),
                 comment=revision.comment)
 
-    @_must_exist
+    @_morph_DNE
     def _votes(self, page_id):
         for vote in orm.Page.get(orm.Page.id == page_id).votes:
             yield dict(page_id=page_id, user=vote.user.name, value=vote.value)
 
+    @_morph_DNE
     def _tags(self, page_id, html):
         for tag in orm.Page.get(orm.Page.id == page_id).tags:
             yield tag.tag.name
