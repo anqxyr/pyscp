@@ -260,11 +260,10 @@ class WikidotConnector:
     def list_pages(self, **kwargs):
         pages = self._list(**kwargs)
         author = kwargs.pop('author', None)
-        if not author or kwargs.keys() == {'author'}:
+        if not author or not kwargs:
             yield from pages
             return
-        exclude = []
-        include = []
+        include, exclude = [], []
         for i in self.rewrites():
             if i['author'] == author:
                 include.append(i['url'])
@@ -549,16 +548,46 @@ class SnapshotConnector:
                 orm.Page.select(orm.Page.url).where(orm.Page.url << include))
 
     def _list_rating(self, rating):
-        action, value, *_ = re.split('([0-9]+)', rating)
-        if action not in ('>', '<', '>=', '<=', '=', ''):
+        op, value, *_ = re.split('([0-9]+)', rating)
+        if op not in ('>', '<', '>=', '<=', '=', ''):
             raise ValueError
-        if not action or action == '=':
-            action = '=='
+        if not op or op == '=':
+            op = '=='
+        compare = lambda x: eval('x {} {}'.format(op, value))
         return (orm.Page.select(orm.Page.url)
                 .join(orm.Vote).group_by(orm.Page.url)
-                .having(eval(
-                    'orm.peewee.fn.sum(orm.Vote.value) {} {}'
-                    .format(action, value))))
+                .having(compare(orm.peewee.fn.sum(orm.Vote.value))))
+
+    def _list_created(self, created):
+        op, date, *_ = re.split('([0-9-]+)', created)
+        year, month, day, *_ = date.split('-') + [None, None]
+        if op not in ('>', '<', '>=', '<=', '=', ''):
+            raise ValueError
+        code_year = '(x.year {{}} {})'.format(year)
+        if op and op != '=':
+            if op in ('<', '>='):
+                month = month if month else 1
+                day = day if day else 1
+            else:
+                month = month if month else 12
+                day = day if day else 31
+            code_month = '(x.month {{}} {})'.format(month)
+            code_day = '(x.day {{}} {})'.format(day)
+            code_string = '({0} | ({0} & {1}) | ({0} & {1} & {2}))'.format(
+                code_year, code_month, code_day)
+            code_string = code_string.format(op, '==', op, '==', '==', op)
+        else:
+            code_string = code_year.format('==')
+            if month:
+                code_string += ' & (x.month == {})'.format(int(month))
+            if day:
+                code_string += ' & (x.day == {})'.format(int(day))
+            code_string = '({})'.format(code_string)
+        compare = lambda x: eval(code_string)
+        return (orm.Page.select(orm.Page.url)
+                .join(orm.Revision).where(orm.Revision.number == 0)
+                .group_by(orm.Page.url)
+                .having(compare(orm.Revision.time)))
 
     def list_pages(self, **kwargs):
         query = orm.Page.select(orm.Page.url)
@@ -571,14 +600,14 @@ class SnapshotConnector:
             query = query & self._list_author(kwargs['author'])
         if 'rating' in kwargs:
             query = query & self._list_rating(kwargs['rating'])
-        order = kwargs.get('order', None)
-        if order == 'random':
+        if 'created' in kwargs:
+            query = query & self._list_created(kwargs['created'])
+        if 'order' in kwargs:
             query = query.order_by(orm.peewee.fn.Random())
         else:
             query = query.order_by(orm.Page.url)
-        limit = kwargs.get('limit', None)
-        if limit:
-            query = query.limit(limit)
+        if 'limit' in kwargs:
+            query = query.limit(kwargs['limit'])
         for i in query:
             yield i.url
 
@@ -659,9 +688,9 @@ class SnapshotConnector:
 
     def _save_forums(self):
         """Download and save standalone forum threads."""
-        orm.ForumPost.create_table()
-        orm.ForumThread.create_table()
-        orm.ForumCategory.create_table()
+        orm.ForumPost.create_table(True)
+        orm.ForumThread.create_table(True)
+        orm.ForumCategory.create_table(True)
         categories = [
             i for i in self.wiki.categories()
             if i['title'] != 'Per page discussions']
