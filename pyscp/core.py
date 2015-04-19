@@ -210,7 +210,7 @@ class WikidotConnector:
         if thread_id is None:
             return
         for page in self._pager('forum/ForumViewThreadPostsModule',
-                                lambda x: {'pageNo': x}, t=thread_id):
+                                lambda x: dict(pageNo=x), t=thread_id):
             if 'body' not in page:
                 raise ConnectorError(page['message'])
             for post in self._parse_thread(page['body']):
@@ -233,10 +233,10 @@ class WikidotConnector:
 
     def auth(self, username, password):
         """Login to wikidot with the given username/password pair."""
-        data = {'login': username,
-                'password': password,
-                'action': 'Login2Action',
-                'event': 'login'}
+        data = dict(login=username,
+                    password=password,
+                    action='Login2Action',
+                    event='login')
         return self.req.post(
             'https://www.wikidot.com/default--flow/login__LoginPopupScreen',
             data=data)
@@ -245,7 +245,7 @@ class WikidotConnector:
         """Yield urls of the pages matching the specified criteria."""
         for page in self._pager(
                 'list/ListPagesModule',
-                _next=lambda x: {'offset': 250 * (x - 1)},
+                _next=lambda x: dict(offset=250 * (x - 1)),
                 category='*',
                 limit=kwargs.get('limit', None),
                 tags=kwargs.get('tag', None),
@@ -289,7 +289,7 @@ class WikidotConnector:
     def threads(self, category_id):
         """Yield dicts describing all threads in a given category."""
         for page in self._pager('forum/ForumViewCategoryModule',
-                                lambda x: {'p': x}, c=category_id):
+                                lambda x: dict(p=x), c=category_id):
             for elem in bs4(page['body'])(class_='name'):
                 yield dict(
                     thread_id=int(
@@ -303,7 +303,7 @@ class WikidotConnector:
         """Return the last 'num' revisions on the site."""
         data = self._module(
             name='changes/SiteChangesListModule',
-            options={'all': True}, page=1, perpage=number)['body']
+            options=dict(all=True), page=1, perpage=number)['body']
         for elem in bs4(data)('div', 'changes-list-item'):
             revnum = elem.find('td', 'revision-no').text.strip()
             time = elem.find('span', 'odate')['class'][1].split('_')[1]
@@ -367,13 +367,13 @@ class WikidotConnector:
         or another.
         """
         page_id = kwargs.get('page_id', None)
-        payload = {
-            'page_id': page_id,
-            'pageId': page_id,  # fuck wikidot
-            'moduleName': name,
+        payload = dict(
+            page_id=page_id,
+            pageId=page_id,  # fuck wikidot
+            moduleName=name,
             # token7 can be any 6-digit number, as long as it's the same
             # in the payload and in the cookie
-            'wikidot_token7': '123456'}
+            wikidot_token7='123456')
         payload.update(kwargs)
         try:
             return self.req.post(
