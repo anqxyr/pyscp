@@ -13,11 +13,11 @@ import requests
 
 from bs4 import BeautifulSoup as bs4
 from cached_property import cached_property
-from collections import namedtuple, defaultdict
-from pyscp import orm
-from pyscp.utils import listify, morph_exc
-from urllib.parse import urlparse, urlunparse, urljoin
+from collections import namedtuple
 from functools import lru_cache
+from pyscp import orm
+from pyscp.utils import listify, morph_exc, log_call
+from urllib.parse import urlparse, urlunparse, urljoin
 
 ###############################################################################
 # Global Constants And Variables
@@ -39,10 +39,6 @@ class InsistentRequest(requests.Session):
         self.max_attempts = max_attempts
 
     def request(self, method, url, **kwargs):
-        log_message = '<{} request>: {}'.format(method, url)
-        if kwargs:
-            log_message += ' {}'.format(kwargs)
-        log.debug(log_message)
         kwargs.setdefault('timeout', 30)
         kwargs.setdefault('allow_redirects', False)
         for _ in range(self.max_attempts):
@@ -60,9 +56,11 @@ class InsistentRequest(requests.Session):
         raise requests.ConnectionError(
             'Max retries exceeded with url: {}'.format(url))
 
+    @log_call(log.debug)
     def get(self, url, **kwargs):
         return self.request('GET', url, **kwargs)
 
+    @log_call(log.debug)
     def post(self, url, **kwargs):
         return self.request('POST', url, **kwargs)
 
@@ -320,6 +318,7 @@ class WikidotConnector:
     ###########################################################################
 
     @lru_cache()
+    @listify
     def rewrites(self):
         if 'scp-wiki' not in self.site:
             return None
@@ -336,6 +335,7 @@ class WikidotConnector:
                 status=status)
 
     @lru_cache()
+    @listify
     def images(self):
         if 'scp-wiki' not in self.site:
             return None
@@ -453,7 +453,6 @@ class SnapshotConnector:
         orm.connect(self.dbpath)
         self.wiki = WikidotConnector(site)
         self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=20)
-        self._remap_queue = defaultdict(list)
 
     def __call__(self, url):
         return Page(url, self)
@@ -469,7 +468,9 @@ class SnapshotConnector:
     ###########################################################################
 
     _morph_DNE = morph_exc(
-        orm.peewee.DoesNotExist, ConnectorError, 'Page not in the snapshot.')
+        catch_exc=orm.peewee.DoesNotExist,
+        raise_exc=ConnectorError,
+        message='Page not in the snapshot.')
 
     @_morph_DNE
     def _page_id(self, url, html):
@@ -583,13 +584,13 @@ class SnapshotConnector:
 
     def list_pages(self, **kwargs):
         query = orm.Page.select(orm.Page.url)
+        if 'author' in kwargs:
+            query = query & self._list_author(kwargs['author'])
         if 'tag' in kwargs:
             query = query & (
                 orm.Page.select(orm.Page.url)
                 .join(orm.PageTag).join(orm.Tag)
                 .where(orm.Tag.name == kwargs['tag']))
-        if 'author' in kwargs:
-            query = query & self._list_author(kwargs['author'])
         if 'rating' in kwargs:
             query = query & self._list_rating(kwargs['rating'])
         if 'created' in kwargs:
@@ -609,14 +610,14 @@ class SnapshotConnector:
                 yield dict(
                     url=row.page.url,
                     author=row.user.name,
-                    status=row.status.name)
+                    status=row.status.label)
             except orm.peewee.DoesNotExist:
                 pass
 
     def images(self):
         for row in orm.Image.select():
             yield dict(
-                url=row.url, source=row.source, status=row.status,
+                url=row.url, source=row.source, status=row.status.label,
                 notes=row.notes, data=row.data)
 
     ###########################################################################
@@ -624,10 +625,10 @@ class SnapshotConnector:
     ###########################################################################
 
     def _save_pages(self):
-        for i in (
-                orm.Page, orm.Revision, orm.Vote, orm.ForumPost,
-                orm.PageTag, orm.ForumThread):
-            i.create_table()
+        for table in (
+                'Page', 'Revision', 'Vote', 'ForumPost',
+                'PageTag', 'ForumThread', 'User', 'Tag'):
+            getattr(orm, table).create_table()
         for _ in self.pool.map(
                 self._save_page, self.wiki.list_pages(), itertools.count(1)):
             pass
@@ -649,40 +650,26 @@ class SnapshotConnector:
         orm.Revision.insert_many(dict(
             id=i['revision_id'],
             page=page_id,
-            user=self._remap(orm.User, i['user']),
+            user=orm.User.get_id(i['user']),
             number=i['number'],
             time=i['time'],
             comment=i['comment'])
             for i in self.wiki._history(page_id))
         orm.Vote.insert_many(dict(
             page=page_id,
-            user=self._remap(orm.User, i['user']),
+            user=orm.User.get_id(i['user']),
             value=i['value'])
             for i in self.wiki._votes(page_id))
         self._save_thread(dict(thread_id=thread_id))
         orm.PageTag.insert_many(dict(
             page=page_id,
-            tag=self._remap(orm.Tag, i))
+            tag=orm.Tag.get_id(i))
             for i in self.wiki._tags(None, html))
-
-    def _remap(self, orm_cls, item):
-        if item in self._remap_queue[orm_cls]:
-            return self._remap_queue[orm_cls].index(item) + 1
-        self._remap_queue[orm_cls].append(item)
-        return len(self._remap_queue[orm_cls])
-
-    def _save_remaps(self):
-        for orm_cls, items in self._remap_queue.items():
-            orm_cls.create_table()
-            orm_cls.insert_many(dict(
-                id=index + 1,
-                name=name) for index, name in enumerate(items))
 
     def _save_forums(self):
         """Download and save standalone forum threads."""
-        orm.ForumPost.create_table(True)
-        orm.ForumThread.create_table(True)
-        orm.ForumCategory.create_table(True)
+        for table in ('ForumPost', 'ForumThread', 'ForumCategory', 'User'):
+            getattr(orm, table).create_table(True)
         categories = [
             i for i in self.wiki.categories()
             if i['title'] != 'Per page discussions']
@@ -711,7 +698,7 @@ class SnapshotConnector:
         orm.ForumPost.insert_many(dict(
             id=i['post_id'],
             thread=thread['thread_id'],
-            user=self._remap(orm.User, i['user']),
+            user=orm.User.get_id(i['user']),
             parent=i['parent'],
             title=i['title'],
             time=i['time'],
@@ -720,7 +707,8 @@ class SnapshotConnector:
 
     def _save_meta(self):
         log.info('Downloading image metadata.')
-        orm.Image.create_table()
+        for table in ('Image', 'ImageStatus', 'Rewrite', 'RewriteStatus'):
+            getattr(orm, table).create_table()
         images = [i for i in self.wiki.images() if i['status'] in (
             'PERMISSION GRANTED',
             'BY-NC-SA CC',
@@ -731,11 +719,10 @@ class SnapshotConnector:
                 itertools.repeat(len(images))):
             pass
         log.info('Downloading author metadata.')
-        orm.Rewrite.create_table()
         orm.Rewrite.insert_many(dict(
             page=i['url'],
-            user=self._remap(orm.User, i['author']),
-            status=self._remap(orm.RewriteStatus, i['status']))
+            user=orm.User.get_id(i['author']),
+            status=orm.RewriteStatus.get_id(i['status']))
             for i in self.wiki.rewrites())
 
     def _save_image(self, image, index, total):
@@ -754,8 +741,16 @@ class SnapshotConnector:
             url=image['url'],
             source=image['source'],
             data=data,
-            status=self._remap(orm.ImageStatus, image['status']),
+            status=orm.ImageStatus.get_id(image['status']),
             notes=image['notes'])
+
+    def _save_id_cache(self):
+        for table_name, field_name in zip(
+                ('User', 'Tag', 'RewriteStatus', 'ImageStatus'),
+                ('name', 'name', 'label', 'label')):
+            table = getattr(orm, table_name)
+            if table.table_exists():
+                table.write_ids(field_name)
 
     ###########################################################################
     # Public Methods
@@ -769,7 +764,9 @@ class SnapshotConnector:
             self._save_forums()
         if 'scp-wiki' in self.site:
             self._save_meta()
-        self._save_remaps()
+        orm.queue.join()
+        self._save_id_cache()
+        orm.queue.join()
         time_taken = (arrow.now() - time_start)
         hours, remainder = divmod(time_taken.seconds, 3600)
         minutes, seconds = divmod(remainder, 60)
@@ -1034,13 +1031,12 @@ class ForumPost(namedtuple(
 # Module-level Functions
 ###############################################################################
 
-
 def use_default_logging(debug=False):
     console = logging.StreamHandler()
     console.setLevel(logging.DEBUG if debug else logging.INFO)
     console.setFormatter(logging.Formatter('%(message)s'))
     logfile = logging.FileHandler('scp.log', mode='w', delay=True)
-    logfile.setLevel(logging.WARNING)
+    logfile.setLevel(logging.DEBUG if debug else logging.WARNING)
     logfile.setFormatter(logging.Formatter(
         '%(asctime)s %(name)-12s %(levelname)-8s %(message)s'))
     logger = logging.getLogger('pyscp')
