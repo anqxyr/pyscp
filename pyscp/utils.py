@@ -4,63 +4,79 @@
 # Module Imports
 ###############################################################################
 
-from itertools import chain
-from functools import wraps, partial, update_wrapper
+import funcy
+import inspect
 
 ###############################################################################
 # Decorators
 ###############################################################################
 
 
-def listify(fn=None, wrapper=list):
-    def decorator(fn):
-        @wraps(fn)
-        def wrapped(*args, **kw):
-            return wrapper(fn(*args, **kw))
-        return wrapped
-    if fn is None:
-        return decorator
-    return decorator(fn)
+@funcy.decorator
+def listify(call, wrapper=list):
+    return wrapper(call())
 
 
-def morph_exc(catch_exc, raise_exc, message=None):
-    def decorator(fn):
-        @wraps(fn)
-        def wrapped(*args, **kw):
-            try:
-                return fn(*args, **kw)
-            except catch_exc as error:
-                raise raise_exc(message) from error
-        return wrapped
-    return decorator
+@funcy.decorator
+def morph_exceptions(call, catch_exc, raise_exc):
+    try:
+        return call()
+    except catch_exc as error:
+        raise raise_exc(error) from error
 
 
-class LogCallDecorator:
+@funcy.decorator
+def ignore_exceptions(call, catch_exc, return_value=None):
+    try:
+        return call()
+    except catch_exc:
+        return return_value
 
-    def __init__(self, fn, logger):
-        self.fn = fn
-        self.logger = logger
-        self.ismethod = False
-        update_wrapper(self, fn)
 
-    def __call__(self, *args, **kw):
-        argsrepr = chain(
-            map(repr, args),
-            ('{}={}'.format(k, repr(v)) for k, v in kw.items()))
-        if self.ismethod:
-            next(argsrepr)  # don't print self
-            message = '{}.{}'.format(
-                args[0].__class__.__name__, self.fn.__name__)
+def is_method(fn):
+    return inspect.getargspec(fn)[0][0] == 'self'
+
+
+def format_args(call):
+    _args = call._args[1:] if is_method(call._func) else call._args
+    _args = list(map(repr, _args))
+    _kw = {k: repr(v) for k, v in call._kwargs.items()}
+    _kw = list(map('='.join, _kw.items()))
+    return '{}({})'.format(call._func.__qualname__, ', '.join(_args + _kw))
+
+
+@funcy.decorator
+def log_exceptions(call, catch_exc, logger=print):
+    try:
+        return call()
+    except catch_exc as error:
+        logger('!! {}: {}'.format(format_args(call), error))
+        raise(error)
+
+
+@funcy.decorator
+def log_calls(call, logger=print):
+    logger(format_args(call))
+    return call()
+
+
+@funcy.decorator
+def chain_decorators(call, *decs):
+    fn = call._func
+    for dec in reversed(decs):
+        fn = dec(fn)
+    return fn(*call._args, **call._kwargs)
+
+###############################################################################
+
+
+def votes_by_user(orm, user):
+    down, up = [], []
+    for vote in (
+            orm.Vote.select().join(orm.User)
+            .where(orm.User.name == user)):
+        if vote.value == 1:
+            up.append(vote.page.url)
         else:
-            message = '{}'.format(self.fn.__name__)
-        if argsrepr:
-            message += '({})'.format(', '.join(argsrepr))
-        self.logger(message)
-        return self.fn(*args, **kw)
-
-    def __get__(self, obj, objtype):
-        self.ismethod = True
-        return partial(self.__call__, obj)
-
-
-log_call = lambda logger=print: lambda fn: LogCallDecorator(fn, logger)
+            down.append(vote.page.url)
+    return {'+': up, '-': down}

@@ -15,8 +15,7 @@ from bs4 import BeautifulSoup as bs4
 from cached_property import cached_property
 from collections import namedtuple
 from functools import lru_cache
-from pyscp import orm
-from pyscp.utils import listify, morph_exc, log_call
+from pyscp import orm, utils
 from urllib.parse import urlparse, urlunparse, urljoin
 
 ###############################################################################
@@ -38,6 +37,10 @@ class InsistentRequest(requests.Session):
         super().__init__()
         self.max_attempts = max_attempts
 
+    def __repr__(self):
+        return '{}(max_attempts={})'.format(
+            self.__class__.__name__, self.max_attempts)
+
     def request(self, method, url, **kwargs):
         kwargs.setdefault('timeout', 30)
         kwargs.setdefault('allow_redirects', False)
@@ -56,11 +59,11 @@ class InsistentRequest(requests.Session):
         raise requests.ConnectionError(
             'Max retries exceeded with url: {}'.format(url))
 
-    @log_call(log.debug)
+    @utils.log_calls(log.debug)
     def get(self, url, **kwargs):
         return self.request('GET', url, **kwargs)
 
-    @log_call(log.debug)
+    @utils.log_calls(log.debug)
     def post(self, url, **kwargs):
         return self.request('POST', url, **kwargs)
 
@@ -101,33 +104,34 @@ class WikidotConnector:
         return Page(url, self)
 
     def __repr__(self):
-        return "{}('{}')".format(
+        return '{}({})'.format(
             self.__class__.__name__,
-            urlparse(self.site).netloc.replace('.wikidot.com', ''))
+            repr(urlparse(self.site).netloc.replace('.wikidot.com', '')))
+
+    _connection_errors = utils.chain_decorators(
+        utils.morph_exceptions(
+            catch_exc=(requests.ConnectionError, requests.HTTPError),
+            raise_exc=ConnectorError),
+        utils.log_exceptions(
+            catch_exc=(requests.ConnectionError, requests.HTTPError),
+            logger=log.warning))
 
     ###########################################################################
     # Connector Page API
     ###########################################################################
 
     def _page_id(self, url, html):
-        page_id = re.search('pageId = ([0-9]+);', html)
-        return int(page_id.group(1)) if page_id is not None else None
+        return int(re.search('pageId = ([0-9]+);', html).group(1))
 
     def _thread_id(self, page_id, html):
         link = bs4(html).find(id='discuss-button')
-        if not link or link['href'] == 'javascript:;':
-            return None
-        else:
+        if link and link['href'] != 'javascript:;':
             return int(link['href'].split('/')[2].split('-')[1])
 
+    @_connection_errors
     def _html(self, url):
         """Download the html data of the page."""
-        try:
-            return self.req.get(url).text
-        except (requests.ConnectionError, requests.HTTPError) as error:
-            message = 'Failed to get the page: {}'.format(error)
-            log.warning(message)
-            raise ConnectorError(message)
+        return self.req.get(url).text
 
     def _source(self, page_id):
         """Download page source."""
@@ -318,7 +322,7 @@ class WikidotConnector:
     ###########################################################################
 
     @lru_cache()
-    @listify
+    @utils.listify()
     def rewrites(self):
         if 'scp-wiki' not in self.site:
             return None
@@ -335,7 +339,7 @@ class WikidotConnector:
                 status=status)
 
     @lru_cache()
-    @listify
+    @utils.listify()
     def images(self):
         if 'scp-wiki' not in self.site:
             return None
@@ -360,6 +364,7 @@ class WikidotConnector:
     # Internal Methods
     ###########################################################################
 
+    @_connection_errors
     def _module(self, name, **kwargs):
         """
         Call a Wikidot module.
@@ -368,27 +373,17 @@ class WikidotConnector:
         Almost all other methods of the class are using _module in one way
         or another.
         """
-        page_id = kwargs.get('page_id', None)
-        payload = dict(
-            page_id=page_id,
-            pageId=page_id,  # fuck wikidot
-            moduleName=name,
-            # token7 can be any 6-digit number, as long as it's the same
-            # in the payload and in the cookie
-            wikidot_token7='123456')
-        payload.update(kwargs)
-        try:
-            return self.req.post(
-                self.site + '/ajax-module-connector.php',
-                data=payload,
-                headers={'Content-Type': 'application/x-www-form-urlencoded;'},
-                cookies={'wikidot_token7': '123456'}).json()
-        except (requests.ConnectionError, requests.HTTPError) as error:
-            message = (
-                'Failed module call ({} - {} - {}): {}'
-                .format(name, page_id, kwargs, error))
-            log.warning(message)
-            raise ConnectorError(message)
+        return self.req.post(
+            self.site + '/ajax-module-connector.php',
+            data=dict(
+                pageId=kwargs.get('page_id', None),  # fuck wikidot
+                moduleName=name,
+                # token7 can be any 6-digit number, as long as it's the same
+                # in the payload and in the cookie
+                wikidot_token7='123456',
+                **kwargs),
+            headers={'Content-Type': 'application/x-www-form-urlencoded;'},
+            cookies={'wikidot_token7': '123456'}).json()
 
     def _page_action(self, page_id, event, **kwargs):
         return self._module('Empty', action='WikiPageAction',
@@ -467,7 +462,7 @@ class SnapshotConnector:
     # Connector Page API
     ###########################################################################
 
-    _morph_DNE = morph_exc(
+    _morph_DNE = utils.morph_exceptions(
         catch_exc=orm.peewee.DoesNotExist,
         raise_exc=ConnectorError,
         message='Page not in the snapshot.')
@@ -805,7 +800,7 @@ class Page:
 
     @classmethod
     @lru_cache()
-    @listify(wrapper=dict)
+    @utils.listify(wrapper=dict)
     def _scp_titles(cls, connector):
         log.debug('Constructing title index.')
         splash = list(connector.list_pages(tag='splash'))
@@ -926,7 +921,7 @@ class Page:
                    if vote.user != '(account deleted)')
 
     @property
-    @listify
+    @utils.listify()
     def links(self):
         if self.html is None:
             return []
