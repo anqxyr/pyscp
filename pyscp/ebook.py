@@ -17,10 +17,9 @@ from functools import lru_cache
 from lxml import etree, html
 from pathlib import Path
 from pkgutil import get_data
-from pyscp import SnapshotConnector, use_default_logging
+from pyscp import core, utils
 from shutil import copy2
 from tempfile import TemporaryDirectory
-from pyscp.utils import listify
 
 ###############################################################################
 # Global Constants And Variables
@@ -226,23 +225,17 @@ class EbookBuilder:
                 self.add_page(url=child, parent=item)
         return item
 
-    def add_cover_page(self):
-        self.add_page(title='Cover Page', content=get_data(
-            'pyscp', 'resources/pages/cover.xhtml').decode('UTF-8'))
-
-    def add_intro(self):
-        self.add_page(title='Introduction', content=get_data(
-            'pyscp', 'resources/pages/intro.xhtml').decode('UTF-8'))
-
-    def add_license(self):
-        content = bs4(get_data(
-            'pyscp', 'resources/pages/license.xhtml').decode('UTF-8'))
-        content.find(class_='footer').string = arrow.now().format('YYYY-MM-DD')
-        self.add_page(title='License', content=content.div.prettify())
-
-    def add_title_page(self):
-        self.add_page(title='Title Page', content=get_data(
-            'pyscp', 'resources/pages/title.xhtml').decode('UTF-8'))
+    def add_opening(self):
+        titles = 'Cover Page', 'Introduction', 'License', 'Title Page'
+        files = 'cover', 'intro', 'license', 'title'
+        contents = [
+            get_data('pyscp', 'resources/pages/{}.xhtml'.format(i))
+            .decode('UTF-8') for i in files]
+        license = bs4(contents[2])
+        license.find(class_='footer').string = arrow.now().format('YYYY-MM-DD')
+        contents[2] = license.div.prettify()
+        for title, content in zip(titles, contents):
+            self.add_page(title=title, content=content)
 
     def add_credits(self):
         credits = self.add_chapter('Acknowledgments and Attributions')
@@ -288,66 +281,48 @@ class EbookBuilder:
             content='<div class="title2">{}</div>'.format(title),
             parent=parent)
 
-    def add_skips(self, start, end, parent=None):
-        urls = []
-        for url in self._tag('scp'):
-            number = re.search('[0-9]{3,4}$', url)
-            if number and start <= int(number.group()) <= end:
-                urls.append(url)
-        if not set(urls) & set(self.urlheap):
-            return
-        chapter = self.add_chapter(
-            'Articles {:03}-{:03}'.format(start, end), parent)
-        for url in urls:
-            self.add_page(url=url, parent=chapter)
+    def add_block(self, name, urls, filter_fn=None, parent=None):
+        urls = list(filter(filter_fn, urls))
+        if set(urls) & set(self.urlheap):
+            block = self.add_chapter(name, parent)
+            for url in urls:
+                self.add_page(url=url, parent=block)
 
-    def add_tales(self, letter, parent=None):
-        urls = []
-        for url in self._tag('tale'):
-            if url in self._tag('hub', 'goi2014'):
-                continue
-            if url.split('/')[-1][0] == letter.lower():
-                urls.append(url)
-        if not set(urls) & set(self.urlheap):
-            return
-        chapter = self.add_chapter('Tales {}'.format(letter.upper()), parent)
-        for url in urls:
-            self.add_page(url=url, parent=chapter)
+    def add_skips(self, start, end, parent=None):
+        for block_num in range(start, end + 1):
+            bl_start, bl_end = (block_num - 1) * 100 or 2, block_num * 100 - 1
+            self.add_block(
+                'Articles {:03}-{:03}'.format(bl_start, bl_end),
+                self._tag('scp'),
+                utils.ignore()(lambda x: bl_start <= int(
+                    re.search(r'[0-9]{3,4}$', x).group()) <= bl_end),
+                parent)
+
+    def add_tales(self, start, end, parent=None):
+        alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+        start, end = start.upper(), end.upper()
+        for letter in alphabet[alphabet.index(start):alphabet.index(end) + 1]:
+            self.add_block(
+                'Tales {}'.format(letter),
+                self._tag('tale') - self._tag('hub', 'goi2014'),
+                lambda x: x.split('/')[-1][0] == letter.lower(),
+                parent)
 
     def add_hubs(self, start, end, parent=None):
-        for url in self._tag('hub'):
-            letter = url.split('/')[-1][0]
-            if start.lower() <= letter <= end.lower():
-                if not set(self.get_page_children(url)) & set(self.urlheap):
-                    continue
-                self.add_page(url=url, parent=parent)
+        self.add_block(
+            'Cannons and Series', self._tag('hub'),
+            lambda x: start.lower() <= x.split('/')[-1][0] <= end.lower(),
+            parent)
 
-    def add_proposals(self, parent=None):
-        urls = self.get_page_children('http://www.scp-wiki.net/scp-001')
-        if not set(urls) & set(self.urlheap):
-            return
-        chapter = self.add_chapter('001 Proposals', parent)
-        for url in urls:
-            self.add_page(url=url, parent=chapter)
-
-    def add_jokes(self, parent=None):
-        urls = self._tag('joke')
-        if not set(urls) & set(self.urlheap):
-            return
-        chapter = self.add_chapter('Joke Articles', parent)
-        for url in urls:
-            self.add_page(url=url, parent=chapter)
-
-    def add_explained(self, parent=None):
-        urls = self._tag('explained')
-        if not set(urls) & set(self.urlheap):
-            return
-        chapter = self.add_chapter('Explained Phenomena', parent)
-        for url in urls:
-            self.add_page(url=url, parent=chapter)
+    def add_extras(self, parent=None):
+        for name, urls in zip(
+            ('001 Proposals', 'Joke Articles', 'Explained Phenomena'),
+            (self.cn('scp-001').links, self._tag('joke'),
+                self._tag('explained'))):
+            self.add_block(name, urls, parent=parent)
 
     @lru_cache()
-    @listify
+    @utils.listify(set)
     def _tag(self, *tags):
         for tag in tags:
             yield from self.cn.list_pages(tag=tag)
@@ -379,14 +354,13 @@ class EbookBuilder:
         else:
             return maybe_children
 
+    @utils.ignore(core.ConnectorError, [])
     def get_page_children(self, url):
         if url in self._tag('scp', 'splash'):
             children = self._get_children_if_skip(url)
-        elif (
-                url in self._tag('hub') and
+        elif (url in self._tag('hub') and
                 url in self._tag('tale', 'goi2014') and
-                url not in self._tag('_sys') and
-                'tales-by-year' not in url):
+                url not in self._tag('_sys')):
             children = self._get_children_if_hub(url)
         else:
             children = []
@@ -398,7 +372,9 @@ class EbookBuilder:
         if item.url:
             p = self.cn(item.url)
             new_parent = self.book.add_page(
-                p.title, self.parser(p.html), parent)
+                p.title,
+                self.parser(p.html, p.title, p.url in self._tag('scp')),
+                parent)
         else:
             new_parent = self.book.add_page(item.title, item.content, parent)
         for child in item.children:
@@ -490,7 +466,7 @@ class HtmlParser:
             else:
                 element['src'] = '../images/{}_{}'.format(*src.split('/')[-2:])
 
-    def __call__(self, html):
+    def __call__(self, html, title, is_scp):
         soup = bs4(html).find(id='page-content')
         for element in soup(class_='page-rate-widget-box'):
             element.decompose()
@@ -500,7 +476,8 @@ class HtmlParser:
         self._links(soup)
         self._quotes(soup)
         self._images(soup)
-        return soup.prettify()
+        return '<p class="{}-title">{}</p>\n{}'.format(
+            'scp' if is_scp else 'tale', title, soup.prettify())
 
 
 ###############################################################################
@@ -508,94 +485,61 @@ class HtmlParser:
 ###############################################################################
 
 
-def build_complete(snapshot_path, output_path):
-    cn = SnapshotConnector('www.scp-wiki.net', snapshot_path)
-    heap = [i.url for i in map(cn, cn.list_pages())
-            if i.rating is None or i.rating > 0]
-    book = EbookBuilder(cn, heap,
+def build_complete(cn, output_path):
+    book = EbookBuilder(cn, list(cn.list_pages(rating='>0')),
                         title='SCP Foundation: The Complete Collection')
-    book.add_cover_page()
-    book.add_intro()
-    book.add_license()
-    book.add_title_page()
+    book.add_opening()
     skips = book.add_chapter('SCP Database')
-    book.add_skips(2, 99, skips)
-    for i in range(1, 30):
-        book.add_skips(i * 100, i * 100 + 99, skips)
-    book.add_proposals(skips)
-    book.add_jokes(skips)
-    book.add_explained(skips)
-    book.add_hubs('0', 'Z', book.add_chapter('Canons And Series'))
-    tales = book.add_chapter('Assorted Tales')
-    for letter in '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ':
-        book.add_tales(letter, parent=tales)
+    book.add_skips(1, 29, skips)
+    book.add_extras(skips)
+    book.add_hubs('0', 'Z')
+    book.add_tales('0', 'Z', book.add_chapter('Assorted Tales'))
     book.add_credits()
     book.write(output_path + book.book.title.replace(':', '') + '.epub')
 
 
-def build_tomes(snapshot_path, output_path):
-    cn = SnapshotConnector('www.scp-wiki.net', snapshot_path)
-    heap = [i.url for i in map(cn, cn.list_pages())
-            if i.rating is None or i.rating > 0]
+def build_tomes(cn, output_path):
+    heap = list(cn.list_pages(rating='>0'))
     books = [
         EbookBuilder(cn, heap, title='SCP Foundation: Tome {}'.format(i + 1))
         for i in range(12)]
     for book in books:
-        book.add_cover_page()
-        book.add_intro()
-        book.add_license()
-        book.add_title_page()
-    books[0].add_skips(2, 99)
-    for i in range(1, 30):
-        books[i // 5].add_skips(i * 100, i * 100 + 99)
-    books[5].add_proposals()
-    books[5].add_jokes()
-    books[5].add_explained()
-    books[6].add_hubs('0', 'L', books[6].add_chapter('Canons And Series'))
-    books[7].add_hubs('M', 'Z', books[7].add_chapter('Canons And Series'))
-    for index, letters in enumerate((
-            '0123456789ABCD', 'EFGHIJKL', 'MNOPQRS', 'TUVWXYZ')):
-        for letter in letters:
-            books[index + 8].add_tales(letter)
+        book.add_opening()
+    for i in range(6):
+        books[i].add_skips(i * 5 + 1, i * 5 + 5)
+    books[5].add_extras()
+    books[6].add_hubs('0', 'L')
+    books[7].add_hubs('M', 'Z')
+    for index, (start, end) in zip(range(4), ('0D', 'EL', 'MS', 'TZ')):
+        books[index + 8].add_tales(start, end)
     for book in books:
         book.add_credits()
         book.write(output_path + book.book.title.replace(':', '') + '.epub')
 
 
-def build_digest(snapshot_path, output_path):
-    cn = SnapshotConnector('www.scp-wiki.net', snapshot_path)
-    last_month = arrow.now().replace(months=-1).format('YYYY-MM')
-    heap = [i.url for i in map(cn, cn.list_pages())
-            if (i.rating is None or i.rating > 0)
-            and i.created.startswith(last_month)]
+def build_digest(cn, output_path):
+    date = arrow.now().replace(months=-1).format
     book = EbookBuilder(
-        cn, heap, title='SCP Foundation Monthly Digest: {}'
-        .format(arrow.now().replace(months=-1).format('MMMM YYYY')))
-    book.add_cover_page()
-    book.add_intro()
-    book.add_license()
-    book.add_title_page()
+        cn,
+        list(cn.list_pages(rating='>0', created=date('YYYY-MM'))),
+        title='SCP Foundation Monthly Digest: {}'.format(date('MMMM YYYY')))
+    book.add_opening()
     skips = book.add_chapter('SCP Database')
-    book.add_skips(2, 99, skips)
-    for i in range(1, 30):
-        book.add_skips(i * 100, i * 100 + 99, skips)
-    book.add_proposals(skips)
-    book.add_jokes(skips)
-    book.add_explained(skips)
-    book.add_hubs('0', 'Z', book.add_chapter('Canons And Series'))
-    tales = book.add_chapter('Assorted Tales')
-    for letter in '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ':
-        book.add_tales(letter, parent=tales)
+    book.add_skips(1, 29, skips)
+    book.add_extras(skips)
+    book.add_hubs('0', 'Z')
+    book.add_tales('0', 'Z', book.add_chapter('Assorted Tales'))
     book.add_credits()
     book.write(output_path + book.book.title.replace(':', '') + '.epub')
 
 
 def main():
-    build_complete(
-        '/home/anqxyr/heap/_scp/scp-wiki.2015-04-05.db',
-        '/home/anqxyr/heap/_scp/ebook/')
+    sn = core.SnapshotConnector(
+        'www.scp-wiki.net', '/home/anqxyr/heap/_scp/scp-wiki.2015-05-01.db')
+    for fn in (build_complete, build_tomes, build_digest):
+        fn(sn, '/home/anqxyr/heap/_scp/ebook/')
 
 
 if __name__ == '__main__':
-    use_default_logging()
+    core.use_default_logging()
     main()
