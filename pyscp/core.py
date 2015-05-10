@@ -108,13 +108,9 @@ class WikidotConnector:
             self.__class__.__name__,
             repr(urlparse(self.site).netloc.replace('.wikidot.com', '')))
 
-    _connection_errors = utils.chain_decorators(
-        utils.morph_exceptions(
-            catch_exc=(requests.ConnectionError, requests.HTTPError),
-            raise_exc=ConnectorError),
-        utils.log_exceptions(
-            catch_exc=(requests.ConnectionError, requests.HTTPError),
-            logger=log.warning))
+    _connection_errors = utils.decochain(
+        utils.morph(requests.RequestException, ConnectorError),
+        utils.log_errors(logger=log.warning))
 
     ###########################################################################
     # Connector Page API
@@ -462,10 +458,7 @@ class SnapshotConnector:
     # Connector Page API
     ###########################################################################
 
-    _morph_DNE = utils.morph_exceptions(
-        catch_exc=orm.peewee.DoesNotExist,
-        raise_exc=ConnectorError,
-        message='Page not in the snapshot.')
+    _morph_DNE = utils.morph(orm.peewee.DoesNotExist, ConnectorError)
 
     @_morph_DNE
     def _page_id(self, url, html):
@@ -599,6 +592,8 @@ class SnapshotConnector:
         for i in query:
             yield i.url
 
+    @lru_cache()
+    @utils.listify()
     def rewrites(self):
         for row in orm.Rewrite.select():
             try:
@@ -609,6 +604,8 @@ class SnapshotConnector:
             except orm.peewee.DoesNotExist:
                 pass
 
+    @lru_cache()
+    @utils.listify()
     def images(self):
         for row in orm.Image.select():
             yield dict(
@@ -620,21 +617,18 @@ class SnapshotConnector:
     ###########################################################################
 
     def _save_pages(self):
-        for table in (
-                'Page', 'Revision', 'Vote', 'ForumPost',
-                'PageTag', 'ForumThread', 'User', 'Tag'):
-            getattr(orm, table).create_table()
+        orm.create_tables(
+            'Page', 'Revision', 'Vote', 'ForumPost',
+            'PageTag', 'ForumThread', 'User', 'Tag')
         for _ in self.pool.map(
-                self._save_page, self.wiki.list_pages(), itertools.count(1)):
+                self._save_page, self.wiki.list_pages()):
             pass
 
-    def _save_page(self, url, index):
+    @utils.ignore(ConnectorError)
+    @utils.log_calls(log.info)
+    def _save_page(self, url):
         """Download the page and write it to the db."""
-        log.info('Saving page {}: {}'.format(index, url))
-        try:
-            html = self.wiki._html(url)
-        except ConnectorError:
-            return
+        html = self.wiki._html(url)
         page_id = self.wiki._page_id(None, html)
         thread_id = self.wiki._thread_id(None, html)
         orm.Page.create(
@@ -663,8 +657,7 @@ class SnapshotConnector:
 
     def _save_forums(self):
         """Download and save standalone forum threads."""
-        for table in ('ForumPost', 'ForumThread', 'ForumCategory', 'User'):
-            getattr(orm, table).create_table(True)
+        orm.create_tables('ForumPost', 'ForumThread', 'ForumCategory', 'User')
         categories = [
             i for i in self.wiki.categories()
             if i['title'] != 'Per page discussions']
@@ -702,8 +695,7 @@ class SnapshotConnector:
 
     def _save_meta(self):
         log.info('Downloading image metadata.')
-        for table in ('Image', 'ImageStatus', 'Rewrite', 'RewriteStatus'):
-            getattr(orm, table).create_table()
+        orm.create_tables('Image', 'ImageStatus', 'Rewrite', 'RewriteStatus')
         images = [i for i in self.wiki.images() if i['status'] in (
             'PERMISSION GRANTED',
             'BY-NC-SA CC',
@@ -800,7 +792,7 @@ class Page:
 
     @classmethod
     @lru_cache()
-    @utils.listify(wrapper=dict)
+    @utils.listify(dict)
     def _scp_titles(cls, connector):
         log.debug('Constructing title index.')
         splash = list(connector.list_pages(tag='splash'))
@@ -915,26 +907,21 @@ class Page:
 
     @property
     def rating(self):
-        if not self.votes:
-            return None
         return sum(vote.value for vote in self.votes
                    if vote.user != '(account deleted)')
 
     @property
     @utils.listify()
     def links(self):
-        if self.html is None:
-            return []
-        unique = []
-        for a in bs4(self.html).find(id='page-content')('a'):
-            href = a.get('href', None)
-            if not href or href[0] != '/':  # bad or absolute link
-                continue
-            if href[-4:] in ('.png', '.jpg', '.gif'):  # link to image
+        unique = set()
+        for element in bs4(self.html).find(id='page-content')('a'):
+            href = element.get('href', None)
+            if (not href or href[0] != '/' or  # bad or absolute link
+                    href[-4:] in ('.png', '.jpg', '.gif')):
                 continue
             url = self._cn.site + href.rstrip('|')
             if url not in unique:
-                unique.append(url)
+                unique.add(url)
                 yield url
 
     ###########################################################################
@@ -1001,8 +988,7 @@ class ForumThread:
 
 
 class ForumPost(namedtuple(
-        'ForumPostBase',
-        'post_id thread_id parent title user time content')):
+        'ForumPostBase', 'post_id thread_id parent title user time content')):
 
     def __str__(self):
         snippet_len = 75 - len(self.user)
