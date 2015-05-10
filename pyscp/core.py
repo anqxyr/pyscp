@@ -135,7 +135,7 @@ class WikidotConnector:
             return None
         data = self._module('viewsource/ViewSourceModule',
                             page_id=page_id)['body']
-        return bs4(data).text[11:].strip()
+        return bs4(data).text[11:].strip().replace(chr(160), ' ')
 
     def _history(self, page_id):
         """Download the revision history of the page."""
