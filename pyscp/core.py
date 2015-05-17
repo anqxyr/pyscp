@@ -10,19 +10,19 @@ import itertools
 import logging
 import re
 import requests
+import urllib.parse
 
 from bs4 import BeautifulSoup as bs4
 from cached_property import cached_property
 from collections import namedtuple
 from functools import lru_cache
 from pyscp import orm, utils
-from urllib.parse import urlparse, urlunparse, urljoin
 
 ###############################################################################
 # Global Constants And Variables
 ###############################################################################
 
-log = logging.getLogger('pyscp')
+log = logging.getLogger(__name__)
 
 ###############################################################################
 # Utility Classes
@@ -91,30 +91,25 @@ class WikidotConnector:
     ###########################################################################
 
     def __init__(self, site):
-        parsed = urlparse(site)
-        netloc = parsed.netloc or parsed.path
-        if '.' not in netloc:
-            netloc += '.wikidot.com'
-        self.site = urlunparse(['http', netloc, '', '', '', ''])
+        self.site = full_url(site)
         self.req = InsistentRequest()
 
     def __call__(self, url):
-        # if something needs to use a child class of Page here instead
-        # they can just override the whole __call__ method
+        """Convinience method to quickly create Page instances."""
         return Page(url, self)
 
     def __repr__(self):
-        return '{}({})'.format(
+        return "{}({})".format(
             self.__class__.__name__,
-            repr(urlparse(self.site).netloc.replace('.wikidot.com', '')))
-
-    _connection_errors = utils.decochain(
-        utils.morph(requests.RequestException, ConnectorError),
-        utils.log_errors(logger=log.warning))
+            repr(self.site[7:].replace('.wikidot.com', '')))
 
     ###########################################################################
     # Connector Page API
     ###########################################################################
+
+    handle_errors = utils.decochain(
+        utils.morph(requests.RequestException, ConnectorError),
+        utils.log_errors(log.warning))
 
     def _page_id(self, url, html):
         return int(re.search('pageId = ([0-9]+);', html).group(1))
@@ -124,33 +119,41 @@ class WikidotConnector:
         if link and link['href'] != 'javascript:;':
             return int(link['href'].split('/')[2].split('-')[1])
 
-    @_connection_errors
+    @handle_errors
     def _html(self, url):
         """Download the html data of the page."""
         return self.req.get(url).text
 
     def _source(self, page_id):
         """Download page source."""
-        if page_id is None:
-            return None
         data = self._module('viewsource/ViewSourceModule',
                             page_id=page_id)['body']
         return bs4(data).text[11:].strip().replace(chr(160), ' ')
 
     def _history(self, page_id):
-        """Download the revision history of the page."""
-        if page_id is None:
-            return None
+        """
+        Yield revision history.
+
+        >>> wiki = WikidotConnector('www.scp-wiki.net')
+        >>> history = wiki._history(18005845)
+        >>> list(history)[6] == {
+        ...     'revision_id': 41385091,
+        ...     'page_id': 18005845,
+        ...     'number': 6,
+        ...     'user': 'anqxyr',
+        ...     'time': '2013-09-09 20:48:17',
+        ...     'comment': 'image code'}
+        True
+        """
         data = self._module('history/PageRevisionListModule',
                             page_id=page_id, page=1, perpage=1000000)['body']
         for elem in reversed(bs4(data)('tr')[1:]):
-            time = elem('td')[5].span['class'][1].split('_')[1]
             yield dict(
                 revision_id=int(elem['id'].split('-')[-1]),
                 page_id=page_id,
                 number=int(elem('td')[0].text.strip('.')),
                 user=elem('td')[4].text,
-                time=arrow.get(time).format('YYYY-MM-DD HH:mm:ss'),
+                time=parse_time(elem),
                 comment=elem('td')[6].text)
 
     def _votes(self, page_id):
@@ -304,13 +307,12 @@ class WikidotConnector:
             options=dict(all=True), page=1, perpage=number)['body']
         for elem in bs4(data)('div', 'changes-list-item'):
             revnum = elem.find('td', 'revision-no').text.strip()
-            time = elem.find('span', 'odate')['class'][1].split('_')[1]
             comment = elem.find('div', 'comments')
             yield dict(
                 url=self.site + elem.find('td', 'title').a['href'],
                 number=0 if revnum == '(new)' else int(revnum[6:-1]),
                 user=elem.find('span', 'printuser').text.strip(),
-                time=arrow.get(time).format('YYYY-MM-DD HH:mm:ss'),
+                time=parse_time(elem),
                 comment=comment.text.strip() if comment else None)
 
     ###########################################################################
@@ -330,7 +332,7 @@ class WikidotConnector:
             else:
                 status = 'rewrite'
             yield dict(
-                url=urljoin(self.site, elem('td')[0].text),
+                url='{}/{}'.format(self.site, elem('td')[0].text),
                 author=elem('td')[1].text.split(':override:')[-1],
                 status=status)
 
@@ -360,7 +362,7 @@ class WikidotConnector:
     # Internal Methods
     ###########################################################################
 
-    @_connection_errors
+    @handle_errors
     def _module(self, name, **kwargs):
         """
         Call a Wikidot module.
@@ -392,7 +394,6 @@ class WikidotConnector:
                 parent = granpa.find(class_='post')['id'].split('-')[1]
             else:
                 parent = None
-            time = elem.find(class_='odate')['class'][1].split('_')[1]
             title = elem.find(class_='title').text.strip()
             content = elem.find(class_='content')
             content.attrs.clear()
@@ -401,7 +402,7 @@ class WikidotConnector:
                 title=title if title else None,
                 content=str(content),
                 user=elem.find(class_='printuser').text,
-                time=arrow.get(time).format('YYYY-MM-DD HH:mm:ss'),
+                time=parse_time(elem),
                 parent=int(parent) if parent else None)
 
     def _pager(self, name, _next, **kwargs):
@@ -435,11 +436,7 @@ class SnapshotConnector:
     """
 
     def __init__(self, site, dbpath):
-        parsed = urlparse(site)
-        netloc = parsed.netloc or parsed.path
-        if '.' not in netloc:
-            netloc += '.wikidot.com'
-        self.site = urlunparse(['http', netloc, '', '', '', ''])
+        self.site = full_url(site)
         self.dbpath = dbpath
         orm.connect(self.dbpath)
         self.wiki = WikidotConnector(site)
@@ -449,10 +446,10 @@ class SnapshotConnector:
         return Page(url, self)
 
     def __repr__(self):
-        return "{}('{}', '{}')".format(
+        return '{}({}, {})'.format(
             self.__class__.__name__,
-            urlparse(self.site).netloc.replace('.wikidot.com', ''),
-            self.dbpath)
+            repr(self.site.replace('http://', '')),
+            repr(self.dbpath))
 
     ###########################################################################
     # Connector Page API
@@ -771,15 +768,16 @@ class Page:
     ###########################################################################
 
     def __init__(self, url, connector):
-        if not urlparse(url).netloc:
+        if connector.site not in url:
             url = '{}/{}'.format(connector.site, url)
         self.url = url.lower()
         self._cn = connector
 
     def __repr__(self):
-        short = self.url.replace(self._cn.site, '').lstrip('/')
-        cls_name = self.__class__.__name__
-        return "{}('{}', {})".format(cls_name, short, repr(self._cn))
+        return "{}({}, {})".format(
+            self.__class__.__name__,
+            repr(self.url.replace(self._cn.site, '').lstrip('/')),
+            self._cn)
 
     ###########################################################################
     # Internal Methods
@@ -1009,18 +1007,38 @@ class ForumPost(namedtuple(
 
 
 ###############################################################################
-# Module-level Functions
+# Helper Functions
 ###############################################################################
 
-def use_default_logging(debug=False):
-    console = logging.StreamHandler()
-    console.setLevel(logging.DEBUG if debug else logging.INFO)
-    console.setFormatter(logging.Formatter('%(message)s'))
-    logfile = logging.FileHandler('scp.log', mode='w', delay=True)
-    logfile.setLevel(logging.DEBUG if debug else logging.WARNING)
-    logfile.setFormatter(logging.Formatter(
-        '%(asctime)s %(name)-12s %(levelname)-8s %(message)s'))
-    logger = logging.getLogger('pyscp')
-    logger.setLevel(logging.DEBUG)
-    logger.addHandler(console)
-    logger.addHandler(logfile)
+def full_url(url):
+    """
+    Return the url with any missing segments filled in.
+
+    >>> full_url('www.scp-wiki.net')
+    'http://www.scp-wiki.net'
+    >>> full_url('05command')
+    'http://05command.wikidot.com'
+    """
+    parsed = urllib.parse.urlparse(url)
+    netloc = parsed.netloc if parsed.netloc else parsed.path
+    if '.' not in netloc:
+        netloc += '.wikidot.com'
+    return urllib.parse.urlunparse(['http', netloc, '', '', '', ''])
+
+
+def parse_time(element):
+    """
+    Extract and format time from an html element.
+
+    >>> import bs4
+    >>> soup = bs4.BeautifulSoup('<span class="odate time_1378759697">')
+    >>> parse_time(soup)
+    '2013-09-09 20:48:17'
+    """
+    unixtime = element.find(class_='odate')['class'][1].split('_')[1]
+    return arrow.get(unixtime).format('YYYY-MM-DD HH:mm:ss')
+
+
+if __name__ == '__main__':
+    import doctest
+    doctest.testmod()
