@@ -6,35 +6,42 @@
 
 import funcy
 import inspect
+import logging
 
 ###############################################################################
 # Decorators
 ###############################################################################
 
 
-@funcy.decorator
+decorator = funcy.decorator
+
+
+@decorator
 def listify(call, wrapper=list):
     return wrapper(call())
 
 
-@funcy.decorator
-def morph_exceptions(call, catch_exc, raise_exc):
+@decorator
+def morph(call, catch_exc, raise_exc):
     try:
         return call()
     except catch_exc as error:
         raise raise_exc(error) from error
 
 
-@funcy.decorator
-def ignore_exceptions(call, catch_exc, return_value=None):
+@decorator
+def ignore(call, error=Exception, value=None):
     try:
         return call()
-    except catch_exc:
-        return return_value
+    except error:
+        return value
 
 
 def is_method(fn):
-    return inspect.getargspec(fn)[0][0] == 'self'
+    spec = inspect.getargspec(fn)
+    if not spec[0]:
+        return False
+    return spec[0][0] == 'self'
 
 
 def format_args(call):
@@ -45,23 +52,23 @@ def format_args(call):
     return '{}({})'.format(call._func.__qualname__, ', '.join(_args + _kw))
 
 
-@funcy.decorator
-def log_exceptions(call, catch_exc, logger=print):
+@decorator
+def log_errors(call, logger=print):
     try:
         return call()
-    except catch_exc as error:
+    except Exception as error:
         logger('!! {}: {}'.format(format_args(call), error))
         raise(error)
 
 
-@funcy.decorator
+@decorator
 def log_calls(call, logger=print):
     logger(format_args(call))
     return call()
 
 
-@funcy.decorator
-def chain_decorators(call, *decs):
+@decorator
+def decochain(call, *decs):
     fn = call._func
     for dec in reversed(decs):
         fn = dec(fn)
@@ -70,13 +77,21 @@ def chain_decorators(call, *decs):
 ###############################################################################
 
 
-def votes_by_user(orm, user):
-    down, up = [], []
-    for vote in (
-            orm.Vote.select().join(orm.User)
-            .where(orm.User.name == user)):
-        if vote.value == 1:
-            up.append(vote.page.url)
-        else:
-            down.append(vote.page.url)
-    return {'+': up, '-': down}
+def default_logging(debug=False):
+    term = logging.StreamHandler()
+    file = logging.FileHandler('pyscp.log', mode='w', delay=True)
+    if debug:
+        term.setLevel(logging.DEBUG)
+        file.setLevel(logging.DEBUG)
+    else:
+        term.setLevel(logging.INFO)
+        file.setLevel(logging.WARNING)
+    term.setFormatter(logging.Formatter('{message}', style='{'))
+    file.setFormatter(
+        logging.Formatter('{asctime} {levelname:8s} {message}', style='{'))
+    logger = logging.getLogger('pyscp')
+    logger.setLevel(logging.DEBUG)
+    logger.addHandler(term)
+    logger.addHandler(file)
+
+###############################################################################

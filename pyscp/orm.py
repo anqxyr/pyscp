@@ -43,10 +43,10 @@ class BaseModel(peewee.Model):
         queue_execution(fn=super().create, kw=kw)
 
     @classmethod
-    def create_table(cls, safe=False):
-        if not safe or not cls.table_exists():
+    def create_table(cls):
+        if not hasattr(cls, '_id_cache'):
             cls._id_cache = []
-            queue_execution(fn=super().create_table)
+        queue_execution(fn=super().create_table, args=(True,))
 
     @classmethod
     def insert_many(cls, data):
@@ -70,6 +70,7 @@ class BaseModel(peewee.Model):
         cls.insert_many([
             {'id': cls._id_cache.index(value) + 1, field_name: value}
             for value in set(cls._id_cache)])
+        cls._id_cache.clear()
 
 
 class ForumCategory(BaseModel):
@@ -174,6 +175,11 @@ def write_buffer(buffer):
         queue.task_done()
 
 
+def create_tables(*tables):
+    for table in tables:
+        eval(table).create_table()
+
+
 def connect(dbpath, silent=False):
     global DBPATH
     DBPATH = dbpath
@@ -187,3 +193,17 @@ def purge():
     log.info('Purging the database.')
     os.remove(DBPATH)
     connect(DBPATH, silent=True)
+
+###############################################################################
+# Macros
+###############################################################################
+
+
+def votes_by_user(user):
+    up, down = [], []
+    for vote in (Vote.select().join(User).where(User.name == user)):
+        if vote.value == 1:
+            up.append(vote.page.url)
+        else:
+            down.append(vote.page.url)
+    return {'+': up, '-': down}
