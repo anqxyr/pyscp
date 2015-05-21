@@ -1,0 +1,93 @@
+# -*- coding: utf-8 -*-
+
+# Form implementation generated from reading ui file 'imagebox.ui'
+#
+# Created: Thu May 21 10:43:53 2015
+#      by: pyside-uic 0.2.15 running on PySide 1.2.1
+#
+# WARNING! All changes made in this file will be lost!
+
+from PySide import QtCore, QtGui
+
+class Ui_imagebox(object):
+    def setupUi(self, imagebox):
+        imagebox.setObjectName("imagebox")
+        imagebox.resize(492, 161)
+        imagebox.setWindowTitle("")
+        self.gridLayout_2 = QtGui.QGridLayout(imagebox)
+        self.gridLayout_2.setObjectName("gridLayout_2")
+        self.gridLayout = QtGui.QGridLayout()
+        self.gridLayout.setObjectName("gridLayout")
+        self.google = QtGui.QPushButton(imagebox)
+        self.google.setMinimumSize(QtCore.QSize(0, 0))
+        self.google.setMaximumSize(QtCore.QSize(16777215, 16777215))
+        self.google.setObjectName("google")
+        self.gridLayout.addWidget(self.google, 0, 1, 2, 1)
+        self.picture = QtGui.QLabel(imagebox)
+        self.picture.setMinimumSize(QtCore.QSize(128, 128))
+        self.picture.setMaximumSize(QtCore.QSize(128, 128))
+        self.picture.setAutoFillBackground(True)
+        self.picture.setStyleSheet("")
+        self.picture.setText("")
+        self.picture.setObjectName("picture")
+        self.gridLayout.addWidget(self.picture, 0, 0, 5, 1)
+        self.source = QtGui.QLineEdit(imagebox)
+        self.source.setObjectName("source")
+        self.gridLayout.addWidget(self.source, 0, 2, 2, 1)
+        self.attribute = QtGui.QCheckBox(imagebox)
+        self.attribute.setMinimumSize(QtCore.QSize(96, 0))
+        self.attribute.setMaximumSize(QtCore.QSize(96, 16777215))
+        self.attribute.setObjectName("attribute")
+        self.gridLayout.addWidget(self.attribute, 0, 3, 1, 1)
+        self.status = QtGui.QComboBox(imagebox)
+        self.status.setFocusPolicy(QtCore.Qt.StrongFocus)
+        self.status.setObjectName("status")
+        self.status.addItem("")
+        self.status.setItemText(0, "")
+        self.status.addItem("")
+        self.status.addItem("")
+        self.status.addItem("")
+        self.status.addItem("")
+        self.status.addItem("")
+        self.status.addItem("")
+        self.status.addItem("")
+        self.status.addItem("")
+        self.status.addItem("")
+        self.status.addItem("")
+        self.gridLayout.addWidget(self.status, 2, 2, 2, 1)
+        self.send_pm = QtGui.QCheckBox(imagebox)
+        self.send_pm.setObjectName("send_pm")
+        self.gridLayout.addWidget(self.send_pm, 1, 3, 2, 1)
+        self.tineye = QtGui.QPushButton(imagebox)
+        self.tineye.setMinimumSize(QtCore.QSize(0, 0))
+        self.tineye.setMaximumSize(QtCore.QSize(16777215, 16777215))
+        self.tineye.setObjectName("tineye")
+        self.gridLayout.addWidget(self.tineye, 2, 1, 2, 1)
+        self.remove = QtGui.QCheckBox(imagebox)
+        self.remove.setObjectName("remove")
+        self.gridLayout.addWidget(self.remove, 3, 3, 1, 1)
+        self.comments = QtGui.QTextEdit(imagebox)
+        self.comments.setObjectName("comments")
+        self.gridLayout.addWidget(self.comments, 4, 1, 1, 3)
+        self.gridLayout_2.addLayout(self.gridLayout, 0, 0, 1, 1)
+
+        self.retranslateUi(imagebox)
+        QtCore.QMetaObject.connectSlotsByName(imagebox)
+
+    def retranslateUi(self, imagebox):
+        self.google.setText(QtGui.QApplication.translate("imagebox", "Google", None, QtGui.QApplication.UnicodeUTF8))
+        self.attribute.setText(QtGui.QApplication.translate("imagebox", "Attribute", None, QtGui.QApplication.UnicodeUTF8))
+        self.status.setItemText(1, QtGui.QApplication.translate("imagebox", "PUBLIC DOMAIN", None, QtGui.QApplication.UnicodeUTF8))
+        self.status.setItemText(2, QtGui.QApplication.translate("imagebox", "BY-SA CC", None, QtGui.QApplication.UnicodeUTF8))
+        self.status.setItemText(3, QtGui.QApplication.translate("imagebox", "BY-NC-SA CC", None, QtGui.QApplication.UnicodeUTF8))
+        self.status.setItemText(4, QtGui.QApplication.translate("imagebox", "PERMISSION GRANTED", None, QtGui.QApplication.UnicodeUTF8))
+        self.status.setItemText(5, QtGui.QApplication.translate("imagebox", "REPLACED", None, QtGui.QApplication.UnicodeUTF8))
+        self.status.setItemText(6, QtGui.QApplication.translate("imagebox", "AWAITING REPLY", None, QtGui.QApplication.UnicodeUTF8))
+        self.status.setItemText(7, QtGui.QApplication.translate("imagebox", "SOURCE UNKNOWN", None, QtGui.QApplication.UnicodeUTF8))
+        self.status.setItemText(8, QtGui.QApplication.translate("imagebox", "UNABLE TO CONTACT", None, QtGui.QApplication.UnicodeUTF8))
+        self.status.setItemText(9, QtGui.QApplication.translate("imagebox", "PERMISSION DENIED", None, QtGui.QApplication.UnicodeUTF8))
+        self.status.setItemText(10, QtGui.QApplication.translate("imagebox", "PERMANENTLY REMOVED", None, QtGui.QApplication.UnicodeUTF8))
+        self.send_pm.setText(QtGui.QApplication.translate("imagebox", "PM Author", None, QtGui.QApplication.UnicodeUTF8))
+        self.tineye.setText(QtGui.QApplication.translate("imagebox", "TinEye", None, QtGui.QApplication.UnicodeUTF8))
+        self.remove.setText(QtGui.QApplication.translate("imagebox", "Remove", None, QtGui.QApplication.UnicodeUTF8))
+
