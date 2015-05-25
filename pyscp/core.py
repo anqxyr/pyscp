@@ -5,17 +5,17 @@
 ###############################################################################
 
 import arrow
+import collections
 import concurrent.futures
 import itertools
 import logging
 import re
 import requests
 import urllib.parse
+import functools
 
-from bs4 import BeautifulSoup as bs4
+from bs4 import BeautifulSoup as soup
 from cached_property import cached_property
-from collections import namedtuple
-from functools import lru_cache
 from pyscp import orm, utils
 
 ###############################################################################
@@ -114,73 +114,64 @@ class WikidotConnector:
     def _page_id(self, url, html):
         return int(re.search('pageId = ([0-9]+);', html).group(1))
 
+    @utils.ignore(IndexError)
     def _thread_id(self, page_id, html):
-        link = bs4(html).find(id='discuss-button')
-        if link and link['href'] != 'javascript:;':
-            return int(link['href'].split('/')[2].split('-')[1])
+        href = soup(html).find(id='discuss-button')['href']
+        return int(utils.split(href, '/-')[3])
 
     @handle_errors
     def _html(self, url):
-        """Download the html data of the page."""
+        """Return the full html of the page."""
         return self.req.get(url).text
 
     def _source(self, page_id):
-        """Download page source."""
-        data = self._module('viewsource/ViewSourceModule',
-                            page_id=page_id)['body']
-        return bs4(data).text[11:].strip().replace(chr(160), ' ')
+        """Return wikidot markup of the source."""
+        data = self._module(
+            'viewsource/ViewSourceModule',
+            page_id=page_id)['body']
+        return soup(data).text[11:].strip().replace(chr(160), ' ')
 
     def _history(self, page_id):
-        """
-        Yield revision history.
-
-        >>> wiki = WikidotConnector('www.scp-wiki.net')
-        >>> history = wiki._history(18005845)
-        >>> list(history)[6] == {
-        ...     'revision_id': 41385091,
-        ...     'page_id': 18005845,
-        ...     'number': 6,
-        ...     'user': 'anqxyr',
-        ...     'time': '2013-09-09 20:48:17',
-        ...     'comment': 'image code'}
-        True
-        """
-        data = self._module('history/PageRevisionListModule',
-                            page_id=page_id, page=1, perpage=1000000)['body']
-        for elem in reversed(bs4(data)('tr')[1:]):
+        """Yield revision history."""
+        data = self._module(
+            'history/PageRevisionListModule',
+            page_id=page_id,
+            page=1,
+            perpage=1000000)['body']
+        for row in reversed(soup(data)('tr')[1:]):
+            cells = row('td')
             yield dict(
-                revision_id=int(elem['id'].split('-')[-1]),
+                revision_id=int(row['id'].split('-')[2]),
                 page_id=page_id,
-                number=int(elem('td')[0].text.strip('.')),
-                user=elem('td')[4].text,
-                time=parse_time(elem),
-                comment=elem('td')[6].text)
+                number=int(cells[0].text.strip('.')),
+                user=cells[4].text,
+                time=parse_time(cells[5]),
+                comment=cells[6].text)
 
     def _votes(self, page_id):
-        """Download the vote data."""
-        if page_id is None:
-            return None
-        data = self._module('pagerate/WhoRatedPageModule',
-                            page_id=page_id)['body']
-        spans = iter(bs4(data)('span'))
-        # exploits statefullness of iterators
-        for user, value in zip(spans, spans):
+        """Yield votes."""
+        data = self._module(
+            'pagerate/WhoRatedPageModule',
+            page_id=page_id)['body']
+        spans = [i.text.strip() for i in soup(data)('span')]
+        for user, value in zip(spans[::2], spans[1::2]):
             yield dict(
                 page_id=page_id,
-                user=user.text,
-                value=int(
-                    value.text.strip().replace('+', '1').replace('-', '-1')))
+                user=user,
+                value=1 if value == '+' else -1)
 
     def _tags(self, page_id, html):
-        for elem in bs4(html).select('div.page-tags a'):
+        for elem in soup(html).select('.page-tags a'):
             yield elem.text
 
     ###########################################################################
 
     def _edit(self, page_id, url, source, title, comment):
         """Overwrite the page with the new source and title."""
-        lock = self._module('edit/PageEditModule',
-                            page_id=page_id, mode='page')
+        lock = self._module(
+            'edit/PageEditModule',
+            page_id=page_id,
+            mode='page')
         return self._page_action(
             page_id, 'savePage',
             source=source, title=title, comments=comment,
@@ -255,7 +246,7 @@ class WikidotConnector:
                 order=kwargs.get('order', 'title'),
                 module_body='%%title_linked%%',
                 perPage=250):
-            for elem in bs4(page['body']).select('div.list-pages-item a'):
+            for elem in soup(page['body']).select('.list-pages-item a'):
                 yield self.site + elem['href']
 
     def list_pages(self, **kwargs):
@@ -277,9 +268,8 @@ class WikidotConnector:
 
     def categories(self):
         """Yield dicts describing all forum categories on the site."""
-        for elem in (
-                bs4(self._module('forum/ForumStartModule')['body'])
-                (class_='name')):
+        data = self._module('forum/ForumStartModule')['body']
+        for elem in soup(data)(class_='name'):
             yield dict(
                 category_id=int(elem.find(class_='title').a['href']
                                 .split('/')[2].split('-')[1]),
@@ -291,7 +281,7 @@ class WikidotConnector:
         """Yield dicts describing all threads in a given category."""
         for page in self._pager('forum/ForumViewCategoryModule',
                                 lambda x: dict(p=x), c=category_id):
-            for elem in bs4(page['body'])(class_='name'):
+            for elem in soup(page['body'])(class_='name'):
                 yield dict(
                     thread_id=int(
                         elem.find(class_='title').a['href']
@@ -305,7 +295,7 @@ class WikidotConnector:
         data = self._module(
             name='changes/SiteChangesListModule',
             options=dict(all=True), page=1, perpage=number)['body']
-        for elem in bs4(data)('div', 'changes-list-item'):
+        for elem in soup(data)(class_='changes-list-item'):
             revnum = elem.find('td', 'revision-no').text.strip()
             comment = elem.find('div', 'comments')
             yield dict(
@@ -319,12 +309,12 @@ class WikidotConnector:
     # SCP-Wiki Specific Methods
     ###########################################################################
 
-    @lru_cache()
+    @functools.lru_cache()
     @utils.listify()
     def rewrites(self):
         if 'scp-wiki' not in self.site:
             return None
-        for elem in bs4(self._html(
+        for elem in soup(self._html(
                 'http://05command.wikidot.com/alexandra-rewrite'))('tr')[1:]:
             # possibly add other options here, like collaborator
             if ':override:' in elem('td')[1].text:
@@ -336,7 +326,7 @@ class WikidotConnector:
                 author=elem('td')[1].text.split(':override:')[-1],
                 status=status)
 
-    @lru_cache()
+    @functools.lru_cache()
     @utils.listify()
     def images(self):
         if 'scp-wiki' not in self.site:
@@ -344,9 +334,7 @@ class WikidotConnector:
         for index in range(1, 28):
             page = self._html(
                 'http://scpsandbox2.wikidot.com/image-review-{}'.format(index))
-            if page is None:
-                break
-            for elem in bs4(page)('tr'):
+            for elem in soup(page)('tr'):
                 if not elem('td'):
                     continue
                 source = elem('td')[3].find('a')
@@ -388,7 +376,7 @@ class WikidotConnector:
                             page_id=page_id, event=event, **kwargs)
 
     def _parse_thread(self, html):
-        for elem in bs4(html)(class_='post'):
+        for elem in soup(html)(class_='post'):
             granpa = elem.parent.parent
             if 'post-container' in granpa.get('class', ''):
                 parent = granpa.find(class_='post')['id'].split('-')[1]
@@ -409,7 +397,7 @@ class WikidotConnector:
         """Iterate over multi-page module results."""
         first_page = self._module(name, **kwargs)
         yield first_page
-        counter = bs4(first_page['body']).find(class_='pager-no')
+        counter = soup(first_page['body']).find(class_='pager-no')
         if counter:
             for index in range(2, int(counter.text.split(' ')[-1]) + 1):
                 kwargs.update(_next(index))
@@ -463,7 +451,10 @@ class SnapshotConnector:
 
     @_morph_DNE
     def _thread_id(self, page_id, html):
-        return orm.Page.get(orm.Page.id == page_id).thread.id
+        try:
+            return orm.Page.get(orm.Page.id == page_id).thread.id
+        except AttributeError:
+            return None
 
     @_morph_DNE
     def _html(self, url):
@@ -589,7 +580,7 @@ class SnapshotConnector:
         for i in query:
             yield i.url
 
-    @lru_cache()
+    @functools.lru_cache()
     @utils.listify()
     def rewrites(self):
         for row in orm.Rewrite.select():
@@ -601,7 +592,7 @@ class SnapshotConnector:
             except orm.peewee.DoesNotExist:
                 pass
 
-    @lru_cache()
+    @functools.lru_cache()
     @utils.listify()
     def images(self):
         for row in orm.Image.select():
@@ -632,25 +623,22 @@ class SnapshotConnector:
             id=page_id,
             url=url,
             thread=thread_id,
-            html=str(bs4(html).find(id='main-content')))
+            html=str(soup(html).find(id='main-content')))
         orm.Revision.insert_many(dict(
             id=i['revision_id'],
             page=page_id,
             user=orm.User.get_id(i['user']),
             number=i['number'],
             time=i['time'],
-            comment=i['comment'])
-            for i in self.wiki._history(page_id))
+            comment=i['comment']) for i in self.wiki._history(page_id))
         orm.Vote.insert_many(dict(
             page=page_id,
             user=orm.User.get_id(i['user']),
-            value=i['value'])
-            for i in self.wiki._votes(page_id))
+            value=i['value']) for i in self.wiki._votes(page_id))
         self._save_thread(dict(thread_id=thread_id))
         orm.PageTag.insert_many(dict(
             page=page_id,
-            tag=orm.Tag.get_id(i))
-            for i in self.wiki._tags(None, html))
+            tag=orm.Tag.get_id(i)) for i in self.wiki._tags(None, html))
 
     def _save_forums(self):
         """Download and save standalone forum threads."""
@@ -789,13 +777,13 @@ class Page:
                 del self._cache[i]
 
     @classmethod
-    @lru_cache()
+    @functools.lru_cache()
     @utils.listify(dict)
     def _scp_titles(cls, connector):
         log.debug('Constructing title index.')
         splash = list(connector.list_pages(tag='splash'))
         for url in ('scp-series', 'scp-series-2', 'scp-series-3'):
-            for element in bs4(connector(url).html).select('ul > li'):
+            for element in soup(connector(url).html).select('ul > li'):
                 if not re.search('[SCP]+-[0-9]+', element.text):
                     continue
                 url = connector.site + element.a['href']
@@ -803,15 +791,14 @@ class Page:
                     skip, title = element.text.split(' - ', maxsplit=1)
                 except ValueError:
                     skip, title = element.text.split(', ', maxsplit=1)
-                if url not in splash:
-                    yield url, title
-                else:
-                    yield '{}/{}'.format(connector.site, skip.lower()), title
+                if url in splash:
+                    url = '{}/{}'.format(connector.site, skip.lower())
+                yield url, title
 
     @property
     def _onpage_title(self):
         """Title as displayed on the page."""
-        title = bs4(self.html).find(id='page-title')
+        title = soup(self.html).find(id='page-title')
         return title.text.strip() if title else ''
 
     ###########################################################################
@@ -837,7 +824,7 @@ class Page:
     @cached_property
     def history(self):
         data = self._cn._history(self.page_id)
-        Revision = namedtuple(
+        Revision = collections.namedtuple(
             'Revision', 'revision_id page_id number user time comment')
         history = [Revision(**i) for i in data]
         return list(sorted(history, key=lambda x: x.number))
@@ -845,7 +832,7 @@ class Page:
     @cached_property
     def votes(self):
         data = self._cn._votes(self.page_id)
-        Vote = namedtuple('Vote', 'page_id user value')
+        Vote = collections.namedtuple('Vote', 'page_id user value')
         return [Vote(**i) for i in data]
 
     @cached_property
@@ -854,9 +841,13 @@ class Page:
 
     @cached_property
     def comments(self):
-        return ForumThread(
-            self.thread_id, None, None,
-            [ForumPost(**i) for i in self._cn._posts(self.thread_id)])
+        if not self.thread_id:
+            return []
+        post = collections.namedtuple(
+            'ForumPost', 'post_id thread_id parent title user time content')
+        return [
+            post(**i) for i in
+            sorted(self._cn._posts(self.thread_id), key=lambda x: x['time'])]
 
     ###########################################################################
     # Derived Properties
@@ -864,7 +855,7 @@ class Page:
 
     @property
     def text(self):
-        return bs4(self.html).select('#page-content')[0].text
+        return soup(self.html).find(id='page-content').text
 
     @property
     def wordcount(self):
@@ -872,7 +863,7 @@ class Page:
 
     @property
     def images(self):
-        return [i['src'] for i in bs4(self.html).select('img')]
+        return [i['src'] for i in soup(self.html)('img')]
 
     @property
     def title(self):
@@ -887,7 +878,7 @@ class Page:
 
     @property
     def authors(self):
-        Author = namedtuple('Author', 'user status')
+        Author = collections.namedtuple('Author', 'user status')
         first_author = Author(self.history[0].user, 'original')
         for item in self._cn.rewrites():
             if item['url'] == self.url:
@@ -912,7 +903,7 @@ class Page:
     @utils.listify()
     def links(self):
         unique = set()
-        for element in bs4(self.html).find(id='page-content')('a'):
+        for element in soup(self.html).select('#page-content a'):
             href = element.get('href', None)
             if (not href or href[0] != '/' or  # bad or absolute link
                     href[-4:] in ('.png', '.jpg', '.gif')):
@@ -953,72 +944,12 @@ class Page:
         self._flush('votes')
 
 
-class ForumThread:
-
-    def __init__(self, thread_id, title, description, posts):
-        self.thread_id = thread_id
-        self.title = title
-        self.description = description
-        self.posts = sorted(posts, key=lambda x: x.time)
-
-    def __repr__(self):
-        return '{}(thread_id={}, title={}, description={}, posts={})'.format(
-            self.__class__.__name__,
-            self.thread_id, self.title, self.description, self.posts)
-
-    def __getitem__(self, index):
-        return self.posts[index]
-
-    def __len__(self):
-        return len(self.posts)
-
-    def tree(self):
-        tree = []
-        for i in self.posts:
-            if not i.parent:
-                tree.append(i)
-            else:
-                for index, j in enumerate(tree):
-                    if j.post_id == i.parent:
-                        tree.insert(index + 1, i)
-                        break
-        return tree
-
-
-class ForumPost(namedtuple(
-        'ForumPostBase', 'post_id thread_id parent title user time content')):
-
-    def __str__(self):
-        snippet_len = 75 - len(self.user)
-        text = self.text.replace('\n', ' ').strip()
-        if len(text) <= snippet_len + 1:
-            snippet = text
-        else:
-            snippet = text[:snippet_len] + '…'
-        return '<{}: {}>'.format(self.user, snippet)
-
-    @property
-    def text(self):
-        return bs4(self.content).text.strip()
-
-    @property
-    def wordcount(self):
-        return len(self.text.split())
-
-
 ###############################################################################
 # Helper Functions
 ###############################################################################
 
 def full_url(url):
-    """
-    Return the url with any missing segments filled in.
-
-    >>> full_url('www.scp-wiki.net')
-    'http://www.scp-wiki.net'
-    >>> full_url('05command')
-    'http://05command.wikidot.com'
-    """
+    """Return the url with any missing segments filled in."""
     parsed = urllib.parse.urlparse(url)
     netloc = parsed.netloc if parsed.netloc else parsed.path
     if '.' not in netloc:
@@ -1027,18 +958,6 @@ def full_url(url):
 
 
 def parse_time(element):
-    """
-    Extract and format time from an html element.
-
-    >>> import bs4
-    >>> soup = bs4.BeautifulSoup('<span class="odate time_1378759697">')
-    >>> parse_time(soup)
-    '2013-09-09 20:48:17'
-    """
+    """Extract and format time from an html element."""
     unixtime = element.find(class_='odate')['class'][1].split('_')[1]
     return arrow.get(unixtime).format('YYYY-MM-DD HH:mm:ss')
-
-
-if __name__ == '__main__':
-    import doctest
-    doctest.testmod()
