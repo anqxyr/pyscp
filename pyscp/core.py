@@ -877,22 +877,17 @@ class Page:
         return self.history[0].time
 
     @property
-    def authors(self):
-        Author = collections.namedtuple('Author', 'user status')
-        first_author = Author(self.history[0].user, 'original')
+    def author(self):
         for item in self._cn.rewrites():
-            if item['url'] == self.url:
-                new_author = Author(item['author'], item['status'])
-                return [first_author, new_author]
-        else:
-            return [first_author]
+            if item['url'] == self.url and item['status'] == 'override':
+                return item['author']
+        return self.history[0].user
 
     @property
-    def author(self):
-        if len(self.authors) == 1 or self.authors[1].status == 'rewrite':
-            return self.authors[0].user
-        else:
-            return self.authors[1].user
+    def rewrite_author(self):
+        for item in self._cn.rewrites():
+            if item['url'] == self.url and item['status'] == 'rewrite':
+                return item['author']
 
     @property
     def rating(self):
