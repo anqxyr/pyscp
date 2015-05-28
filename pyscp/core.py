@@ -7,12 +7,13 @@
 import arrow
 import collections
 import concurrent.futures
+import functools
 import itertools
 import logging
+import progress.bar
 import re
 import requests
 import urllib.parse
-import functools
 
 from bs4 import BeautifulSoup as soup
 from cached_property import cached_property
@@ -114,7 +115,7 @@ class WikidotConnector:
     def _page_id(self, url, html):
         return int(re.search('pageId = ([0-9]+);', html).group(1))
 
-    @utils.ignore(IndexError)
+    @utils.ignore((IndexError, TypeError))
     def _thread_id(self, page_id, html):
         href = soup(html).find(id='discuss-button')['href']
         return int(utils.split(href, '/-')[3])
@@ -405,28 +406,12 @@ class WikidotConnector:
 class SnapshotConnector:
 
     """
-    Create and manipulate a snapshot of a wikidot site.
-
-    This class uses WikidotConnector to iterate over all the pages of a site,
-    and save the html content, revision history, votes, and the discussion
-    of each to a sqlite database. Optionally, standalone forum threads can be
-    saved too.
-
-    In case of the scp-wiki, some additional information is saved:
-    images for which their CC status has been confirmed, and info about
-    overwriting page authorship.
-
-    In general, this class will not save images hosted on the site that is
-    being saved. Only the html content, discussions, and revision/vote
-    metadata is saved.
     """
 
     def __init__(self, site, dbpath):
         self.site = full_url(site)
         self.dbpath = dbpath
         orm.connect(self.dbpath)
-        self.wiki = WikidotConnector(site)
-        self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=20)
 
     def __call__(self, url):
         return Page(url, self)
@@ -495,9 +480,6 @@ class SnapshotConnector:
     ###########################################################################
     # Connector Public API
     ###########################################################################
-
-    def auth(self, username, password):
-        return self.wiki.auth(username, password)
 
     def _list_author(self, author):
         query = (
@@ -598,22 +580,67 @@ class SnapshotConnector:
                 url=row.url, source=row.source, status=row.status.label,
                 notes=row.notes, data=row.data)
 
-    ###########################################################################
-    # Internal Methods
-    ###########################################################################
 
-    def _save_pages(self):
+class SnapshotCreator:
+
+    """
+    Create snapshots of wikidot sites.
+
+    This class uses WikidotConnector to iterate over all the pages of a site,
+    and save the html content, revision history, votes, and the discussion
+    of each to a sqlite database. Optionally, standalone forum threads can be
+    saved too.
+
+    In case of the scp-wiki, some additional information is saved:
+    images for which their CC status has been confirmed, and info about
+    overwriting page authorship.
+
+    In general, this class will not save images hosted on the site that is
+    being saved. Only the html content, discussions, and revision/vote
+    metadata is saved.
+    """
+
+    def __init__(self, site, dbpath):
+        self.site = full_url(site)
+        orm.connect(dbpath)
+        self.wiki = WikidotConnector(site)
+        self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=20)
+
+    def take_snapshot(self, forums=False):
+        """Take new snapshot."""
+        orm.purge()
+        self._save_all_pages()
+        if forums:
+            self._save_forums()
+        if 'scp-wiki' in self.site:
+            self._save_meta()
+        orm.queue.join()
+        self._save_id_cache()
+        orm.queue.join()
+        log.info('Snapshot succesfully taken.')
+
+    def auth(self, username, password):
+        return self.wiki.auth(username, password)
+
+    def _save_all_pages(self):
+        """Iterate over the site pages, call _save_page for each."""
         orm.create_tables(
             'Page', 'Revision', 'Vote', 'ForumPost',
             'PageTag', 'ForumThread', 'User', 'Tag')
-        for _ in self.pool.map(
-                self._save_page, self.wiki.list_urls()):
-            pass
+        count = self.wiki.list_pages(body='%%total%%', limit=1)
+        count = list(count)[0]['body']
+        count = int(soup(count)('p')[0].text)
+        bar = progress.bar.IncrementalBar(
+            'SAVING PAGES', suffix='%(percent)d%% (%(elapsed_td)s)',
+            max=count + 1)
+        bar.next()
+        for _ in self.pool.map(self._save_page, self.wiki.list_urls()):
+            bar.next()
+        bar.finish()
 
     @utils.ignore(ConnectorError)
-    @utils.log_calls(log.info)
     def _save_page(self, url):
-        """Download the page and write it to the db."""
+        """Download contents, revisions, votes and discussion of the page."""
         html = self.wiki._html(url)
         page_id = self.wiki._page_id(None, html)
         thread_id = self.wiki._thread_id(None, html)
@@ -721,28 +748,6 @@ class SnapshotConnector:
             table = getattr(orm, table_name)
             if table.table_exists():
                 table.write_ids(field_name)
-
-    ###########################################################################
-    # Public Methods
-    ###########################################################################
-
-    def take_snapshot(self, include_forums=False):
-        time_start = arrow.now()
-        orm.purge()
-        self._save_pages()
-        if include_forums:
-            self._save_forums()
-        if 'scp-wiki' in self.site:
-            self._save_meta()
-        orm.queue.join()
-        self._save_id_cache()
-        orm.queue.join()
-        time_taken = (arrow.now() - time_start)
-        hours, remainder = divmod(time_taken.seconds, 3600)
-        minutes, seconds = divmod(remainder, 60)
-        msg = 'Snapshot succesfully taken. [{:02d}:{:02d}:{:02d}]'
-        msg = msg.format(hours, minutes, seconds)
-        log.info(msg)
 
 
 class Page:
