@@ -233,24 +233,22 @@ class WikidotConnector:
             'https://www.wikidot.com/default--flow/login__LoginPopupScreen',
             data=data)
 
-    def _list(self, **kwargs):
-        """Yield urls of the pages matching the specified criteria."""
-        for page in self._pager(
-                'list/ListPagesModule',
-                _next=lambda x: dict(offset=250 * (x - 1)),
-                category='*',
-                limit=kwargs.get('limit', None),
-                tags=kwargs.get('tag', None),
-                rating=kwargs.get('rating', None),
-                created_by=kwargs.get('author', None),
-                order=kwargs.get('order', 'title'),
-                module_body='%%title_linked%%',
-                perPage=250):
-            for elem in soup(page['body']).select('.list-pages-item a'):
-                yield self.site + elem['href']
-
     def list_pages(self, **kwargs):
-        pages = self._list(**kwargs)
+        """Yield urls of the pages matching the specified criteria."""
+        yield from self._pager(
+            'list/ListPagesModule',
+            _next=lambda x: dict(offset=250 * (x - 1)),
+            category='*',
+            limit=kwargs.get('limit', None),
+            tags=kwargs.get('tag', None),
+            rating=kwargs.get('rating', None),
+            created_by=kwargs.get('author', None),
+            order=kwargs.get('order', 'title'),
+            module_body=kwargs.get('body', '%%title_linked%%'),
+            perPage=250)
+
+    def list_urls(self, **kwargs):
+        pages = extract_urls(self.list_pages(**kwargs), self.site)
         author = kwargs.pop('author', None)
         if not author or not kwargs:
             yield from pages
@@ -262,7 +260,7 @@ class WikidotConnector:
             elif i['status'] == 'override':
                 exclude.append(i['url'])
         pages = list(pages)
-        for url in self._list(**kwargs):
+        for url in extract_urls(self.list_pages(**kwargs), self.site):
             if url in pages or url in include and url not in exclude:
                 yield url
 
@@ -558,7 +556,7 @@ class SnapshotConnector:
                 .group_by(orm.Page.url)
                 .having(compare(orm.Revision.time)))
 
-    def list_pages(self, **kwargs):
+    def list_urls(self, **kwargs):
         query = orm.Page.select(orm.Page.url)
         if 'author' in kwargs:
             query = query & self._list_author(kwargs['author'])
@@ -609,7 +607,7 @@ class SnapshotConnector:
             'Page', 'Revision', 'Vote', 'ForumPost',
             'PageTag', 'ForumThread', 'User', 'Tag')
         for _ in self.pool.map(
-                self._save_page, self.wiki.list_pages()):
+                self._save_page, self.wiki.list_urls()):
             pass
 
     @utils.ignore(ConnectorError)
@@ -781,7 +779,7 @@ class Page:
     @utils.listify(dict)
     def _scp_titles(cls, connector):
         log.debug('Constructing title index.')
-        splash = list(connector.list_pages(tag='splash'))
+        splash = list(connector.list_urls(tag='splash'))
         for url in ('scp-series', 'scp-series-2', 'scp-series-3'):
             for element in soup(connector(url).html).select('ul > li'):
                 if not re.search('[SCP]+-[0-9]+', element.text):
@@ -837,7 +835,7 @@ class Page:
 
     @cached_property
     def tags(self):
-        return list(self._cn._tags(self.page_id, self.html))
+        return set(self._cn._tags(self.page_id, self.html))
 
     @cached_property
     def comments(self):
@@ -956,3 +954,9 @@ def parse_time(element):
     """Extract and format time from an html element."""
     unixtime = element.find(class_='odate')['class'][1].split('_')[1]
     return arrow.get(unixtime).format('YYYY-MM-DD HH:mm:ss')
+
+
+def extract_urls(pages, site):
+    for page in pages:
+        for elem in soup(page['body']).select('.list-pages-item a'):
+            yield site + elem['href']
