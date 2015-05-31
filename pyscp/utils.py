@@ -7,6 +7,11 @@
 import funcy
 import inspect
 import logging
+import blessings
+import re
+import time
+import threading
+import signal
 
 ###############################################################################
 # Decorators
@@ -76,6 +81,67 @@ def decochain(call, *decs):
 
 ###############################################################################
 
+
+def split(text, delimeters):
+    pattern = '|'.join(map(re.escape, delimeters))
+    return re.split(pattern, text)
+
+
+class ProgressBar:
+
+    def __init__(self, title, max_value):
+        self.title = title
+        self.max_value = max_value
+        self.value = 0
+        self.term = blessings.Terminal()
+        signal.signal(signal.SIGINT, self.exit)
+
+    def start(self):
+        self.finished = False
+        self.time_started = time.time()
+        threading.Thread(target=self.run).start()
+
+    def update(self):
+        print('\r' + self.line(), end='')
+
+    def line(self):
+        filled = 40 * self.value / self.max_value
+        parts = ' ▏▎▍▌▋▊▉'
+        current = int(filled * len(parts)) % len(parts)
+        bar = '█' * int(filled) + parts[current] + ' ' * 40
+        tm = time.gmtime(time.time() - self.time_started)
+        return '{}{} {:>3}% ({}:{:02}:{:02})   '.format(
+            self.title,
+            self.term.green('{:.40}'.format(bar)),
+            100 * self.value // self.max_value,
+            tm.tm_hour, tm.tm_min, tm.tm_sec)
+
+    def run(self):
+        while not self.finished:
+            self.update()
+            time.sleep(1)
+
+    def stop(self):
+        self.finished = True
+        print('\r' + self.line())
+
+    def exit(self, signum, frame):
+        self.stop()
+        raise KeyboardInterrupt
+
+
+def pbar(it, title=None, max=None):
+    max = len(it) if max is None else max
+    title = '' if title is None else title + ' '
+    bar = ProgressBar(title, max)
+    bar.start()
+    for i in it:
+        yield i
+        bar.value += 1
+        bar.update()
+    bar.stop()
+
+###############################################################################
 
 def default_logging(debug=False):
     term = logging.StreamHandler()
