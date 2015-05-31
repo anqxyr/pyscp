@@ -10,7 +10,6 @@ import concurrent.futures
 import functools
 import itertools
 import logging
-import progress.bar
 import re
 import requests
 import urllib.parse
@@ -630,13 +629,10 @@ class SnapshotCreator:
         count = self.wiki.list_pages(body='%%total%%', limit=1)
         count = list(count)[0]['body']
         count = int(soup(count)('p')[0].text)
-        bar = progress.bar.IncrementalBar(
-            'SAVING PAGES', suffix='%(percent)d%% (%(elapsed_td)s)',
-            max=count + 1)
-        bar.next()
-        for _ in self.pool.map(self._save_page, self.wiki.list_urls()):
-            bar.next()
-        bar.finish()
+        for _ in utils.pbar(
+                self.pool.map(self._save_page, self.wiki.list_urls()),
+                'SAVING PAGES'.ljust(20), count):
+            pass
 
     @utils.ignore(ConnectorError)
     def _save_page(self, url):
@@ -668,26 +664,22 @@ class SnapshotCreator:
     def _save_forums(self):
         """Download and save standalone forum threads."""
         orm.create_tables('ForumPost', 'ForumThread', 'ForumCategory', 'User')
-        categories = [
-            i for i in self.wiki.categories()
-            if i['title'] != 'Per page discussions']
-        log.info('Saving Forum Categories.')
-        for i in categories:
-            orm.ForumCategory.create(
-                id=i['category_id'],
-                title=i['title'],
-                description=i['description'])
-        threads = (
-            i for j in categories for i in self.wiki.threads(j['category_id']))
-        for _ in self.pool.map(
-                self._save_thread, threads, itertools.count(1),
-                itertools.repeat(sum([i['threads'] for i in categories]))):
+        cats = self.wiki.categories()
+        cats = [i for i in cats if i['title'] != 'Per page discussions']
+        orm.ForumCategory.insert_many(dict(
+            id=i['category_id'],
+            title=i['title'],
+            description=i['description'])
+            for i in cats)
+        total = sum(i['threads'] for i in cats)
+        threads = itertools.chain.from_iterable(
+            self.wiki.threads(i['category_id']) for i in cats)
+        for _ in utils.pbar(
+                self.pool.map(self._save_thread, threads),
+                'SAVING FORUM THREADS'.ljust(20), total):
             pass
 
-    def _save_thread(self, thread, index=None, total=None):
-        if index:
-            log.info('Saving thread {}/{}: {}'.format(
-                index, total, thread['title']))
+    def _save_thread(self, thread):
         orm.ForumThread.create(
             id=thread['thread_id'],
             category=thread.get('category_id', None),
