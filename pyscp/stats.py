@@ -5,10 +5,11 @@
 ###############################################################################
 
 import collections
-import logging
-import pyscp
 import csv
 import json
+import logging
+import pyscp
+import re
 
 ###############################################################################
 # Global Constants And Variables
@@ -54,6 +55,12 @@ def redactions(page, acc=0):
 
 def divided(page, acc=0):
     return acc + len(page.votes) / page.rating
+
+
+def deletions(page, acc=0):
+    titles = [i.title for i in page.comments if i.parent is None]
+    titles = filter(None, titles)
+    return acc + sum(1 for i in titles if 'deletion' in i.lower())
 
 
 ###############################################################################
@@ -105,6 +112,49 @@ def group_by_votes(value, *funcs):
 
 def group_by_date(*funcs):
     return group_by('date', lambda x: x.created[:7], funcs)
+
+
+def group_by_block(*funcs):
+    def keygen(page):
+        if 'scp' not in page.tags:
+            return
+        match = re.search(r'[0-9]{3,4}$', page.url)
+        if not match:
+            return
+        match = int(match.group())
+        if match == 1:
+            return
+        return str((match // 100) * 100).zfill(3)
+    return group_by('scp_blocks', keygen, funcs)
+
+
+def group_by_canon(*funcs):
+    canon_tags = {
+        'antarctic-exchange', 'bellerverse', 'broken-masquerade',
+        'classical-revival', 'competitive-eschatology', 'etdp', 'green-king',
+        'lolfoundation', 'rats-nest', 's&c-plastics', 'sotm', 'the-gulf'}
+    return group_by('canons', lambda x: canon_tags & x.tags, funcs)
+
+
+def limit_to(name, limgen, funcs):
+
+    def limited(page, acc=None):
+        if not limgen(page):
+            return acc
+        if acc is None:
+            acc = {f.__name__: f(page) for f in funcs}
+        else:
+            acc = {f.__name__: f(page, acc[f.__name__]) for f in funcs}
+        return acc
+
+    limited.__name__ = name
+    return limited
+
+
+def limit_min_rating(*funcs, rating=20):
+    return limit_to(
+        'r>{}'.format(rating),
+        lambda x: x.rating >= rating, funcs)
 
 
 def top_urls(*funcs, num=5):
@@ -181,8 +231,15 @@ def print_records(sn):
     data = scan_pages(
         sn,
         group_by_authors(group_by_tags(*funcs, tags=tags), *funcs),
-        top_urls(redactions))
+        group_by_tags(
+            top_urls(upvotes),
+            limit_min_rating(top_urls(divided)),
+            tags=['scp', 'author']),
+        top_urls(redactions, deletions),
+        group_by_block(rating, count),
+        group_by_canon(rating, count, group_by_authors(count)))
     save_json(data)
+    #data = load_json()
     ###########################################################################
     print('Users with Most Upvotes (General):')
     for au, val in top_authors(data, 'upvotes'):
@@ -243,28 +300,76 @@ def print_records(sn):
         print(au.ljust(40), round(val, 2))
     print('------------------------------------------------------------------')
     ###########################################################################
-    print('Most Successful SCPs posted in 1 Month:')
+    print('Most Successful Articles posted in 1 Month:')
     prep = {
-        k: {i: j['count'] for i, j in v['tags']['scp']['date'].items()}
-        for k, v in data['authors'].items()
-        if 'scp' in v['tags']}
+        k: {
+            i: j['count']
+            for i, j in v['date'].items()
+            if i != '2008-07'}
+        for k, v in data['authors'].items()}
+    prep = {k: v for k, v in prep.items() if v}
     prep = {k: max(v.items(), key=lambda x: x[1]) for k, v in prep.items()}
-    for au, (date, num) in list(reversed(sorted(
-            prep.items(), key=lambda x: x[1][1])))[:5]:
+    for au, (date, num) in sorted(
+            prep.items(), key=lambda x: x[1][1], reverse=True)[:5]:
         print(au.ljust(40), num, date)
     print('------------------------------------------------------------------')
     ###########################################################################
-    'Most Divided SCP Vote (>+20):'
+    print('Most Successful SCPs posted in 1 Month:')
+    prep = {
+        k: {i: j['count']
+            for i, j in v['tags']['scp']['date'].items()
+            if i != '2008-07'}
+        for k, v in data['authors'].items()
+        if 'scp' in v['tags']}
+    prep = {k: v for k, v in prep.items() if v}
+    prep = {k: max(v.items(), key=lambda x: x[1]) for k, v in prep.items()}
+    for au, (date, num) in sorted(
+            prep.items(), key=lambda x: x[1][1], reverse=True)[:5]:
+        print(au.ljust(40), num, date)
+    print('------------------------------------------------------------------')
+    ###########################################################################
+    print('Most Divided SCP Vote (>+20):')
+    div = data['tags']['scp']['r>20']['top']['divided']
+    for url in sorted(div, key=div.get, reverse=True):
+        print(url.ljust(40), round(div[url], 2))
+    print('------------------------------------------------------------------')
+    ###########################################################################
+    print('Highest Redaction Score:')
+    print(
+        '(1 point for each █ character;',
+        '20 points for each REDACTED or EXPUNGED)')
+    red = data['top']['redactions']
+    for url in sorted(red, key=red.get, reverse=True):
+        print(url.ljust(65), red[url])
+    print('------------------------------------------------------------------')
+    ###########################################################################
+    print('Highest Block Average:')
+    blocks = {
+        k: v['rating'] / v['count'] for k, v in data['scp_blocks'].items()}
+    for block in sorted(blocks, key=blocks.get, reverse=True)[:5]:
+        print(block.ljust(40), round(blocks[block], 2))
+    print('------------------------------------------------------------------')
+    ###########################################################################
+    print('Highest Canon Average:')
+    blocks = {
+        k: v['rating'] / v['count'] for k, v in data['canons'].items()}
+    for block in sorted(blocks, key=blocks.get, reverse=True)[:5]:
+        print(block.ljust(40), round(blocks[block], 2))
+    print('------------------------------------------------------------------')
+    ###########################################################################
+    print('Most Diverse Canons:')
+    blocks = {
+        k: len(v['authors']) for k, v in data['canons'].items()}
+    for block in sorted(blocks, key=blocks.get, reverse=True)[:5]:
+        print(block.ljust(40), round(blocks[block], 2))
+    print('------------------------------------------------------------------')
+    ###########################################################################
+    print('Largest Canons:')
+    blocks = {
+        k: v['count'] for k, v in data['canons'].items()}
+    for block in sorted(blocks, key=blocks.get, reverse=True)[:5]:
+        print(block.ljust(40), round(blocks[block], 2))
 
-    #    print('Most pages in a month ({}):'.format(description))
-    #    monthly = {
-    #        k: max(
-    #            [(i, v[i]['count']) for i in v],
-    #            key=lambda x: x[1])
-    #        for k, v in get_subtree(data, 'date', tag).items()}
-    #    for author, _ in collections.Counter(
-    #            {k: v[1] for k, v in monthly.items()}).most_common(5):
-    #        print('{0:40} {2} ({1})'.format(author + ':', *monthly[author]))
 
 
 def save_json(data):
