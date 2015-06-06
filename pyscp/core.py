@@ -806,7 +806,7 @@ class SnapshotPageAdapter:
 
     def get_tags(self):
         """Return the set of tags with which the page is tagged."""
-        return [pt.tag.name for pt in self._query('PageTag', 'Tag')]
+        return {pt.tag.name for pt in self._query('PageTag', 'Tag')}
 
     def get_posts(self):
         """
@@ -839,7 +839,6 @@ class Page:
         self.url = url.lower()
         self.cn = connector
         self.adapter = connector.adapter(self)
-        self.comments = self.posts  # alias
 
     def __repr__(self):
         return "{}({}, {})".format(
@@ -891,6 +890,10 @@ class Page:
     ###########################################################################
     # Properties
     ###########################################################################
+
+    @property
+    def comments(self):
+        return self.posts
 
     @property
     def text(self):
