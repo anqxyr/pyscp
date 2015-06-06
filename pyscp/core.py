@@ -422,7 +422,6 @@ class WikidotPageAdapter:
     - history
     - votes
     - tags
-    - posts
     - source
 
     """
@@ -731,7 +730,6 @@ class SnapshotPageAdapter:
     - history
     - votes
     - tags
-    - posts
 
     """
 
@@ -744,7 +742,11 @@ class SnapshotPageAdapter:
     @utils.morph(orm.peewee.DoesNotExist, ConnectorError)
     def get_page_id(self):
         """Retrieve the id of the page."""
-        return orm.Page.get(orm.Page.url == self.page.url).id
+        query = (
+            orm.Page
+            .select(orm.Page.id)
+            .where(orm.Page.url == self.page.url))
+        return query.get().id
 
     def get_thread_id(self):
         """
@@ -752,10 +754,7 @@ class SnapshotPageAdapter:
 
         If the page has no comments, returns None.
         """
-        try:
-            return orm.Page.get(orm.Page.id == self.page.page_id).thread.id
-        except AttributeError:
-            return None
+        return orm.Page.get(orm.Page.id == self.page.page_id)._data['thread']
 
     def get_html(self):
         """
@@ -765,8 +764,11 @@ class SnapshotPageAdapter:
 
     def get_history(self):
         """Return the revisions of the page."""
-        for revision in orm.Page.get(
-                orm.Page.id == self.page.page_id).revisions:
+        for revision in (
+                orm.Revision
+                .select(orm.Revision, orm.User.name)
+                .join(orm.User)
+                .where(orm.Revision.page == self.page.page_id)):
             yield dict(
                 revision_id=revision.id,
                 page_id=self.page.page_id,
@@ -777,7 +779,11 @@ class SnapshotPageAdapter:
 
     def get_votes(self):
         """Return all votes made on the page."""
-        for vote in orm.Page.get(orm.Page.id == self.page.page_id).votes:
+        for vote in (
+                orm.Vote
+                .select(orm.Vote, orm.User.name)
+                .join(orm.User)
+                .where(orm.Vote.page == self.page.page_id)):
             yield dict(
                 page_id=self.page.page_id,
                 user=vote.user.name,
@@ -785,13 +791,25 @@ class SnapshotPageAdapter:
 
     def get_tags(self):
         """Return the set of tags with which the page is tagged."""
-        for tag in orm.Page.get(orm.Page.id == self.page.page_id).tags:
-            yield tag.tag.name
+        for pagetag in (
+                orm.PageTag
+                .select(orm.PageTag, orm.Tag.name)
+                .join(orm.Tag)
+                .where(orm.PageTag.page == self.page.page_id)):
+            yield pagetag.tag.name
 
     def get_posts(self):
-        """Return """
-        for post in orm.ForumThread.get(
-                orm.ForumThread.id == self.page.thread_id).posts:
+        """
+        Return the page comments.
+
+        This is also the only Adapter method to work on ForumThread objects,
+        for which it returns the posts contained in the forum thread.
+        """
+        for post in (
+                orm.ForumPost
+                .select(orm.ForumPost, orm.User.name)
+                .join(orm.User)
+                .where(orm.ForumPost.thread == self.page.thread_id)):
             yield dict(
                 thread_id=self.page.thread_id,
                 post_id=post.id,
@@ -799,7 +817,7 @@ class SnapshotPageAdapter:
                 content=post.content,
                 user=post.user.name,
                 time=str(post.time),
-                parent=post.parent)
+                parent=post._data['parent'])
 
 
 class Page:
@@ -903,7 +921,7 @@ class Page:
             'ForumPost', 'post_id thread_id parent title user time content')
         return [
             post(**i) for i in
-            sorted(self.aapter.get_posts(), key=lambda x: x['time'])]
+            sorted(self.adapter.get_posts(), key=lambda x: x['time'])]
 
     ###########################################################################
     # Derived Properties
@@ -994,10 +1012,14 @@ class Page:
         self._cn._set_vote(self, -1, force)
         self._flush('votes')
 
+###############################################################################
+# Value Containers
+###############################################################################
 
 ###############################################################################
 # Helper Functions
 ###############################################################################
+
 
 def full_url(url):
     """Return the url with any missing segments filled in."""
