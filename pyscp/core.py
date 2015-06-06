@@ -402,6 +402,34 @@ class WikidotConnector:
                 yield self._module(name, **kwargs)
 
 
+class WikidotPageAdapter:
+
+    """
+    Retrieve data about the page.
+
+    Page Adapters are used by the Page class to gain information pertaining to
+    a specific page. They request raw data from their respective Connectors and
+    format it in a manner that is expected by the Page class.
+
+    The Adapters are also responsible for caching and any other optimizations,
+    depending on the connector.
+
+    This class supports the following fields:
+
+    - page_id
+    - thread_id
+    - html
+    - history
+    - votes
+    - tags
+    - posts
+    - source
+
+    """
+
+    pass
+
+
 class SnapshotConnector:
 
     """
@@ -410,7 +438,8 @@ class SnapshotConnector:
     def __init__(self, site, dbpath):
         self.site = full_url(site)
         self.dbpath = dbpath
-        orm.connect(self.dbpath)
+        self.adapter = functools.partial(SnapshotPageAdapter, self)
+        orm.connect(dbpath)
 
     def __call__(self, url):
         return Page(url, self)
@@ -420,61 +449,6 @@ class SnapshotConnector:
             self.__class__.__name__,
             repr(self.site.replace('http://', '')),
             repr(self.dbpath))
-
-    ###########################################################################
-    # Connector Page API
-    ###########################################################################
-
-    _morph_DNE = utils.morph(orm.peewee.DoesNotExist, ConnectorError)
-
-    @_morph_DNE
-    def _page_id(self, url, html):
-        return orm.Page.get(orm.Page.url == url).id
-
-    @_morph_DNE
-    def _thread_id(self, page_id, html):
-        try:
-            return orm.Page.get(orm.Page.id == page_id).thread.id
-        except AttributeError:
-            return None
-
-    @_morph_DNE
-    def _html(self, url):
-        return orm.Page.get(orm.Page.url == url).html
-
-    @_morph_DNE
-    def _history(self, page_id):
-        for revision in orm.Page.get(orm.Page.id == page_id).revisions:
-            yield dict(
-                revision_id=revision.id,
-                page_id=page_id,
-                number=revision.number,
-                user=revision.user.name,
-                time=str(revision.time),
-                comment=revision.comment)
-
-    @_morph_DNE
-    def _votes(self, page_id):
-        for vote in orm.Page.get(orm.Page.id == page_id).votes:
-            yield dict(page_id=page_id, user=vote.user.name, value=vote.value)
-
-    @_morph_DNE
-    def _tags(self, page_id, html):
-        for tag in orm.Page.get(orm.Page.id == page_id).tags:
-            yield tag.tag.name
-
-    ###########################################################################
-
-    def _posts(self, thread_id):
-        for post in orm.ForumThread.get(orm.ForumThread.id == thread_id).posts:
-            yield dict(
-                thread_id=thread_id,
-                post_id=post.id,
-                title=post.title,
-                content=post.content,
-                user=post.user.name,
-                time=str(post.time),
-                parent=post.parent)
 
     ###########################################################################
     # Connector Public API
@@ -583,7 +557,7 @@ class SnapshotConnector:
 class SnapshotCreator:
 
     """
-    Create snapshots of wikidot sites.
+    Create a snapshot of a wikidot site.
 
     This class uses WikidotConnector to iterate over all the pages of a site,
     and save the html content, revision history, votes, and the discussion
@@ -742,6 +716,92 @@ class SnapshotCreator:
                 table.write_ids(field_name)
 
 
+class SnapshotPageAdapter:
+
+    """
+    Retrieve data about the page.
+
+    See the documentation for the WikidotPageAdapter for more details.
+
+    This class supports the following fields:
+
+    - page_id
+    - thread_id
+    - html
+    - history
+    - votes
+    - tags
+    - posts
+
+    """
+
+    def __init__(self, connector, page):
+        self.cn = connector
+        self.page = page
+
+    # Only need to morph this methods, because *all* other methods
+    # will eventually call it, and then the exception will bubble up.
+    @utils.morph(orm.peewee.DoesNotExist, ConnectorError)
+    def get_page_id(self):
+        """Retrieve the id of the page."""
+        return orm.Page.get(orm.Page.url == self.page.url).id
+
+    def get_thread_id(self):
+        """
+        Retrieve the id of the comments thread of the page.
+
+        If the page has no comments, returns None.
+        """
+        try:
+            return orm.Page.get(orm.Page.id == self.page.page_id).thread.id
+        except AttributeError:
+            return None
+
+    def get_html(self):
+        """
+        Retrieve the html source of the page.
+        """
+        return orm.Page.get(orm.Page.id == self.page.id).html
+
+    def get_history(self):
+        """Return the revisions of the page."""
+        for revision in orm.Page.get(
+                orm.Page.id == self.page.page_id).revisions:
+            yield dict(
+                revision_id=revision.id,
+                page_id=self.page.page_id,
+                number=revision.number,
+                user=revision.user.name,
+                time=str(revision.time),
+                comment=revision.comment)
+
+    def get_votes(self):
+        """Return all votes made on the page."""
+        for vote in orm.Page.get(orm.Page.id == self.page.page_id).votes:
+            yield dict(
+                page_id=self.page.page_id,
+                user=vote.user.name,
+                value=vote.value)
+
+    def get_tags(self):
+        """Return the set of tags with which the page is tagged."""
+        for tag in orm.Page.get(orm.Page.id == self.page.page_id).tags:
+            yield tag.tag.name
+
+    def get_posts(self):
+        """Return """
+        for post in orm.ForumThread.get(
+                orm.ForumThread.id == self.page.thread_id).posts:
+            yield dict(
+                thread_id=self.page.thread_id,
+                post_id=post.id,
+                title=post.title,
+                content=post.content,
+                user=post.user.name,
+                time=str(post.time),
+                parent=post.parent)
+
+
 class Page:
 
     """ """
@@ -754,13 +814,14 @@ class Page:
         if connector.site not in url:
             url = '{}/{}'.format(connector.site, url)
         self.url = url.lower()
-        self._cn = connector
+        self.cn = connector
+        self.adapter = connector.adapter(self)
 
     def __repr__(self):
         return "{}({}, {})".format(
             self.__class__.__name__,
-            repr(self.url.replace(self._cn.site, '').lstrip('/')),
-            self._cn)
+            repr(self.url.replace(self.cn.site, '').lstrip('/')),
+            self.cn)
 
     ###########################################################################
     # Internal Methods
@@ -802,23 +863,23 @@ class Page:
 
     @cached_property
     def page_id(self):
-        return self._cn._page_id(self.url, self.html)
+        return self.adapter.get_page_id()
 
     @cached_property
     def thread_id(self):
-        return self._cn._thread_id(self.page_id, self.html)
+        return self.adapter.get_thread_id()
 
     @cached_property
     def html(self):
-        return self._cn._html(self.url)
+        return self.adapter.get_html()
 
     @cached_property
     def source(self):
-        return self._cn._source(self.page_id)
+        return self.adapter.get_source()
 
     @cached_property
     def history(self):
-        data = self._cn._history(self.page_id)
+        data = self.adapter.get_history()
         Revision = collections.namedtuple(
             'Revision', 'revision_id page_id number user time comment')
         history = [Revision(**i) for i in data]
@@ -826,13 +887,13 @@ class Page:
 
     @cached_property
     def votes(self):
-        data = self._cn._votes(self.page_id)
+        data = self.adapter.get_votes()
         Vote = collections.namedtuple('Vote', 'page_id user value')
         return [Vote(**i) for i in data]
 
     @cached_property
     def tags(self):
-        return set(self._cn._tags(self.page_id, self.html))
+        return set(self.adapter.get_tags())
 
     @cached_property
     def comments(self):
@@ -842,7 +903,7 @@ class Page:
             'ForumPost', 'post_id thread_id parent title user time content')
         return [
             post(**i) for i in
-            sorted(self._cn._posts(self.thread_id), key=lambda x: x['time'])]
+            sorted(self.aapter.get_posts(), key=lambda x: x['time'])]
 
     ###########################################################################
     # Derived Properties
@@ -864,7 +925,7 @@ class Page:
     def title(self):
         if 'scp' in self.tags and re.search('[scp]+-[0-9]+$', self.url):
             return '{}: {}'.format(
-                self._onpage_title, self._scp_titles(self._cn)[self.url])
+                self._onpage_title, self._scp_titles(self.cn)[self.url])
         return self._onpage_title
 
     @property
@@ -873,7 +934,7 @@ class Page:
 
     @property
     def author(self):
-        for item in self._cn.rewrites():
+        for item in self.cn.rewrites():
             if item['url'] == self.url and item['status'] == 'override':
                 return item['author']
         return self.history[0].user
