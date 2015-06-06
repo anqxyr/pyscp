@@ -10,12 +10,12 @@ import concurrent.futures
 import functools
 import itertools
 import logging
+import operator
 import re
 import requests
 import urllib.parse
 
 from bs4 import BeautifulSoup as soup
-from cached_property import cached_property
 from pyscp import orm, utils
 
 ###############################################################################
@@ -730,6 +730,7 @@ class SnapshotPageAdapter:
     - history
     - votes
     - tags
+    - posts
 
     """
 
@@ -794,27 +795,18 @@ class SnapshotPageAdapter:
 
     def get_history(self):
         """Return the revisions of the page."""
-        for revision in self._query('Revision'):
-            yield dict(
-                revision_id=revision.id,
-                page_id=self.page.page_id,
-                number=revision.number,
-                user=revision.user.name,
-                time=str(revision.time),
-                comment=revision.comment)
+        revs = sorted(
+            self._query('Revision'), key=operator.attrgetter('number'))
+        return [Revision(r.id, r.number, r.user.name, str(r.time), r.comment)
+                for r in revs]
 
     def get_votes(self):
         """Return all votes made on the page."""
-        for vote in self._query('Vote'):
-            yield dict(
-                page_id=self.page.page_id,
-                user=vote.user.name,
-                value=vote.value)
+        return [Vote(v.user.name, v.value) for v in self._query('Vote')]
 
     def get_tags(self):
         """Return the set of tags with which the page is tagged."""
-        for pagetag in self._query('PageTag', 'Tag'):
-            yield pagetag.tag.name
+        return [pt.tag.name for pt in self._query('PageTag', 'Tag')]
 
     def get_posts(self):
         """
@@ -823,15 +815,14 @@ class SnapshotPageAdapter:
         This is also the only Adapter method to work on ForumThread objects,
         for which it returns the posts contained in the forum thread.
         """
-        for post in self._query('ForumPost', key='thread'):
-            yield dict(
-                thread_id=self.page.thread_id,
-                post_id=post.id,
-                title=post.title,
-                content=post.content,
-                user=post.user.name,
-                time=str(post.time),
-                parent=post._data['parent'])
+        return [ForumPost(
+                p.id, p.title, p.content, p.user.name,
+                str(p.time), p._data['parent'])
+                for p in self._query('ForumPost', key='thread')]
+
+    def get_source(self):
+        """Raise NotImplementedError."""
+        raise NotImplementedError('Snapshots do not store the source.')
 
 
 class Page:
@@ -848,12 +839,20 @@ class Page:
         self.url = url.lower()
         self.cn = connector
         self.adapter = connector.adapter(self)
+        self.comments = self.posts  # alias
 
     def __repr__(self):
         return "{}({}, {})".format(
             self.__class__.__name__,
             repr(self.url.replace(self.cn.site, '').lstrip('/')),
             self.cn)
+
+    def __getattr__(self, name):
+        if name not in (
+                'page_id', 'thread_id', 'html', 'source',
+                'history', 'votes', 'tags', 'posts'):
+            raise AttributeError
+        return getattr(self.adapter, 'get_' + name)()
 
     ###########################################################################
     # Internal Methods
@@ -890,55 +889,7 @@ class Page:
         return title.text.strip() if title else ''
 
     ###########################################################################
-    # Core Properties
-    ###########################################################################
-
-    @property
-    def page_id(self):
-        return self.adapter.get_page_id()
-
-    @property
-    def thread_id(self):
-        return self.adapter.get_thread_id()
-
-    @property
-    def html(self):
-        return self.adapter.get_html()
-
-    @property
-    def source(self):
-        return self.adapter.get_source()
-
-    @property
-    def history(self):
-        data = self.adapter.get_history()
-        Revision = collections.namedtuple(
-            'Revision', 'revision_id page_id number user time comment')
-        history = [Revision(**i) for i in data]
-        return list(sorted(history, key=lambda x: x.number))
-
-    @property
-    def votes(self):
-        data = self.adapter.get_votes()
-        Vote = collections.namedtuple('Vote', 'page_id user value')
-        return [Vote(**i) for i in data]
-
-    @property
-    def tags(self):
-        return set(self.adapter.get_tags())
-
-    @property
-    def comments(self):
-        if not self.thread_id:
-            return []
-        post = collections.namedtuple(
-            'ForumPost', 'post_id thread_id parent title user time content')
-        return [
-            post(**i) for i in
-            sorted(self.adapter.get_posts(), key=lambda x: x['time'])]
-
-    ###########################################################################
-    # Derived Properties
+    # Properties
     ###########################################################################
 
     @property
@@ -1027,8 +978,13 @@ class Page:
         self._flush('votes')
 
 ###############################################################################
-# Value Containers
+# Simple Containers
 ###############################################################################
+
+Revision = collections.namedtuple('Revision', 'id number user time comment')
+Vote = collections.namedtuple('Vote', 'user value')
+ForumPost = collections.namedtuple(
+    'ForumPost', 'id title content user time parent')
 
 ###############################################################################
 # Helper Functions
