@@ -737,6 +737,21 @@ class SnapshotPageAdapter:
         self.cn = connector
         self.page = page
 
+    ###########################################################################
+    # Private Methods
+    ###########################################################################
+
+    def _query(self, primary_table, secondary_table='User', key='page'):
+        """Generate SQL queries used to retrieve data."""
+        pt = getattr(orm, primary_table)
+        st = getattr(orm, secondary_table)
+        return pt.select(pt, st.name).join(st).where(
+            getattr(pt, key) == getattr(self.page, key + '_id'))
+
+    ###########################################################################
+    # Public Methods
+    ###########################################################################
+
     # Only need to morph this methods, because *all* other methods
     # will eventually call it, and then the exception will bubble up.
     @utils.morph(orm.peewee.DoesNotExist, ConnectorError)
@@ -764,11 +779,7 @@ class SnapshotPageAdapter:
 
     def get_history(self):
         """Return the revisions of the page."""
-        for revision in (
-                orm.Revision
-                .select(orm.Revision, orm.User.name)
-                .join(orm.User)
-                .where(orm.Revision.page == self.page.page_id)):
+        for revision in self._query('Revision'):
             yield dict(
                 revision_id=revision.id,
                 page_id=self.page.page_id,
@@ -779,11 +790,7 @@ class SnapshotPageAdapter:
 
     def get_votes(self):
         """Return all votes made on the page."""
-        for vote in (
-                orm.Vote
-                .select(orm.Vote, orm.User.name)
-                .join(orm.User)
-                .where(orm.Vote.page == self.page.page_id)):
+        for vote in self._query('Vote'):
             yield dict(
                 page_id=self.page.page_id,
                 user=vote.user.name,
@@ -791,11 +798,7 @@ class SnapshotPageAdapter:
 
     def get_tags(self):
         """Return the set of tags with which the page is tagged."""
-        for pagetag in (
-                orm.PageTag
-                .select(orm.PageTag, orm.Tag.name)
-                .join(orm.Tag)
-                .where(orm.PageTag.page == self.page.page_id)):
+        for pagetag in self._query('PageTag', 'Tag'):
             yield pagetag.tag.name
 
     def get_posts(self):
@@ -805,11 +808,7 @@ class SnapshotPageAdapter:
         This is also the only Adapter method to work on ForumThread objects,
         for which it returns the posts contained in the forum thread.
         """
-        for post in (
-                orm.ForumPost
-                .select(orm.ForumPost, orm.User.name)
-                .join(orm.User)
-                .where(orm.ForumPost.thread == self.page.thread_id)):
+        for post in self._query('ForumPost', key='thread'):
             yield dict(
                 thread_id=self.page.thread_id,
                 post_id=post.id,
