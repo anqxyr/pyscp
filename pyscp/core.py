@@ -741,27 +741,42 @@ class SnapshotPageAdapter:
     # Private Methods
     ###########################################################################
 
+    @functools.lru_cache(maxsize=4)
     def _query(self, primary_table, secondary_table='User', key='page'):
         """Generate SQL queries used to retrieve data."""
         pt = getattr(orm, primary_table)
         st = getattr(orm, secondary_table)
         return pt.select(pt, st.name).join(st).where(
-            getattr(pt, key) == getattr(self.page, key + '_id'))
+            getattr(pt, key) == getattr(self.page, key + '_id')).execute()
+
+    # Only need to morph this methods, because *all* other methods
+    # will eventually call it, and then the exception will bubble up.
+    @utils.morph(orm.peewee.DoesNotExist, ConnectorError)
+    @functools.lru_cache(maxsize=1)
+    def _load_page(self):
+        """
+        Retrieve the contents of the Page table.
+
+        Returns a tuple consisting of the id of the page, id of the comment
+        thread, and the html string.The tuple is saved via lru_cache, and the
+        individual get_ methods then take whichever part of the tuple they
+        need.
+
+        The idea here is that most of the time, you will be needing all three
+        of those, so it's better to get them all in a single query. This also
+        mirrors the behavious of WikidotPageAdapter, which does a similar
+        thing for very different reason.
+        """
+        page = orm.Page.get(orm.Page.url == self.page.url)
+        return (page.id, page._data['thread'], page.html)
 
     ###########################################################################
     # Public Methods
     ###########################################################################
 
-    # Only need to morph this methods, because *all* other methods
-    # will eventually call it, and then the exception will bubble up.
-    @utils.morph(orm.peewee.DoesNotExist, ConnectorError)
     def get_page_id(self):
         """Retrieve the id of the page."""
-        query = (
-            orm.Page
-            .select(orm.Page.id)
-            .where(orm.Page.url == self.page.url))
-        return query.get().id
+        return self._load_page()[0]
 
     def get_thread_id(self):
         """
@@ -769,13 +784,13 @@ class SnapshotPageAdapter:
 
         If the page has no comments, returns None.
         """
-        return orm.Page.get(orm.Page.id == self.page.page_id)._data['thread']
+        return self._load_page()[1]
 
     def get_html(self):
         """
         Retrieve the html source of the page.
         """
-        return orm.Page.get(orm.Page.id == self.page.id).html
+        return self._load_page()[2]
 
     def get_history(self):
         """Return the revisions of the page."""
@@ -878,23 +893,23 @@ class Page:
     # Core Properties
     ###########################################################################
 
-    @cached_property
+    @property
     def page_id(self):
         return self.adapter.get_page_id()
 
-    @cached_property
+    @property
     def thread_id(self):
         return self.adapter.get_thread_id()
 
-    @cached_property
+    @property
     def html(self):
         return self.adapter.get_html()
 
-    @cached_property
+    @property
     def source(self):
         return self.adapter.get_source()
 
-    @cached_property
+    @property
     def history(self):
         data = self.adapter.get_history()
         Revision = collections.namedtuple(
@@ -902,17 +917,17 @@ class Page:
         history = [Revision(**i) for i in data]
         return list(sorted(history, key=lambda x: x.number))
 
-    @cached_property
+    @property
     def votes(self):
         data = self.adapter.get_votes()
         Vote = collections.namedtuple('Vote', 'page_id user value')
         return [Vote(**i) for i in data]
 
-    @cached_property
+    @property
     def tags(self):
         return set(self.adapter.get_tags())
 
-    @cached_property
+    @property
     def comments(self):
         if not self.thread_id:
             return []
