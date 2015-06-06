@@ -11,6 +11,7 @@ import functools
 import itertools
 import logging
 import operator
+import pathlib
 import re
 import requests
 import urllib.parse
@@ -435,6 +436,8 @@ class SnapshotConnector:
     """
 
     def __init__(self, site, dbpath):
+        if not pathlib.Path(dbpath).exists():
+            raise FileNotFoundError(dbpath)
         self.site = full_url(site)
         self.dbpath = dbpath
         self.adapter = functools.partial(SnapshotPageAdapter, self)
@@ -573,6 +576,8 @@ class SnapshotCreator:
     """
 
     def __init__(self, site, dbpath):
+        if pathlib.Path(dbpath).exists():
+            raise FileExistsError(dbpath)
         self.site = full_url(site)
         orm.connect(dbpath)
         self.wiki = WikidotConnector(site)
@@ -765,7 +770,7 @@ class SnapshotPageAdapter:
 
         The idea here is that most of the time, you will be needing all three
         of those, so it's better to get them all in a single query. This also
-        mirrors the behavious of WikidotPageAdapter, which does a similar
+        mirrors the behavior of WikidotPageAdapter, which does a similar
         thing for very different reason.
         """
         page = orm.Page.get(orm.Page.url == self.page.url)
