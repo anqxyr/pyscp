@@ -5,6 +5,7 @@
 ###############################################################################
 
 import arrow
+import bs4
 import collections
 import concurrent.futures
 import functools
@@ -16,7 +17,6 @@ import re
 import requests
 import urllib.parse
 
-from bs4 import BeautifulSoup as soup
 from pyscp import orm, utils
 
 ###############################################################################
@@ -94,6 +94,7 @@ class WikidotConnector:
     def __init__(self, site):
         self.site = full_url(site)
         self.req = InsistentRequest()
+        self.adapter = functools.partial(WikidotPageAdapter, self)
 
     def __call__(self, url):
         """Convinience method to quickly create Page instances."""
@@ -103,67 +104,6 @@ class WikidotConnector:
         return "{}({})".format(
             self.__class__.__name__,
             repr(self.site[7:].replace('.wikidot.com', '')))
-
-    ###########################################################################
-    # Connector Page API
-    ###########################################################################
-
-    handle_errors = utils.decochain(
-        utils.morph(requests.RequestException, ConnectorError),
-        utils.log_errors(log.warning))
-
-    def _page_id(self, url, html):
-        return int(re.search('pageId = ([0-9]+);', html).group(1))
-
-    @utils.ignore((IndexError, TypeError))
-    def _thread_id(self, page_id, html):
-        href = soup(html).find(id='discuss-button')['href']
-        return int(utils.split(href, '/-')[3])
-
-    @handle_errors
-    def _html(self, url):
-        """Return the full html of the page."""
-        return self.req.get(url).text
-
-    def _source(self, page_id):
-        """Return wikidot markup of the source."""
-        data = self._module(
-            'viewsource/ViewSourceModule',
-            page_id=page_id)['body']
-        return soup(data).text[11:].strip().replace(chr(160), ' ')
-
-    def _history(self, page_id):
-        """Yield revision history."""
-        data = self._module(
-            'history/PageRevisionListModule',
-            page_id=page_id,
-            page=1,
-            perpage=1000000)['body']
-        for row in reversed(soup(data)('tr')[1:]):
-            cells = row('td')
-            yield dict(
-                revision_id=int(row['id'].split('-')[2]),
-                page_id=page_id,
-                number=int(cells[0].text.strip('.')),
-                user=cells[4].text,
-                time=parse_time(cells[5]),
-                comment=cells[6].text)
-
-    def _votes(self, page_id):
-        """Yield votes."""
-        data = self._module(
-            'pagerate/WhoRatedPageModule',
-            page_id=page_id)['body']
-        spans = [i.text.strip() for i in soup(data)('span')]
-        for user, value in zip(spans[::2], spans[1::2]):
-            yield dict(
-                page_id=page_id,
-                user=user,
-                value=1 if value == '+' else -1)
-
-    def _tags(self, page_id, html):
-        for elem in soup(html).select('.page-tags a'):
-            yield elem.text
 
     ###########################################################################
 
@@ -195,20 +135,6 @@ class WikidotConnector:
                             event='ratePage' if value else 'cancelVote',
                             points=value,
                             force='yes' if force else '')
-
-    ###########################################################################
-
-    def _posts(self, thread_id):
-        """Download and parse the contents of the forum thread."""
-        if thread_id is None:
-            return
-        for page in self._pager('forum/ForumViewThreadPostsModule',
-                                lambda x: dict(pageNo=x), t=thread_id):
-            if 'body' not in page:
-                raise ConnectorError(page['message'])
-            for post in self._parse_thread(page['body']):
-                post.update(thread_id=thread_id)
-                yield post
 
     def reply_to(self, thread_id, post_id, source, title):
         """Make a new post in the given thread."""
@@ -349,7 +275,8 @@ class WikidotConnector:
     # Internal Methods
     ###########################################################################
 
-    @handle_errors
+    @utils.morph(requests.RequestException, ConnectorError)
+    @utils.log_errors(log.warning)
     def _module(self, name, **kwargs):
         """
         Call a Wikidot module.
@@ -374,29 +301,11 @@ class WikidotConnector:
         return self._module('Empty', action='WikiPageAction',
                             page_id=page_id, event=event, **kwargs)
 
-    def _parse_thread(self, html):
-        for elem in soup(html)(class_='post'):
-            granpa = elem.parent.parent
-            if 'post-container' in granpa.get('class', ''):
-                parent = granpa.find(class_='post')['id'].split('-')[1]
-            else:
-                parent = None
-            title = elem.find(class_='title').text.strip()
-            content = elem.find(class_='content')
-            content.attrs.clear()
-            yield dict(
-                post_id=int(elem['id'].split('-')[1]),
-                title=title if title else None,
-                content=str(content),
-                user=elem.find(class_='printuser').text,
-                time=parse_time(elem),
-                parent=int(parent) if parent else None)
-
     def _pager(self, name, _next, **kwargs):
         """Iterate over multi-page module results."""
         first_page = self._module(name, **kwargs)
         yield first_page
-        counter = soup(first_page['body']).find(class_='pager-no')
+        counter = bs4.BeautifulSoup(first_page['body']).find(class_='pager-no')
         if counter:
             for index in range(2, int(counter.text.split(' ')[-1]) + 1):
                 kwargs.update(_next(index))
@@ -427,7 +336,140 @@ class WikidotPageAdapter:
 
     """
 
-    pass
+    def __init__(self, connector, page):
+        self.cn = connector
+        self.page = page
+
+    ###########################################################################
+    # Private Methods
+    ###########################################################################
+
+    @utils.morph(requests.RequestException, ConnectorError)
+    @utils.log_errors(log.warning)
+    @functools.lru_cache(maxsize=1)
+    def _load_page(self):
+        """
+        Download the page and extract data from the html.
+
+        Returns a tuple consisting of the id of the page, id of the comment
+        thread, stripped-down html string, and a set of tags. The tuple is
+        saved via lru_cache, and the individual get_ methods can then 
+        take the parts of the tuple they need.
+        """
+        html = self.cn.req.get(self.page.url).text
+        page_id = int(re.search('pageId = ([0-9]+);', html).group(1))
+        soup = bs4.BeautifulSoup(html)
+        href = soup.find(id='discuss-button')['href']
+        thread_id = int(href.split('/')[2].split('-')[1])
+        tags = {e.text for e in soup.select('.page-tags a')}
+        clean_html = str(soup.find(id='main-content'))
+        return (page_id, thread_id, clean_html, tags)
+
+    @staticmethod
+    def _parse_time(element):
+        """Extract and format time from an html element."""
+        unixtime = element.find(class_='odate')['class'][1].split('_')[1]
+        return arrow.get(unixtime).format('YYYY-MM-DD HH:mm:ss')
+
+    @staticmethod
+    def _crawl_posts(post_containers, parent=None):
+        """
+        Retrieve posts from the comment tree.
+
+        For each post-container in the given list, returns a tuple of
+        (post, parent). Then recurses onto all the post-container children
+        of the current post-container.
+        """
+        for container in post_containers:
+            yield container.find(class_='post'), parent
+            yield from WikidotPageAdapter._crawl_posts(
+                container(class_='post-container', recursive=False),
+                int(container['id'].split('-')[1]))
+
+    ###########################################################################
+    # Public Methods
+    ###########################################################################
+
+    def get_page_id(self):
+        """Return the id of the page."""
+        return self._load_page()[0]
+
+    def get_thread_id(self):
+        """Return the id of the discussion thread."""
+        return self._load_page()[1]
+
+    def get_html(self):
+        """Return the html source of the page."""
+        return self._load_page()[2]
+
+    @functools.lru_cache(maxsize=1)
+    @utils.listify()
+    def get_history(self):
+        """Return the revision history of the page."""
+        data = self.cn._module(
+            'history/PageRevisionListModule',
+            page_id=self.page.page_id,
+            page=1,
+            perpage=99999)['body']
+        soup = bs4.BeautifulSoup(data)
+        for row in reversed(soup('tr')[1:]):
+            rev_id = int(row['id'].split('-')[-1])
+            cells = row('td')
+            number = int(cells[0].text.strip('.'))
+            user = cells[4].text
+            time = self._parse_time(cells[5])
+            comment = cells[6].text
+            if not comment:
+                comment = None
+            yield Revision(rev_id, number, user, time, comment)
+
+    @functools.lru_cache(maxsize=1)
+    def get_votes(self):
+        """Return all votes made on the page."""
+        data = self.cn._module(
+            'pagerate/WhoRatedPageModule',
+            page_id=self.page.page_id)['body']
+        soup = bs4.BeautifulSoup(data)
+        spans = [i.text.strip() for i in soup('span')]
+        pairs = zip(spans[::2], spans[1::2])
+        return [Vote(user=u, value=1 if v == '+' else -1) for u, v in pairs]
+
+    def get_tags(self):
+        return self._load_page()[3]
+
+    @functools.lru_cache(maxsize=1)
+    @utils.listify()
+    def get_posts(self):
+        """Download and parse the contents of the forum thread."""
+        if self.page.thread_id is None:
+            return
+        pages = self.cn._pager(
+            'forum/ForumViewThreadPostsModule',
+            lambda x: dict(pageNo=x),
+            t=self.page.thread_id)
+        pages = [bs4.BeautifulSoup(p['body']).body for p in pages]
+        posts = [p(class_='post-container', recursive=False) for p in pages]
+        posts = itertools.chain.from_iterable(posts)
+        for post, parent in self._crawl_posts(list(posts)):
+            post_id = int(post['id'].split('-')[1])
+            title = post.find(class_='title').text.strip()
+            if not title:
+                title = None
+            content = post.find(class_='content')
+            content.attrs.clear()
+            content = str(content)
+            user = post.find(class_='printuser').text
+            time = self._parse_time(post)
+            yield ForumPost(post_id, title, content, user, time, parent)
+
+    @functools.lru_cache(maxsize=1)
+    def get_source(self):
+        """Return wikidot markup of the source."""
+        data = self.cn._module(
+            'viewsource/ViewSourceModule',
+           page_id=self.page.page_id)['body']
+        bs4.BeautifulSoup(data)
+        return soup.text[11:].strip().replace(chr(160), ' ')
 
 
 class SnapshotConnector:
@@ -761,7 +803,7 @@ class SnapshotPageAdapter:
     @functools.lru_cache(maxsize=1)
     def _load_page(self):
         """
-        Retrieve the contents of the Page table.
+        Retrieve the contents of the page.
 
         Returns a tuple consisting of the id of the page, id of the comment
         thread, and the html string.The tuple is saved via lru_cache, and the
@@ -842,8 +884,8 @@ class Page:
         if connector.site not in url:
             url = '{}/{}'.format(connector.site, url)
         self.url = url.lower()
-        self.cn = connector
-        self.adapter = connector.adapter(self)
+        self._cn = connector
+        self._adapter = connector.adapter(self)
 
     def __repr__(self):
         return "{}({}, {})".format(
@@ -852,20 +894,21 @@ class Page:
             self.cn)
 
     def __getattr__(self, name):
-        if name not in (
+        if name not in (  # this has saved 85 lines of boilerplate defs
                 'page_id', 'thread_id', 'html', 'source',
                 'history', 'votes', 'tags', 'posts'):
             raise AttributeError
-        return getattr(self.adapter, 'get_' + name)()
+        return getattr(self._adapter, 'get_' + name)()
 
     ###########################################################################
     # Internal Methods
     ###########################################################################
 
     def _flush(self, *properties):
-        for i in properties:
-            if i in self._cache:
-                del self._cache[i]
+        pass
+        #for i in properties:
+        #    if i in self._cache:
+        #        del self._cache[i]
 
     @classmethod
     @functools.lru_cache()
@@ -1008,10 +1051,7 @@ def full_url(url):
     return urllib.parse.urlunparse(['http', netloc, '', '', '', ''])
 
 
-def parse_time(element):
-    """Extract and format time from an html element."""
-    unixtime = element.find(class_='odate')['class'][1].split('_')[1]
-    return arrow.get(unixtime).format('YYYY-MM-DD HH:mm:ss')
+
 
 
 def extract_urls(pages, site):
