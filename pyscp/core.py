@@ -106,6 +106,21 @@ class WikidotConnector:
             repr(self.site[7:].replace('.wikidot.com', '')))
 
     ###########################################################################
+    # Helper Methods
+    ###########################################################################
+
+    @staticmethod
+    def _get_id(element):
+        """Extract the id number from the link."""
+        return int(element['href'].split('/')[2].split('-')[1])
+
+    @staticmethod
+    def _parse_time(element):
+        """Extract and format time from an html element."""
+        unixtime = element.find(class_='odate')['class'][1].split('_')[1]
+        return arrow.get(unixtime).format('YYYY-MM-DD HH:mm:ss')
+
+    ###########################################################################
 
     def _edit(self, page_id, url, source, title, comment):
         """Overwrite the page with the new source and title."""
@@ -237,29 +252,30 @@ class WikidotConnector:
             if url in urls:
                 yield url
 
-    def categories(self):
-        """Yield dicts describing all forum categories on the site."""
+    @utils.listify()
+    def list_categories(self):
+        """Return forum categories."""
         data = self._module('forum/ForumStartModule')['body']
-        for elem in bs4.BeautifulSoup(data)(class_='name'):
-            yield dict(
-                category_id=int(elem.find(class_='title').a['href']
-                                .split('/')[2].split('-')[1]),
-                title=elem.select('div.title')[0].text.strip(),
-                threads=int(elem.parent.select('td.threads')[0].text),
-                description=elem.select('div.description')[0].text.strip())
+        soup = bs4.BeautifulSoup(data)
+        for elem in [e.parent for e in soup(class_='name')]:
+            cat_id = self._get_id(elem.select('.title a')[0])
+            title, description, size = [
+                elem.find(class_=i).text.strip()
+                for i in ('title', 'description', 'threads')]
+            yield ForumCategory(cat_id, title, description, int(size))
 
-    def threads(self, category_id):
-        """Yield dicts describing all threads in a given category."""
-        for page in self._pager('forum/ForumViewCategoryModule',
-                                lambda x: dict(p=x), c=category_id):
-            for elem in bs4.BeautifulSoup(page['body'])(class_='name'):
-                yield dict(
-                    thread_id=int(
-                        elem.find(class_='title').a['href']
-                        .split('/')[2].split('-')[1]),
-                    title=elem.select('div.title')[0].text.strip(),
-                    description=elem.select('div.description')[0].text.strip(),
-                    category_id=category_id)
+    def list_threads(self, category_id):
+        """Return threads in the given category."""
+        pages = self._pager(
+            'forum/ForumViewCategoryModule', _key='p', c=category_id)
+        soups = (bs4.BeautifulSoup(p['body']) for p in pages)
+        elems = (s(class_='name') for s in soups)
+        for elem in itertools.chain(*elems):
+            thread_id = self._get_id(elem.select('.title a')[0])
+            title, description = [
+                elem.find(class_=i).text.strip()
+                for i in ('title', 'description')]
+            yield ForumThread(thread_id, title, description)
 
     def recent_changes(self, number):
         """Return the last 'num' revisions on the site."""
@@ -273,7 +289,7 @@ class WikidotConnector:
                 url=self.site + elem.find('td', 'title').a['href'],
                 number=0 if revnum == '(new)' else int(revnum[6:-1]),
                 user=elem.find('span', 'printuser').text.strip(),
-                time=parse_time(elem),  # TODO: fix
+                time=self._parse_time(elem),
                 comment=comment.text.strip() if comment else None)
 
     ###########################################################################
@@ -405,17 +421,10 @@ class WikidotPageAdapter:
         html = self.cn.req.get(self.page.url).text
         page_id = int(re.search('pageId = ([0-9]+);', html).group(1))
         soup = bs4.BeautifulSoup(html)
-        href = soup.find(id='discuss-button')['href']
-        thread_id = int(href.split('/')[2].split('-')[1])
+        thread_id = self.cn._get_id(soup.find(id='discuss-button'))
         tags = {e.text for e in soup.select('.page-tags a')}
         clean_html = str(soup.find(id='main-content'))
         return (page_id, thread_id, clean_html, tags)
-
-    @staticmethod
-    def _parse_time(element):
-        """Extract and format time from an html element."""
-        unixtime = element.find(class_='odate')['class'][1].split('_')[1]
-        return arrow.get(unixtime).format('YYYY-MM-DD HH:mm:ss')
 
     @staticmethod
     def _crawl_posts(post_containers, parent=None):
@@ -463,7 +472,7 @@ class WikidotPageAdapter:
             cells = row('td')
             number = int(cells[0].text.strip('.'))
             user = cells[4].text
-            time = self._parse_time(cells[5])
+            time = self.cn._parse_time(cells[5])
             comment = cells[6].text
             if not comment:
                 comment = None
@@ -505,7 +514,7 @@ class WikidotPageAdapter:
             content.attrs.clear()
             content = str(content)
             user = post.find(class_='printuser').text
-            time = self._parse_time(post)
+            time = self.cn._parse_time(post)
             yield ForumPost(post_id, title, content, user, time, parent)
 
     @functools.lru_cache(maxsize=1)
@@ -1084,6 +1093,8 @@ Revision = nt('Revision', 'id number user time comment')
 Vote = nt('Vote', 'user value')
 ForumPost = nt('ForumPost', 'id title content user time parent')
 Override = nt('Override', 'url user type')
+ForumCategory = nt('ForumCategory', 'id title description size')
+ForumThread = nt('ForumThread', 'id title description')
 del nt
 
 ###############################################################################
