@@ -277,21 +277,6 @@ class WikidotConnector:
                 for i in ('title', 'description')]
             yield ForumThread(thread_id, title, description)
 
-    def recent_changes(self, number):
-        """Return the last 'num' revisions on the site."""
-        data = self._module(
-            name='changes/SiteChangesListModule',
-            options=dict(all=True), page=1, perpage=number)['body']
-        for elem in bs4.BeautifulSoup(data)(class_='changes-list-item'):
-            revnum = elem.find('td', 'revision-no').text.strip()
-            comment = elem.find('div', 'comments')
-            yield dict(
-                url=self.site + elem.find('td', 'title').a['href'],
-                number=0 if revnum == '(new)' else int(revnum[6:-1]),
-                user=elem.find('span', 'printuser').text.strip(),
-                time=self._parse_time(elem),
-                comment=comment.text.strip() if comment else None)
-
     ###########################################################################
     # SCP-Wiki Specific Methods
     ###########################################################################
