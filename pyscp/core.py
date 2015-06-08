@@ -160,11 +160,22 @@ class WikidotConnector:
             'https://www.wikidot.com/default--flow/login__LoginPopupScreen',
             data=data)
 
-    def list_pages(self, **kwargs):
-        """Yield urls of the pages matching the specified criteria."""
+    def _list_pages_base(self, **kwargs):
+        """
+        Call ListPages module.
+
+        Wikidot's ListPages is an extremely versatile php module that can be
+        used to retrieve all sorts of interesting informations, from urls of
+        pages created by a given user, and up to full html contents of every
+        page on the site.
+
+        This method returns the raw data returned by the ListPages module.
+        The data is later processed by WikidotConnector.list_pages module.
+        """
         yield from self._pager(
             'list/ListPagesModule',
-            _next=lambda x: dict(offset=250 * (x - 1)),
+            _key='offset',
+            _update=lambda x: 250 * (x - 1),
             category='*',
             limit=kwargs.get('limit', None),
             tags=kwargs.get('tag', None),
@@ -174,21 +185,39 @@ class WikidotConnector:
             module_body=kwargs.get('body', '%%title_linked%%'),
             perPage=250)
 
-    def list_urls(self, **kwargs):
-        pages = extract_urls(self.list_pages(**kwargs), self.site)
-        author = kwargs.pop('author', None)
-        if not author or not kwargs:
+    def _extract_urls(self, pages):
+        """
+        Return the urls from the list_pages.
+
+        Lazily extracts urls from the html data returned when list_pages is
+        called without specifying the 'body' keyword.
+        """
+        soups = (bs4.BeautifulSoup(p['body']) for p in pages)
+        elems = (s.select('div.list-pages-item a') for s in soups)
+        yield from (self.site + e['href'] for e in itertools.chain(*elems))
+
+    def list_pages(self, **kwargs):
+        """Return list of urls matching the specified criteria."""
+        pages = self._list_pages_base(**kwargs)
+        if 'body' in kwargs:
             yield from pages
+        urls = self._extract_urls(pages)
+        author = kwargs.pop('author', None)
+        if not author:
+            yield from urls
             return
-        include, exclude = [], []
-        for i in self.rewrites():
-            if i['author'] == author:
-                include.append(i['url'])
-            elif i['status'] == 'override':
-                exclude.append(i['url'])
-        pages = list(pages)
-        for url in extract_urls(self.list_pages(**kwargs), self.site):
-            if url in pages or url in include and url not in exclude:
+        include, exclude = set(), set()
+        for over in self.list_overrides():
+            if over.user == author:
+                include.add(over.url)
+            elif over.type == 'author':
+                exclude.add(over.url)
+        urls = set(urls)
+        if not kwargs:
+            yield from sorted(urls | include)
+            return
+        for url in self._extract_urls(self._list_pages_base(**kwargs)):
+            if url in urls or url in include and url not in exclude:
                 yield url
 
     def categories(self):
@@ -234,24 +263,23 @@ class WikidotConnector:
     # SCP-Wiki Specific Methods
     ###########################################################################
 
-    @functools.lru_cache()
+    @functools.lru_cache(maxsize=1)
     @utils.listify()
-    def rewrites(self):
+    def list_overrides(self):
         if 'scp-wiki' not in self.site:
             return None
-        for elem in soup(self._html(
-                'http://05command.wikidot.com/alexandra-rewrite'))('tr')[1:]:
-            # possibly add other options here, like collaborator
-            if ':override:' in elem('td')[1].text:
-                status = 'override'
+        urls = 'http://05command.wikidot.com/alexandra-rewrite'
+        soup = bs4.BeautifulSoup(self.req.get(urls).text)
+        for row in [r('td') for r in soup('tr')[1:]]:
+            url = '{}/{}'.format(self.site, row[0].text)
+            user = row[1].text.split(':override:')[-1]
+            if ':override:' in row[1].text:
+                type_ = 'author'
             else:
-                status = 'rewrite'
-            yield dict(
-                url='{}/{}'.format(self.site, elem('td')[0].text),
-                author=elem('td')[1].text.split(':override:')[-1],
-                status=status)
+                type_ = 'rewrite_author'
+            yield Override(url, user, type_)
 
-    @functools.lru_cache()
+    @functools.lru_cache(maxsize=1)
     @utils.listify()
     def images(self):
         if 'scp-wiki' not in self.site:
@@ -301,15 +329,16 @@ class WikidotConnector:
         return self._module('Empty', action='WikiPageAction',
                             page_id=page_id, event=event, **kwargs)
 
-    def _pager(self, name, _next, **kwargs):
+    def _pager(self, name, _key, _update=None, **kwargs):
         """Iterate over multi-page module results."""
         first_page = self._module(name, **kwargs)
         yield first_page
         counter = bs4.BeautifulSoup(first_page['body']).find(class_='pager-no')
-        if counter:
-            for index in range(2, int(counter.text.split(' ')[-1]) + 1):
-                kwargs.update(_next(index))
-                yield self._module(name, **kwargs)
+        if not counter:
+            return
+        for idx in range(2, int(counter.text.split(' ')[-1]) + 1):
+            kwargs.update({_key: idx if _update is None else _update(idx)})
+            yield self._module(name, **kwargs)
 
 
 class WikidotPageAdapter:
@@ -445,11 +474,11 @@ class WikidotPageAdapter:
             return
         pages = self.cn._pager(
             'forum/ForumViewThreadPostsModule',
-            lambda x: dict(pageNo=x),
+            _key='pageNo',
             t=self.page.thread_id)
         pages = [bs4.BeautifulSoup(p['body']).body for p in pages]
         posts = [p(class_='post-container', recursive=False) for p in pages]
-        posts = itertools.chain.from_iterable(posts)
+        posts = itertools.chain(*posts)
         for post, parent in self._crawl_posts(list(posts)):
             post_id = int(post['id'].split('-')[1])
             title = post.find(class_='title').text.strip()
@@ -1032,10 +1061,12 @@ class Page:
 # Simple Containers
 ###############################################################################
 
-Revision = collections.namedtuple('Revision', 'id number user time comment')
-Vote = collections.namedtuple('Vote', 'user value')
-ForumPost = collections.namedtuple(
-    'ForumPost', 'id title content user time parent')
+nt = collections.namedtuple
+Revision = nt('Revision', 'id number user time comment')
+Vote = nt('Vote', 'user value')
+ForumPost = nt('ForumPost', 'id title content user time parent')
+Override = nt('Override', 'url user type')
+del nt
 
 ###############################################################################
 # Helper Functions
@@ -1049,12 +1080,3 @@ def full_url(url):
     if '.' not in netloc:
         netloc += '.wikidot.com'
     return urllib.parse.urlunparse(['http', netloc, '', '', '', ''])
-
-
-
-
-
-def extract_urls(pages, site):
-    for page in pages:
-        for elem in soup(page['body']).select('.list-pages-item a'):
-            yield site + elem['href']
