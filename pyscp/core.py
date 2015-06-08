@@ -197,27 +197,44 @@ class WikidotConnector:
         yield from (self.site + e['href'] for e in itertools.chain(*elems))
 
     def list_pages(self, **kwargs):
-        """Return list of urls matching the specified criteria."""
+        """
+        Return urls matching the specified criteria.
+
+        This method uses the results of the ListPages module and the custom
+        override data to correctly return urls for pages that have been
+        rewritten or have author that differs from the 0th revision for
+        some other reasons.
+        """
         pages = self._list_pages_base(**kwargs)
         if 'body' in kwargs:
+            # if 'body' is specified, return raw pages
             yield from pages
         urls = self._extract_urls(pages)
         author = kwargs.pop('author', None)
         if not author:
+            # if 'author' isn't specified, there's no need to check rewrites
             yield from urls
             return
         include, exclude = set(), set()
         for over in self.list_overrides():
             if over.user == author:
+                # if username matches, include regardless of type
                 include.add(over.url)
             elif over.type == 'author':
+                # exclude only if override type is author.
+                # if url has author and rewrite author,
+                # it will appear in list_pages for both.
                 exclude.add(over.url)
-        urls = set(urls)
+        urls = set(urls) | include - exclude
+        # if no other options beside author were specified,
+        # just return everything we can
         if not kwargs:
-            yield from sorted(urls | include)
+            yield from urls
             return
+        # otherwise, make an additional ListPages request to check
+        # which urls from include we should return and in which order
         for url in self._extract_urls(self._list_pages_base(**kwargs)):
-            if url in urls or url in include and url not in exclude:
+            if url in urls:
                 yield url
 
     def categories(self):
