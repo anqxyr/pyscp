@@ -240,7 +240,7 @@ class WikidotConnector:
     def categories(self):
         """Yield dicts describing all forum categories on the site."""
         data = self._module('forum/ForumStartModule')['body']
-        for elem in soup(data)(class_='name'):
+        for elem in bs4.BeautifulSoup(data)(class_='name'):
             yield dict(
                 category_id=int(elem.find(class_='title').a['href']
                                 .split('/')[2].split('-')[1]),
@@ -252,7 +252,7 @@ class WikidotConnector:
         """Yield dicts describing all threads in a given category."""
         for page in self._pager('forum/ForumViewCategoryModule',
                                 lambda x: dict(p=x), c=category_id):
-            for elem in soup(page['body'])(class_='name'):
+            for elem in bs4.BeautifulSoup(page['body'])(class_='name'):
                 yield dict(
                     thread_id=int(
                         elem.find(class_='title').a['href']
@@ -266,14 +266,14 @@ class WikidotConnector:
         data = self._module(
             name='changes/SiteChangesListModule',
             options=dict(all=True), page=1, perpage=number)['body']
-        for elem in soup(data)(class_='changes-list-item'):
+        for elem in bs4.BeautifulSoup(data)(class_='changes-list-item'):
             revnum = elem.find('td', 'revision-no').text.strip()
             comment = elem.find('div', 'comments')
             yield dict(
                 url=self.site + elem.find('td', 'title').a['href'],
                 number=0 if revnum == '(new)' else int(revnum[6:-1]),
                 user=elem.find('span', 'printuser').text.strip(),
-                time=parse_time(elem),
+                time=parse_time(elem),  # TODO: fix
                 comment=comment.text.strip() if comment else None)
 
     ###########################################################################
@@ -304,7 +304,7 @@ class WikidotConnector:
         for index in range(1, 28):
             page = self._html(
                 'http://scpsandbox2.wikidot.com/image-review-{}'.format(index))
-            for elem in soup(page)('tr'):
+            for elem in bs4.BeautifulSoup(page)('tr'):
                 if not elem('td'):
                     continue
                 source = elem('td')[3].find('a')
@@ -399,7 +399,7 @@ class WikidotPageAdapter:
 
         Returns a tuple consisting of the id of the page, id of the comment
         thread, stripped-down html string, and a set of tags. The tuple is
-        saved via lru_cache, and the individual get_ methods can then 
+        saved via lru_cache, and the individual get_ methods can then
         take the parts of the tuple they need.
         """
         html = self.cn.req.get(self.page.url).text
@@ -513,8 +513,8 @@ class WikidotPageAdapter:
         """Return wikidot markup of the source."""
         data = self.cn._module(
             'viewsource/ViewSourceModule',
-           page_id=self.page.page_id)['body']
-        bs4.BeautifulSoup(data)
+            page_id=self.page.page_id)['body']
+        soup = bs4.BeautifulSoup(data)
         return soup.text[11:].strip().replace(chr(160), ' ')
 
 
@@ -694,7 +694,7 @@ class SnapshotCreator:
             'PageTag', 'ForumThread', 'User', 'Tag')
         count = self.wiki.list_pages(body='%%total%%', limit=1)
         count = list(count)[0]['body']
-        count = int(soup(count)('p')[0].text)
+        count = int(bs4.BeautifulSoup(count)('p')[0].text)
         for _ in utils.pbar(
                 self.pool.map(self._save_page, self.wiki.list_urls()),
                 'SAVING PAGES'.ljust(20), count):
@@ -710,7 +710,7 @@ class SnapshotCreator:
             id=page_id,
             url=url,
             thread=thread_id,
-            html=str(soup(html).find(id='main-content')))
+            html=str(bs4.BeautifulSoup(html).find(id='main-content')))
         orm.Revision.insert_many(dict(
             id=i['revision_id'],
             page=page_id,
@@ -963,7 +963,8 @@ class Page:
         log.debug('Constructing title index.')
         splash = list(connector.list_urls(tag='splash'))
         for url in ('scp-series', 'scp-series-2', 'scp-series-3'):
-            for element in soup(connector(url).html).select('ul > li'):
+            for element in bs4.BeautifulSoup(
+                    connector(url).html).select('ul > li'):
                 if not re.search('[SCP]+-[0-9]+', element.text):
                     continue
                 url = connector.site + element.a['href']
@@ -978,7 +979,7 @@ class Page:
     @property
     def _onpage_title(self):
         """Title as displayed on the page."""
-        title = soup(self.html).find(id='page-title')
+        title = bs4.BeautifulSoup(self.html).find(id='page-title')
         return title.text.strip() if title else ''
 
     ###########################################################################
@@ -991,7 +992,7 @@ class Page:
 
     @property
     def text(self):
-        return soup(self.html).find(id='page-content').text
+        return bs4.BeautifulSoup(self.html).find(id='page-content').text
 
     @property
     def wordcount(self):
@@ -999,7 +1000,7 @@ class Page:
 
     @property
     def images(self):
-        return [i['src'] for i in soup(self.html)('img')]
+        return [i['src'] for i in bs4.BeautifulSoup(self.html)('img')]
 
     @property
     def title(self):
@@ -1034,7 +1035,7 @@ class Page:
     @utils.listify()
     def links(self):
         unique = set()
-        for element in soup(self.html).select('#page-content a'):
+        for element in bs4.BeautifulSoup(self.html).select('#page-content a'):
             href = element.get('href', None)
             if (not href or href[0] != '/' or  # bad or absolute link
                     href[-4:] in ('.png', '.jpg', '.gif')):
