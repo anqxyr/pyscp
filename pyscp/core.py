@@ -110,6 +110,7 @@ class WikidotConnector:
     ###########################################################################
 
     @staticmethod
+    @utils.ignore((IndexError, TypeError))
     def _get_id(element):
         """Extract the id number from the link."""
         return int(element['href'].split('/')[2].split('-')[1])
@@ -299,23 +300,27 @@ class WikidotConnector:
 
     @functools.lru_cache(maxsize=1)
     @utils.listify()
-    def images(self):
+    def list_images(self):
         if 'scp-wiki' not in self.site:
-            return None
-        for index in range(1, 28):
-            page = self._html(
-                'http://scpsandbox2.wikidot.com/image-review-{}'.format(index))
-            for elem in bs4.BeautifulSoup(page)('tr'):
-                if not elem('td'):
-                    continue
-                source = elem('td')[3].find('a')
-                status = elem('td')[4].text
-                notes = elem('td')[5].text
-                yield dict(
-                    url=elem('td')[0].img['src'],
-                    source=source['href'] if source else None,
-                    status=status if status else None,
-                    notes=notes if notes else None)
+            return
+        base = 'http://scpsandbox2.wikidot.com/image-review-{}'
+        urls = [base.format(i) for i in range(1, 28)]
+        pages = [self.req.get(u).text for u in urls]
+        soups = [bs4.BeautifulSoup(p) for p in pages]
+        elems = [s('tr') for s in soups]
+        elems = itertools.chain(*elems)
+        elems = [e('td') for e in elems]
+        elems = [e for e in elems if e]
+        for elem in elems:
+            url = elem[0].img['src']
+            source = elem[3].find('a')
+            status = elem[4].text
+            if not status:
+                status = None
+            notes = elem[5].text
+            if not notes:
+                notes = None
+            yield Image(url, source, status, notes)
 
     ###########################################################################
     # Internal Methods
@@ -478,19 +483,22 @@ class WikidotPageAdapter:
         return self._load_page()[3]
 
     @functools.lru_cache(maxsize=1)
-    @utils.listify()
     def get_posts(self):
+        return list(self.get_thread_posts(self.page.thread_id))
+
+    def get_thread_posts(self, thread_id):
         """Download and parse the contents of the forum thread."""
-        if self.page.thread_id is None:
+        if thread_id is None:
             return
         pages = self.cn._pager(
             'forum/ForumViewThreadPostsModule',
             _key='pageNo',
-            t=self.page.thread_id)
-        pages = [bs4.BeautifulSoup(p['body']).body for p in pages]
-        posts = [p(class_='post-container', recursive=False) for p in pages]
-        posts = itertools.chain(*posts)
-        for post, parent in self._crawl_posts(list(posts)):
+            t=thread_id)
+        pages = (bs4.BeautifulSoup(p['body']).body for p in pages)
+        pages = (p for p in pages if p)
+        posts = (p(class_='post-container', recursive=False) for p in pages)
+        posts = itertools.chain.from_iterable(posts)
+        for post, parent in self._crawl_posts(posts):
             post_id = int(post['id'].split('-')[1])
             title = post.find(class_='title').text.strip()
             if not title:
@@ -664,7 +672,6 @@ class SnapshotCreator:
 
     def take_snapshot(self, forums=False):
         """Take new snapshot."""
-        orm.purge()
         self._save_all_pages()
         if forums:
             self._save_forums()
@@ -737,7 +744,7 @@ class SnapshotCreator:
                 pass
         self.tbar.stop()
 
-    def _save_thread(self, thread, c_id=None, bar=None):
+    def _save_thread(self, thread, c_id=None):
         if c_id:
             self.tbar.value += 1
         orm.ForumThread.create(
@@ -745,7 +752,7 @@ class SnapshotCreator:
             category=c_id,
             title=thread.title,
             description=thread.description)
-        posts = self.wiki.adapter(thread).get_posts()
+        posts = self.wiki.adapter(None).get_thread_posts(thread.id)
         orm.ForumPost.insert_many(dict(
             id=p.id,
             thread=thread.id,
@@ -756,42 +763,36 @@ class SnapshotCreator:
             content=p.content) for p in posts)
 
     def _save_meta(self):
-        log.info('Downloading image metadata.')
         orm.create_tables('Image', 'ImageStatus', 'Rewrite', 'RewriteStatus')
-        images = [i for i in self.wiki.images() if i['status'] in (
-            'PERMISSION GRANTED',
-            'BY-NC-SA CC',
-            'BY-SA CC',
-            'PUBLIC DOMAIN')]
-        for _ in self.pool.map(
-                self._save_image, images, itertools.count(1),
-                itertools.repeat(len(images))):
+        licenses = {
+            'PERMISSION GRANTED', 'BY-NC-SA CC', 'BY-SA CC', 'PUBLIC DOMAIN'}
+        images = [i for i in self.wiki.list_images() if i.status in licenses]
+        self.ibar = utils.ProgressBar('SAVING IMAGES'.ljust(20), len(images))
+        self.ibar.start()
+        for _ in self.pool.map(self._save_image, images):
             pass
-        log.info('Downloading author metadata.')
+        self.ibar.stop()
         orm.Rewrite.insert_many(dict(
-            page=i['url'],
-            user=orm.User.get_id(i['author']),
-            status=orm.RewriteStatus.get_id(i['status']))
-            for i in self.wiki.rewrites())
+            page=i.url,
+            user=orm.User.get_id(i.user),
+            status=orm.RewriteStatus.get_id(i.type))
+            for i in self.wiki.list_overrides())
 
-    def _save_image(self, image, index, total):
-        if not image['source']:
-            log.info(
-                'Aborted image {}: source not specified: {}'
-                .format(index, image))
+    def _save_image(self, image):
+        if not image.souce:
+            log.info('Image source not specified: {}'.format(image.url))
             return
-        log.info('Saving image {}/{}.'.format(index, total))
         try:
             data = self.wiki.req.get(image['url']).content
         except requests.HTTPError as err:
             log.warning('Failed to download the image: {}'.format(err))
             return
         orm.Image.create(
-            url=image['url'],
-            source=image['source'],
+            url=image.url,
+            source=image.source,
             data=data,
-            status=orm.ImageStatus.get_id(image['status']),
-            notes=image['notes'])
+            status=orm.ImageStatus.get_id(image.status),
+            notes=image.notes)
 
     def _save_id_cache(self):
         for table_name, field_name in zip(
@@ -1080,6 +1081,7 @@ ForumPost = nt('ForumPost', 'id title content user time parent')
 Override = nt('Override', 'url user type')
 ForumCategory = nt('ForumCategory', 'id title description size')
 ForumThread = nt('ForumThread', 'id title description')
+Image = nt('Image', 'url source status notes')
 del nt
 
 ###############################################################################
