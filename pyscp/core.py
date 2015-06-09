@@ -595,7 +595,7 @@ class SnapshotConnector:
                 .group_by(orm.Page.url)
                 .having(compare(orm.Revision.time)))
 
-    def list_urls(self, **kwargs):
+    def list_pages(self, **kwargs):
         query = orm.Page.select(orm.Page.url)
         if 'author' in kwargs:
             query = query & self._list_author(kwargs['author'])
@@ -619,15 +619,12 @@ class SnapshotConnector:
 
     @functools.lru_cache()
     @utils.listify()
-    def rewrites(self):
-        for row in orm.Rewrite.select():
-            try:
-                yield dict(
-                    url=row.page.url,
-                    author=row.user.name,
-                    status=row.status.label)
-            except orm.peewee.DoesNotExist:
-                pass
+    def list_overrides(self):
+        for row in (
+                orm.Rewrite
+                .select(orm.Rewrite, orm.User.name, orm.RewriteStatus.label)
+                .join(orm.User).switch(orm.Rewrite).join(orm.RewriteStatus)):
+            yield Override(row._data['page'], row.user.name, row.status.label)
 
     @functools.lru_cache()
     @utils.listify()
@@ -689,71 +686,74 @@ class SnapshotCreator:
         count = self.wiki.list_pages(body='%%total%%', limit=1)
         count = list(count)[0]['body']
         count = int(bs4.BeautifulSoup(count)('p')[0].text)
-        for _ in utils.pbar(
-                self.pool.map(self._save_page, self.wiki.list_urls()),
-                'SAVING PAGES'.ljust(20), count):
+        self.bar = utils.ProgressBar('SAVING PAGES'.ljust(20), count)
+        self.bar.start()
+        for _ in self.pool.map(self._save_page, self.wiki.list_pages()):
             pass
+        self.bar.stop()
 
     @utils.ignore(ConnectorError)
     def _save_page(self, url):
         """Download contents, revisions, votes and discussion of the page."""
-        html = self.wiki._html(url)
-        page_id = self.wiki._page_id(None, html)
-        thread_id = self.wiki._thread_id(None, html)
+        self.bar.value += 1
+        p = self.wiki(url)
         orm.Page.create(
-            id=page_id,
-            url=url,
-            thread=thread_id,
-            html=str(bs4.BeautifulSoup(html).find(id='main-content')))
+            id=p.page_id,
+            url=p.url,
+            thread=p.thread_id,
+            html=p.html)
         orm.Revision.insert_many(dict(
-            id=i['revision_id'],
-            page=page_id,
-            user=orm.User.get_id(i['user']),
-            number=i['number'],
-            time=i['time'],
-            comment=i['comment']) for i in self.wiki._history(page_id))
+            id=r.id,
+            page=p.page_id,
+            user=orm.User.get_id(r.user),
+            number=r.number,
+            time=r.time,
+            comment=r.comment) for r in p.history)
         orm.Vote.insert_many(dict(
-            page=page_id,
-            user=orm.User.get_id(i['user']),
-            value=i['value']) for i in self.wiki._votes(page_id))
-        self._save_thread(dict(thread_id=thread_id))
+            page=p.page_id,
+            user=orm.User.get_id(v.user),
+            value=v.value) for v in p.votes)
+        self._save_thread(ForumThread(p.thread_id, None, None))
         orm.PageTag.insert_many(dict(
-            page=page_id,
-            tag=orm.Tag.get_id(i)) for i in self.wiki._tags(None, html))
+            page=p.page_id,
+            tag=orm.Tag.get_id(t)) for t in p.tags)
 
     def _save_forums(self):
         """Download and save standalone forum threads."""
         orm.create_tables('ForumPost', 'ForumThread', 'ForumCategory', 'User')
-        cats = self.wiki.categories()
-        cats = [i for i in cats if i['title'] != 'Per page discussions']
+        cats = self.wiki.list_categories()
+        cats = [i for i in cats if i.title != 'Per page discussions']
         orm.ForumCategory.insert_many(dict(
-            id=i['category_id'],
-            title=i['title'],
-            description=i['description'])
-            for i in cats)
-        total = sum(i['threads'] for i in cats)
-        threads = itertools.chain.from_iterable(
-            self.wiki.threads(i['category_id']) for i in cats)
-        for _ in utils.pbar(
-                self.pool.map(self._save_thread, threads),
-                'SAVING FORUM THREADS'.ljust(20), total):
-            pass
+            id=c.id,
+            title=c.title,
+            description=c.description) for c in cats)
+        total_size = sum(c.size for c in cats)
+        self.tbar = utils.ProgressBar('SAVING FORUM THREADS', total_size)
+        self.tbar.start()
+        for cat in cats:
+            threads = self.wiki.list_threads(cat.id)
+            c_id = itertools.repeat(cat.id)
+            for _ in self.pool.map(self._save_thread, threads, c_id):
+                pass
+        self.tbar.stop()
 
-    def _save_thread(self, thread):
+    def _save_thread(self, thread, c_id=None, bar=None):
+        if c_id:
+            self.tbar.value += 1
         orm.ForumThread.create(
-            id=thread['thread_id'],
-            category=thread.get('category_id', None),
-            title=thread.get('title', None),
-            description=thread.get('description', None))
+            id=thread.id,
+            category=c_id,
+            title=thread.title,
+            description=thread.description)
+        posts = self.wiki.adapter(thread).get_posts()
         orm.ForumPost.insert_many(dict(
-            id=i['post_id'],
-            thread=thread['thread_id'],
-            user=orm.User.get_id(i['user']),
-            parent=i['parent'],
-            title=i['title'],
-            time=i['time'],
-            content=i['content'])
-            for i in self.wiki._posts(thread['thread_id']))
+            id=p.id,
+            thread=thread.id,
+            user=orm.User.get_id(p.user),
+            parent=p.parent,
+            title=p.title,
+            time=p.time,
+            content=p.content) for p in posts)
 
     def _save_meta(self):
         log.info('Downloading image metadata.')
