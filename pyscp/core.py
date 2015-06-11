@@ -94,7 +94,7 @@ class WikidotConnector:
     def __init__(self, site):
         self.site = full_url(site)
         self.req = InsistentRequest()
-        self.adapter = functools.partial(WikidotPageAdapter, self)
+        self.adapter = WikidotPageAdapter(self)
 
     def __call__(self, url):
         """Convinience method to quickly create Page instances."""
@@ -388,9 +388,8 @@ class WikidotPageAdapter:
 
     """
 
-    def __init__(self, connector, page):
+    def __init__(self, connector):
         self.cn = connector
-        self.page = page
 
     ###########################################################################
     # Private Methods
@@ -398,8 +397,7 @@ class WikidotPageAdapter:
 
     @utils.morph(requests.RequestException, ConnectorError)
     @utils.log_errors(log.warning)
-    @functools.lru_cache(maxsize=1)
-    def _load_page(self):
+    def _load_page(self, page):
         """
         Download the page and extract data from the html.
 
@@ -408,13 +406,12 @@ class WikidotPageAdapter:
         saved via lru_cache, and the individual get_ methods can then
         take the parts of the tuple they need.
         """
-        html = self.cn.req.get(self.page.url).text
-        page_id = int(re.search('pageId = ([0-9]+);', html).group(1))
+        html = self.cn.req.get(page.url).text
+        page._page_id = int(re.search('pageId = ([0-9]+);', html).group(1))
         soup = bs4.BeautifulSoup(html)
-        thread_id = self.cn._get_id(soup.find(id='discuss-button'))
-        tags = {e.text for e in soup.select('.page-tags a')}
-        clean_html = str(soup.find(id='main-content'))
-        return (page_id, thread_id, clean_html, tags)
+        page._thread_id = self.cn._get_id(soup.find(id='discuss-button'))
+        page._tags = {e.text for e in soup.select('.page-tags a')}
+        page._html = str(soup.find(id='main-content'))
 
     @staticmethod
     def _crawl_posts(post_containers, parent=None):
@@ -435,28 +432,27 @@ class WikidotPageAdapter:
     # Public Methods
     ###########################################################################
 
-    def get_page_id(self):
+    def get_page_id(self, page):
         """Return the id of the page."""
-        return self._load_page()[0]
+        self._load_page(page)
 
-    def get_thread_id(self):
+    def get_thread_id(self, page):
         """Return the id of the discussion thread."""
-        return self._load_page()[1]
+        self._load_page(page)
 
-    def get_html(self):
+    def get_html(self, page):
         """Return the html source of the page."""
-        return self._load_page()[2]
+        self._load_page(page)
 
-    @functools.lru_cache(maxsize=1)
-    @utils.listify()
-    def get_history(self):
+    def get_history(self, page):
         """Return the revision history of the page."""
         data = self.cn._module(
             'history/PageRevisionListModule',
-            page_id=self.page.page_id,
+            page_id=page.page_id,
             page=1,
             perpage=99999)['body']
         soup = bs4.BeautifulSoup(data)
+        page._history = []
         for row in reversed(soup('tr')[1:]):
             rev_id = int(row['id'].split('-')[-1])
             cells = row('td')
@@ -466,25 +462,23 @@ class WikidotPageAdapter:
             comment = cells[6].text
             if not comment:
                 comment = None
-            yield Revision(rev_id, number, user, time, comment)
+            page._history.append(Revision(rev_id, number, user, time, comment))
 
-    @functools.lru_cache(maxsize=1)
-    def get_votes(self):
+    def get_votes(self, page):
         """Return all votes made on the page."""
         data = self.cn._module(
             'pagerate/WhoRatedPageModule',
-            page_id=self.page.page_id)['body']
+            page_id=page.page_id)['body']
         soup = bs4.BeautifulSoup(data)
         spans = [i.text.strip() for i in soup('span')]
         pairs = zip(spans[::2], spans[1::2])
-        return [Vote(user=u, value=1 if v == '+' else -1) for u, v in pairs]
+        page._votes = [Vote(u, 1 if v == '+' else -1) for u, v in pairs]
 
-    def get_tags(self):
-        return self._load_page()[3]
+    def get_tags(self, page):
+        self._load_page(page)
 
-    @functools.lru_cache(maxsize=1)
-    def get_posts(self):
-        return list(self.get_thread_posts(self.page.thread_id))
+    def get_posts(self, page):
+        page._posts = list(self.get_thread_posts(page.thread_id))
 
     def get_thread_posts(self, thread_id):
         """Download and parse the contents of the forum thread."""
@@ -510,14 +504,13 @@ class WikidotPageAdapter:
             time = self.cn._parse_time(post)
             yield ForumPost(post_id, title, content, user, time, parent)
 
-    @functools.lru_cache(maxsize=1)
-    def get_source(self):
+    def get_source(self, page):
         """Return wikidot markup of the source."""
         data = self.cn._module(
             'viewsource/ViewSourceModule',
             page_id=self.page.page_id)['body']
         soup = bs4.BeautifulSoup(data)
-        return soup.text[11:].strip().replace(chr(160), ' ')
+        page._source = soup.text[11:].strip().replace(chr(160), ' ')
 
 
 class SnapshotConnector:
@@ -752,7 +745,7 @@ class SnapshotCreator:
             category=c_id,
             title=thread.title,
             description=thread.description)
-        posts = self.wiki.adapter(None).get_thread_posts(thread.id)
+        posts = self.wiki.adapter.get_thread_posts(thread.id)
         orm.ForumPost.insert_many(dict(
             id=p.id,
             thread=thread.id,
@@ -926,20 +919,12 @@ class Page:
             url = '{}/{}'.format(connector.site, url)
         self.url = url.lower()
         self._cn = connector
-        self._adapter = connector.adapter(self)
 
     def __repr__(self):
         return "{}({}, {})".format(
             self.__class__.__name__,
             repr(self.url.replace(self.cn.site, '').lstrip('/')),
             self.cn)
-
-    def __getattr__(self, name):
-        if name not in (  # this has saved 85 lines of boilerplate defs
-                'page_id', 'thread_id', 'html', 'source',
-                'history', 'votes', 'tags', 'posts'):
-            raise AttributeError
-        return getattr(self._adapter, 'get_' + name)()
 
     ###########################################################################
     # Internal Methods
@@ -977,8 +962,47 @@ class Page:
         title = bs4.BeautifulSoup(self.html).find(id='page-title')
         return title.text.strip() if title else ''
 
+    def _get_adapter_value(self, name):
+        if not hasattr(self, '_' + name):
+            getattr(self._cn.adapter, 'get_' + name)(self)
+        return getattr(self, '_' + name)
+
     ###########################################################################
     # Properties
+    ###########################################################################
+
+    @property
+    def page_id(self):
+        return self._get_adapter_value('page_id')
+
+    @property
+    def thread_id(self):
+        return self._get_adapter_value('thread_id')
+
+    @property
+    def html(self):
+        return self._get_adapter_value('html')
+
+    @property
+    def source(self):
+        return self._get_adapter_value('source')
+
+    @property
+    def history(self):
+        return self._get_adapter_value('history')
+
+    @property
+    def votes(self):
+        return self._get_adapter_value('votes')
+
+    @property
+    def tags(self):
+        return self._get_adapter_value('tags')
+
+    @property
+    def posts(self):
+        return self._get_adapter_value('posts')
+
     ###########################################################################
 
     @property
