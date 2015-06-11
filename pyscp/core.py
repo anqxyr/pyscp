@@ -523,7 +523,7 @@ class SnapshotConnector:
             raise FileNotFoundError(dbpath)
         self.site = full_url(site)
         self.dbpath = dbpath
-        self.adapter = functools.partial(SnapshotPageAdapter, self)
+        self.adapter = SnapshotPageAdapter(self)
         orm.connect(dbpath)
 
     def __call__(self, url):
@@ -772,13 +772,14 @@ class SnapshotCreator:
             for i in self.wiki.list_overrides())
 
     def _save_image(self, image):
-        if not image.souce:
-            log.info('Image source not specified: {}'.format(image.url))
+        self.ibar.value += 1
+        if not image.source:
+            log.info('Image source not specified: ' + image.url)
             return
         try:
-            data = self.wiki.req.get(image['url']).content
+            data = self.wiki.req.get(image.url, allow_redirects=True).content
         except requests.HTTPError as err:
-            log.warning('Failed to download the image: {}'.format(err))
+            log.warning(repr(err))
             return
         orm.Image.create(
             url=image.url,
@@ -815,27 +816,24 @@ class SnapshotPageAdapter:
 
     """
 
-    def __init__(self, connector, page):
+    def __init__(self, connector):
         self.cn = connector
-        self.page = page
 
     ###########################################################################
     # Private Methods
     ###########################################################################
 
-    @functools.lru_cache(maxsize=4)
-    def _query(self, primary_table, secondary_table='User', key='page'):
+    def _query(self, page, primary_table, secondary_table='User', key='page'):
         """Generate SQL queries used to retrieve data."""
         pt = getattr(orm, primary_table)
         st = getattr(orm, secondary_table)
         return pt.select(pt, st.name).join(st).where(
-            getattr(pt, key) == getattr(self.page, key + '_id')).execute()
+            getattr(pt, key) == getattr(page, key + '_id')).execute()
 
     # Only need to morph this methods, because *all* other methods
     # will eventually call it, and then the exception will bubble up.
     @utils.morph(orm.peewee.DoesNotExist, ConnectorError)
-    @functools.lru_cache(maxsize=1)
-    def _load_page(self):
+    def _load_page(self, page):
         """
         Retrieve the contents of the page.
 
@@ -849,57 +847,64 @@ class SnapshotPageAdapter:
         mirrors the behavior of WikidotPageAdapter, which does a similar
         thing for very different reason.
         """
-        page = orm.Page.get(orm.Page.url == self.page.url)
-        return (page.id, page._data['thread'], page.html)
+        pdata = orm.Page.get(orm.Page.url == page.url)
+        page._page_id = pdata.id
+        page._thread_id = pdata._data['thread']
+        page._html = pdata.html
 
     ###########################################################################
     # Public Methods
     ###########################################################################
 
-    def get_page_id(self):
+    def get_page_id(self, page):
         """Retrieve the id of the page."""
-        return self._load_page()[0]
+        self._load_page(page)
 
-    def get_thread_id(self):
+    def get_thread_id(self, page):
         """
         Retrieve the id of the comments thread of the page.
 
         If the page has no comments, returns None.
         """
-        return self._load_page()[1]
+        self._load_page(page)
 
-    def get_html(self):
+    def get_html(self, page):
         """
         Retrieve the html source of the page.
         """
-        return self._load_page()[2]
+        self._load_page(page)
 
-    def get_history(self):
+    def get_history(self, page):
         """Return the revisions of the page."""
-        revs = sorted(
-            self._query('Revision'), key=operator.attrgetter('number'))
-        return [Revision(r.id, r.number, r.user.name, str(r.time), r.comment)
-                for r in revs]
+        revs = self._query(page, 'Revision')
+        revs = sorted(revs, key=operator.attrgetter('number'))
+        page._history = [
+            Revision(r.id, r.number, r.user.name, str(r.time), r.comment)
+            for r in revs]
 
-    def get_votes(self):
+    def get_votes(self, page):
         """Return all votes made on the page."""
-        return [Vote(v.user.name, v.value) for v in self._query('Vote')]
+        page._votes = [
+            Vote(user=v.user.name, value=v.value)
+            for v in self._query(page, 'Vote')]
 
-    def get_tags(self):
+    def get_tags(self, page):
         """Return the set of tags with which the page is tagged."""
-        return {pt.tag.name for pt in self._query('PageTag', 'Tag')}
+        page._tags = {
+            pt.tag.name
+            for pt in self._query(page, 'PageTag', 'Tag')}
 
-    def get_posts(self):
+    def get_posts(self, page):
         """
         Return the page comments.
 
         This is also the only Adapter method to work on ForumThread objects,
         for which it returns the posts contained in the forum thread.
         """
-        return [ForumPost(
-                p.id, p.title, p.content, p.user.name,
-                str(p.time), p._data['parent'])
-                for p in self._query('ForumPost', key='thread')]
+        page._posts = [ForumPost(
+            p.id, p.title, p.content, p.user.name,
+            str(p.time), p._data['parent'])
+            for p in self._query(page, 'ForumPost', key='thread')]
 
     def get_source(self):
         """Raise NotImplementedError."""
