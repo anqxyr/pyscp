@@ -508,7 +508,7 @@ class WikidotPageAdapter:
         """Return wikidot markup of the source."""
         data = self.cn._module(
             'viewsource/ViewSourceModule',
-            page_id=self.page.page_id)['body']
+            page_id=page.page_id)['body']
         soup = bs4.BeautifulSoup(data)
         page._source = soup.text[11:].strip().replace(chr(160), ' ')
 
@@ -546,11 +546,11 @@ class SnapshotConnector:
             .where(orm.Revision.number == 0)
             .where(orm.User.name == author))
         include, exclude = [], []
-        for item in self.rewrites():
-            if item['author'] == author:
-                include.append(item['url'])
-            elif item['status'] == 'override':
-                exclude.append(item['url'])
+        for over in self.list_overrides():
+            if over.user == author:
+                include.append(over.url)
+            elif over.type == 'author':
+                exclude.append(over.url)
         return (query.where(~(orm.Page.url << exclude)) |
                 orm.Page.select(orm.Page.url).where(orm.Page.url << include))
 
@@ -928,18 +928,17 @@ class Page:
     def __repr__(self):
         return "{}({}, {})".format(
             self.__class__.__name__,
-            repr(self.url.replace(self.cn.site, '').lstrip('/')),
-            self.cn)
+            repr(self.url.replace(self._cn.site, '').lstrip('/')),
+            self._cn)
 
     ###########################################################################
     # Internal Methods
     ###########################################################################
 
     def _flush(self, *properties):
-        pass
-        #for i in properties:
-        #    if i in self._cache:
-        #        del self._cache[i]
+        for i in properties:
+            if hasattr(self, '_' + i):
+                delattr(self, '_' + i)
 
     @classmethod
     @functools.lru_cache()
@@ -1039,16 +1038,16 @@ class Page:
 
     @property
     def author(self):
-        for item in self.cn.rewrites():
-            if item['url'] == self.url and item['status'] == 'override':
-                return item['author']
+        for over in self._cn.list_overrides():
+            if over.url == self.url and over.type == 'author':
+                return over.user
         return self.history[0].user
 
     @property
     def rewrite_author(self):
-        for item in self._cn.rewrites():
-            if item['url'] == self.url and item['status'] == 'rewrite':
-                return item['author']
+        for over in self._cn.list_overrides():
+            if over.url == self.url and over.type == 'rewrite_author':
+                return over.user
 
     @property
     def rating(self):
@@ -1080,7 +1079,7 @@ class Page:
         self._flush('html', 'history', 'source')
 
     def revert_to(self, rev_n):
-        self._cn._revert_to(self.page_id, self.history[rev_n].revision_id)
+        self._cn._revert_to(self.page_id, self.history[rev_n].id)
         self._flush('html', 'history', 'source', 'tags')
 
     def set_tags(self, tags):

@@ -6,7 +6,6 @@
 
 import concurrent.futures
 import logging
-import os
 import peewee
 import queue
 
@@ -16,7 +15,6 @@ from itertools import islice
 # Global Constants And Variables
 ###############################################################################
 
-DBPATH = None
 log = logging.getLogger('pyscp.orm')
 pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 queue = queue.Queue()
@@ -180,19 +178,11 @@ def create_tables(*tables):
         eval(table).create_table()
 
 
-def connect(dbpath, silent=False):
-    global DBPATH
-    DBPATH = dbpath
-    if not silent:
-        log.info('Connecting to the database at {}'.format(dbpath))
+def connect(dbpath):
+    log.info('Connecting to the database at {}'.format(dbpath))
     db.initialize(peewee.SqliteDatabase(dbpath))
     db.connect()
 
-
-def purge():
-    log.info('Purging the database.')
-    os.remove(DBPATH)
-    connect(DBPATH, silent=True)
 
 ###############################################################################
 # Macros
