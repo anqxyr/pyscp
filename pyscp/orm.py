@@ -57,11 +57,12 @@ class BaseModel(peewee.Model):
             chunk = list(islice(data_iter, 500))
 
     @classmethod
-    def get_id(cls, value):
-        if value not in cls._id_cache:
-            # possible race condition, shouldn't harm anything even if occurs
-            cls._id_cache.append(value)
-        return cls._id_cache.index(value) + 1
+    def convert_to_id(cls, data, key='user'):
+        for row in data:
+            if row[key] not in cls._id_cache:
+                cls._id_cache.append(row[key])
+            row[key] = cls._id_cache.index(row[key]) + 1
+            yield row
 
     @classmethod
     def write_ids(cls, field_name):
@@ -126,18 +127,18 @@ class PageTag(BaseModel):
     tag = peewee.ForeignKeyField(Tag, related_name='pages', index=True)
 
 
-class RewriteStatus(BaseModel):
-    label = peewee.CharField(unique=True)
+class OverrideType(BaseModel):
+    name = peewee.CharField(unique=True)
 
 
-class Rewrite(BaseModel):
-    page = peewee.ForeignKeyField(Page, to_field=Page.url, index=True)
+class Override(BaseModel):
+    url = peewee.ForeignKeyField(Page, to_field=Page.url, index=True)
     user = peewee.ForeignKeyField(User, index=True)
-    status = peewee.ForeignKeyField(RewriteStatus)
+    type = peewee.ForeignKeyField(OverrideType)
 
 
 class ImageStatus(BaseModel):
-    label = peewee.CharField(unique=True)
+    name = peewee.CharField(unique=True)
 
 
 class Image(BaseModel):

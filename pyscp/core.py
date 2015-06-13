@@ -698,40 +698,27 @@ class SnapshotCreator:
         self.bar.value += 1
         p = self.wiki(url)
         orm.Page.create(
-            id=p.page_id,
-            url=p.url,
-            thread=p.thread_id,
-            html=p.html)
-        orm.Revision.insert_many(dict(
-            id=r.id,
-            page=p.page_id,
-            user=orm.User.get_id(r.user),
-            number=r.number,
-            time=r.time,
-            comment=r.comment) for r in p.history)
-        orm.Vote.insert_many(dict(
-            page=p.page_id,
-            user=orm.User.get_id(v.user),
-            value=v.value) for v in p.votes)
+            id=p.page_id, url=p.url, thread=p.thread_id, html=p.html)
+        history, votes = [map(vars, i) for i in (p.history, p.votes)]
+        history, votes = map(orm.User.convert_to_id, (history, votes))
+        tags = orm.Tag.convert_to_id([{'tag': t} for t in p.tags], key='tag')
+        for data, table in zip(
+                (history, votes, tags), (orm.Revision, orm.Vote, orm.PageTag)):
+            table.insert_many(dict(i, page=p.page_id) for i in data)
         self._save_thread(ForumThread(p.thread_id, None, None))
-        orm.PageTag.insert_many(dict(
-            page=p.page_id,
-            tag=orm.Tag.get_id(t)) for t in p.tags)
 
     def _save_forums(self):
         """Download and save standalone forum threads."""
         orm.create_tables('ForumPost', 'ForumThread', 'ForumCategory', 'User')
         cats = self.wiki.list_categories()
-        cats = [i for i in cats if i.title != 'Per page discussions']
-        orm.ForumCategory.insert_many(dict(
-            id=c.id,
-            title=c.title,
-            description=c.description) for c in cats)
+        cats = [c for c in cats if c.title != 'Per page discussions']
+        orm.ForumCategory.insert_many(
+            {k: v for k, v in vars(c).items() if k != 'size'} for c in cats)
         total_size = sum(c.size for c in cats)
         self.tbar = utils.ProgressBar('SAVING FORUM THREADS', total_size)
         self.tbar.start()
         for cat in cats:
-            threads = self.wiki.list_threads(cat.id)
+            threads = set(self.wiki.list_threads(cat.id))
             c_id = itertools.repeat(cat.id)
             for _ in self.pool.map(self._save_thread, threads, c_id):
                 pass
@@ -740,61 +727,39 @@ class SnapshotCreator:
     def _save_thread(self, thread, c_id=None):
         if c_id:
             self.tbar.value += 1
-        orm.ForumThread.create(
-            id=thread.id,
-            category=c_id,
-            title=thread.title,
-            description=thread.description)
+        orm.ForumThread.create(category=c_id, **vars(thread))
         posts = self.wiki.adapter.get_thread_posts(thread.id)
-        orm.ForumPost.insert_many(dict(
-            id=p.id,
-            thread=thread.id,
-            user=orm.User.get_id(p.user),
-            parent=p.parent,
-            title=p.title,
-            time=p.time,
-            content=p.content) for p in posts)
+        posts = orm.User.convert_to_id(map(vars, posts))
+        orm.ForumPost.insert_many(dict(p, thread=thread.id) for p in posts)
 
     def _save_meta(self):
-        orm.create_tables('Image', 'ImageStatus', 'Rewrite', 'RewriteStatus')
+        orm.create_tables('Image', 'ImageStatus', 'Override', 'OverrideType')
         licenses = {
             'PERMISSION GRANTED', 'BY-NC-SA CC', 'BY-SA CC', 'PUBLIC DOMAIN'}
         images = [i for i in self.wiki.list_images() if i.status in licenses]
         self.ibar = utils.ProgressBar('SAVING IMAGES'.ljust(20), len(images))
         self.ibar.start()
-        for _ in self.pool.map(self._save_image, images):
-            pass
+        data = list(self.pool.map(self._save_image, images))
         self.ibar.stop()
-        orm.Rewrite.insert_many(dict(
-            page=i.url,
-            user=orm.User.get_id(i.user),
-            status=orm.RewriteStatus.get_id(i.type))
-            for i in self.wiki.list_overrides())
+        images = orm.ImageStatus.convert_to_id(map(vars, images), key='status')
+        orm.Image.insert_many(
+            dict(i, data=d) for i, d in zip(images, data) if d)
+        overs = orm.User.convert_to_id(map(vars, self.wiki.list_overrides()))
+        overs = orm.OverrideType.convert_to_id(overs, key='type')
+        orm.Override.insert_many(overs)
 
+    @utils.ignore(requests.RequestException)
     def _save_image(self, image):
         self.ibar.value += 1
         if not image.source:
             log.info('Image source not specified: ' + image.url)
             return
-        try:
-            data = self.wiki.req.get(image.url, allow_redirects=True).content
-        except requests.HTTPError as err:
-            log.warning(repr(err))
-            return
-        orm.Image.create(
-            url=image.url,
-            source=image.source,
-            data=data,
-            status=orm.ImageStatus.get_id(image.status),
-            notes=image.notes)
+        return self.wiki.req.get(image.url, allow_redirects=True).content
 
     def _save_id_cache(self):
-        for table_name, field_name in zip(
-                ('User', 'Tag', 'RewriteStatus', 'ImageStatus'),
-                ('name', 'name', 'label', 'label')):
-            table = getattr(orm, table_name)
+        for table in orm.User, orm.Tag, orm.OverrideType, orm.ImageStatus:
             if table.table_exists():
-                table.write_ids(field_name)
+                table.write_ids('name')
 
 
 class SnapshotPageAdapter:
