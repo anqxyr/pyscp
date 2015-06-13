@@ -49,14 +49,26 @@
          <height>128</height>
         </size>
        </property>
+       <property name="contextMenuPolicy">
+        <enum>Qt::ActionsContextMenu</enum>
+       </property>
        <property name="autoFillBackground">
-        <bool>true</bool>
+        <bool>false</bool>
        </property>
        <property name="styleSheet">
         <string notr="true"/>
        </property>
        <property name="text">
-        <string/>
+        <string>Loading...</string>
+       </property>
+       <property name="textFormat">
+        <enum>Qt::AutoText</enum>
+       </property>
+       <property name="scaledContents">
+        <bool>true</bool>
+       </property>
+       <property name="alignment">
+        <set>Qt::AlignCenter</set>
        </property>
       </widget>
      </item>
@@ -183,6 +195,16 @@
     </layout>
    </item>
   </layout>
+  <action name="list_delete">
+   <property name="text">
+    <string>Delete From List</string>
+   </property>
+  </action>
+  <action name="email">
+   <property name="text">
+    <string>Copy Email Text</string>
+   </property>
+  </action>
  </widget>
  <resources/>
  <connections/>

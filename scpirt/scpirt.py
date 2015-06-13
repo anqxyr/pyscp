@@ -28,41 +28,63 @@ sandbox = pyscp.WikidotConnector('scpsandbox2')
 class Imagebox(QtGui.QWidget):
 
     def __init__(self, image):
-        self.image = image
         super().__init__()
         self.ui = Ui_imagebox()
         self.ui.setupUi(self)
-        self.ui.source.setText(self.image['source'])
-        self.ui.comments.setText(self.image['comments'])
-        self.ui.picture.setToolTip(
-            '{}\n{}\n{}'.format(image['url'], image['page'], image['user']))
         self.ui.status.wheelEvent = lambda x: self.parentWidget().wheelEvent(x)
-        self.ui.status.currentIndexChanged.connect(self.on_status_change)
-        self.ui.status.setCurrentIndex(
-            self.ui.status.findText(image['status']))
+        self.ui.status.currentIndexChanged.connect(self.change_status)
         self.ui.google.clicked.connect(self.open_google)
         self.ui.tineye.clicked.connect(self.open_tineye)
+        self.ui.attribute.stateChanged.connect(self.check('attribute'))
+        self.ui.send_pm.stateChanged.connect(self.check('send_pm'))
+        self.ui.remove.stateChanged.connect(self.check('remove'))
+        self.ui.picture.addAction(self.ui.list_delete)
+        self.ui.picture.addAction(self.ui.email)
+        self.load_image(image)
+
+    def load_image(self, image):
+        self.image = image
+        self.ui.source.setText(image['source'])
+        self.ui.comments.setText(image['comments'])
+        self.ui.picture.setToolTip('{url}\n{page}\n{user}'.format(**image))
+        self.ui.status.setCurrentIndex(
+            self.ui.status.findText(image['status']))
         self.worker = ImageDownloader(image['url'])
         self.worker.finished.connect(self.set_picture)
         self.worker.start()
 
-    def on_status_change(self):
-        text = self.ui.status.currentText()
-        self.image['status'] = text
+    def change_status(self):
+        status = self.ui.status.currentText()
+        self.image['status'] = status
+        if status in (
+                self.image['saved_status'], '', 'PUBLIC DOMAIN', 'REPLACED',
+                'SOURCE UNKNOWN', 'UNABLE TO CONTACT', 'PERMISSION DENIED'):
+            # PERMISSION DENIED is in this group because usually it was
+            # preceeded by AWAITING REPLY, and so the image is already removed
+            values = 0, 0, 0
+        elif status in ('BY-SA CC', 'BY-NC-SA CC', 'PERMISSION GRANTED'):
+            values = 1, 0, 0
+        elif status in ('AWAITING REPLY', 'PERMANENTLY REMOVED'):
+            values = 0, 1, 1
+        for field, value in zip(('attribute', 'send_pm', 'remove'), values):
+            state = QtCore.Qt.Checked if value else QtCore.Qt.Unchecked
+            getattr(self.ui, field).setCheckState(state)
+
+    def check(self, field):
+        return lambda x: self.image.update({field: x == 2})
 
     def open_google(self):
-        url = 'https://www.google.com/searchbyimage?&image_url='
-        webbrowser.open(url + self.image['url'])
+        #url = 'https://www.google.com/searchbyimage?&image_url='
+        #webbrowser.open(url + self.image['url'])
+        from pprint import pprint
+        pprint(self.image)
 
     def open_tineye(self):
-        url = 'http://tineye.com/search?url='
-        webbrowser.open(url + self.image['url'])
+        webbrowser.open('http://tineye.com/search?url=' + self.image['url'])
 
     def set_picture(self):
         filename = 'images/' + '_'.join(self.image['url'].split('/')[-2:])
-        pixmap = QtGui.QPixmap(filename)
-        self.ui.picture.setPixmap(pixmap)
-        self.ui.picture.setScaledContents(True)
+        self.ui.picture.setPixmap(QtGui.QPixmap(filename))
 
 
 class ImageDownloader(QtCore.QThread):
@@ -109,6 +131,7 @@ class ImageListDownloader(QtCore.QThread):
                 user=user,
                 source=source,
                 status=row[4].text,
+                saved_status=row[4].text,
                 comments=row[5].text if row[5].text else None))
         self.update_status.emit('Done.')
 
@@ -120,9 +143,12 @@ class SCPIRT(QtGui.QMainWindow):
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
         self.show()
-        self.ui.scp0.triggered.connect(lambda: self.get_list(1))
+        for i in range(10):
+            action = getattr(self.ui, 'scp{}'.format(i))
+            action.triggered.connect(lambda i=i: self.get_list(i + 1))
 
     def get_list(self, index):
+        self.current_review_block = index
         self.images = []
         self.worker = ImageListDownloader(index, self.images)
         self.worker.finished.connect(self.display_detailed)
@@ -130,11 +156,15 @@ class SCPIRT(QtGui.QMainWindow):
         self.worker.start()
 
     def display_detailed(self):
+        child = self.ui.main.takeAt(0)
+        while child:
+            child.widget().deleteLater()
+            child = self.ui.main.takeAt(0)
         for i in self.images:
-            self.ui.imagebox_layout.addWidget(Imagebox(i))
+            self.ui.main.addWidget(Imagebox(i))
 
 
 if __name__ == '__main__':
     app = QtGui.QApplication('')
-    window = SCPIRT()
+    SCPIRT()
     app.exec_()

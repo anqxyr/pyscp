@@ -2,7 +2,7 @@
 
 # Form implementation generated from reading ui file 'imagebox.ui'
 #
-# Created: Thu May 21 10:43:53 2015
+# Created: Fri May 22 13:25:26 2015
 #      by: pyside-uic 0.2.15 running on PySide 1.2.1
 #
 # WARNING! All changes made in this file will be lost!
@@ -26,9 +26,12 @@ class Ui_imagebox(object):
         self.picture = QtGui.QLabel(imagebox)
         self.picture.setMinimumSize(QtCore.QSize(128, 128))
         self.picture.setMaximumSize(QtCore.QSize(128, 128))
-        self.picture.setAutoFillBackground(True)
+        self.picture.setContextMenuPolicy(QtCore.Qt.ActionsContextMenu)
+        self.picture.setAutoFillBackground(False)
         self.picture.setStyleSheet("")
-        self.picture.setText("")
+        self.picture.setTextFormat(QtCore.Qt.AutoText)
+        self.picture.setScaledContents(True)
+        self.picture.setAlignment(QtCore.Qt.AlignCenter)
         self.picture.setObjectName("picture")
         self.gridLayout.addWidget(self.picture, 0, 0, 5, 1)
         self.source = QtGui.QLineEdit(imagebox)
@@ -70,12 +73,17 @@ class Ui_imagebox(object):
         self.comments.setObjectName("comments")
         self.gridLayout.addWidget(self.comments, 4, 1, 1, 3)
         self.gridLayout_2.addLayout(self.gridLayout, 0, 0, 1, 1)
+        self.list_delete = QtGui.QAction(imagebox)
+        self.list_delete.setObjectName("list_delete")
+        self.email = QtGui.QAction(imagebox)
+        self.email.setObjectName("email")
 
         self.retranslateUi(imagebox)
         QtCore.QMetaObject.connectSlotsByName(imagebox)
 
     def retranslateUi(self, imagebox):
         self.google.setText(QtGui.QApplication.translate("imagebox", "Google", None, QtGui.QApplication.UnicodeUTF8))
+        self.picture.setText(QtGui.QApplication.translate("imagebox", "Loading...", None, QtGui.QApplication.UnicodeUTF8))
         self.attribute.setText(QtGui.QApplication.translate("imagebox", "Attribute", None, QtGui.QApplication.UnicodeUTF8))
         self.status.setItemText(1, QtGui.QApplication.translate("imagebox", "PUBLIC DOMAIN", None, QtGui.QApplication.UnicodeUTF8))
         self.status.setItemText(2, QtGui.QApplication.translate("imagebox", "BY-SA CC", None, QtGui.QApplication.UnicodeUTF8))
@@ -90,4 +98,6 @@ class Ui_imagebox(object):
         self.send_pm.setText(QtGui.QApplication.translate("imagebox", "PM Author", None, QtGui.QApplication.UnicodeUTF8))
         self.tineye.setText(QtGui.QApplication.translate("imagebox", "TinEye", None, QtGui.QApplication.UnicodeUTF8))
         self.remove.setText(QtGui.QApplication.translate("imagebox", "Remove", None, QtGui.QApplication.UnicodeUTF8))
+        self.list_delete.setText(QtGui.QApplication.translate("imagebox", "Delete From List", None, QtGui.QApplication.UnicodeUTF8))
+        self.email.setText(QtGui.QApplication.translate("imagebox", "Copy Email Text", None, QtGui.QApplication.UnicodeUTF8))
 
