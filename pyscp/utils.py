@@ -5,7 +5,6 @@
 ###############################################################################
 
 import funcy
-import inspect
 import logging
 import blessings
 import re
@@ -42,33 +41,18 @@ def ignore(call, error=Exception, value=None):
         return value
 
 
-def is_method(fn):
-    spec = inspect.getargspec(fn)
-    if not spec[0]:
-        return False
-    return spec[0][0] == 'self'
-
-
-def format_args(call):
-    _args = call._args[1:] if is_method(call._func) else call._args
-    _args = list(map(repr, _args))
-    _kw = {k: repr(v) for k, v in call._kwargs.items()}
-    _kw = list(map('='.join, _kw.items()))
-    return '{}({})'.format(call._func.__qualname__, ', '.join(_args + _kw))
-
-
 @decorator
 def log_errors(call, logger=print):
     try:
         return call()
     except Exception as error:
-        logger('!! {}: {}'.format(format_args(call), error))
+        logger(repr(error))
         raise(error)
 
 
 @decorator
 def log_calls(call, logger=print):
-    logger(format_args(call))
+    logger('{}: {}, {}'.format(call._func.__name__, call._args, call._kwargs))
     return call()
 
 
@@ -102,7 +86,8 @@ class ProgressBar:
         threading.Thread(target=self.run).start()
 
     def update(self):
-        print('\r' + self.line(), end='')
+        with self.term.hidden_cursor():
+            print(self.line() + '\r', end='')
 
     def line(self):
         filled = 40 * self.value / self.max_value
@@ -110,9 +95,9 @@ class ProgressBar:
         current = int(filled * len(parts)) % len(parts)
         bar = '█' * int(filled) + parts[current] + ' ' * 40
         tm = time.gmtime(time.time() - self.time_started)
-        return '{}{} {:>3}% ({}:{:02}:{:02})   '.format(
+        return '{} |{}| {:>3}% ({}:{:02}:{:02})   '.format(
             self.title,
-            self.term.green('{:.40}'.format(bar)),
+            self.term.green(bar[:40]),
             100 * self.value // self.max_value,
             tm.tm_hour, tm.tm_min, tm.tm_sec)
 
@@ -123,7 +108,7 @@ class ProgressBar:
 
     def stop(self):
         self.finished = True
-        print('\r' + self.line())
+        print(self.line())
 
     def exit(self, signum, frame):
         self.stop()
@@ -142,6 +127,27 @@ def pbar(it, title=None, max=None):
     bar.stop()
 
 ###############################################################################
+
+
+class LogCount:
+
+    def __init__(self):
+        self.count = 1
+
+    def filter(self, record):
+        record.count = self.count
+        self.count += 1
+        return True
+
+
+def log_sql_debug():
+    logger = logging.getLogger('peewee')
+    logger.setLevel(logging.DEBUG)
+    logger.addFilter(LogCount())
+    term = logging.StreamHandler()
+    term.setFormatter(logging.Formatter('{count} {message}', style='{'))
+    logger.addHandler(term)
+
 
 def default_logging(debug=False):
     term = logging.StreamHandler()

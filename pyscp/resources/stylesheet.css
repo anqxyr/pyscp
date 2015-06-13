@@ -93,3 +93,36 @@
     * {
         font-family: "HelveticaNeue-Light", "Helvetica Neue Light", "Helvetica Neue", Helvetica, Arial, "Lucida Grande", sans-serif;
     }
+    .scp-image-block {
+      float: right;
+      clear: right;
+      margin: 0 2em 1em 2em;
+      border: solid 1px #666;
+      box-shadow: 0 1px 6px rgba(0,0,0,.25);
+      width: 300px;
+    }
+    .scp-image-block.block-left {
+      float: left;
+      clear: left;
+      margin: 0 2em 1em 0;
+    }
+    .scp-image-block img {
+      border: 0;
+      width: 300px;
+    }
+    .scp-image-block .scp-image-caption {
+      background-color: #eee;
+      border-top: solid 1px #666;
+      padding: 2px 0;
+      font-size: 80%;
+      font-weight: bold;
+      text-align: center;
+      width: 300px;
+    }
+    .scp-image-block > p {
+      margin: 0;
+    }
+    .scp-image-block .scp-image-caption > p {
+      margin: 0;
+      padding: 0 10px;
+    }

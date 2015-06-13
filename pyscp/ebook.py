@@ -5,15 +5,15 @@
 ###############################################################################
 
 import arrow
+import functools
 import itertools
 import logging
-import zipfile
-import uuid
 import re
+import uuid
+import zipfile
 
 from bs4 import BeautifulSoup as bs4
 from collections import namedtuple
-from functools import lru_cache
 from lxml import etree, html
 from pathlib import Path
 from pkgutil import get_data
@@ -255,10 +255,9 @@ class EbookBuilder:
                 entry = (
                     '<p><b>{}</b> ({}) was written by <b>{}</b>'
                     .format(page.title, page.url, page.author))
-                if (len(page.authors) > 1 and
-                        page.authors[1].status == 'rewrite'):
+                if page.rewrite_author:
                     entry += ', rewritten by <b>{}</b>'.format(
-                        page.authors[1].user)
+                        page.rewrite_author)
                 subchapters[-1][1] += entry + '.</p>'
         if self.images:
             subchapters.append(['Images', ''])
@@ -281,37 +280,38 @@ class EbookBuilder:
             content='<div class="title2">{}</div>'.format(title),
             parent=parent)
 
-    def add_block(self, name, urls, filter_fn=None, parent=None):
-        urls = list(filter(filter_fn, urls))
+    def add_block(self, name, urls, parent=None):
         if set(urls) & set(self.urlheap):
             block = self.add_chapter(name, parent)
             for url in urls:
                 self.add_page(url=url, parent=block)
 
     def add_skips(self, start, end, parent=None):
+        search = functools.partial(re.search, r'[0-9]{3,4}$')
         for block_num in range(start, end + 1):
             bl_start, bl_end = (block_num - 1) * 100 or 2, block_num * 100 - 1
+            urls = zip(self._tag('scp'), map(search, self._tag('scp')))
+            urls = [(i, int(j.group())) for i, j in urls if j]
             self.add_block(
                 'Articles {:03}-{:03}'.format(bl_start, bl_end),
-                self._tag('scp'),
-                utils.ignore()(lambda x: bl_start <= int(
-                    re.search(r'[0-9]{3,4}$', x).group()) <= bl_end),
+                [i for i, j in urls if bl_start <= j <= bl_end],
                 parent)
 
     def add_tales(self, start, end, parent=None):
         alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
         start, end = start.upper(), end.upper()
         for letter in alphabet[alphabet.index(start):alphabet.index(end) + 1]:
+            urls = self._tag('tale') - self._tag('hub', 'goi2014')
             self.add_block(
                 'Tales {}'.format(letter),
-                self._tag('tale') - self._tag('hub', 'goi2014'),
-                lambda x: x.split('/')[-1][0] == letter.lower(),
+                [i for i in urls if i.split('/')[-1][0] == letter.lower()],
                 parent)
 
     def add_hubs(self, start, end, parent=None):
         self.add_block(
-            'Cannons and Series', self._tag('hub'),
-            lambda x: start.lower() <= x.split('/')[-1][0] <= end.lower(),
+            'Cannons and Series',
+            [i for i in self._tag('hub') if
+                start.lower() <= i.split('/')[-1][0] <= end.lower()],
             parent)
 
     def add_extras(self, parent=None):
@@ -319,13 +319,13 @@ class EbookBuilder:
             ('001 Proposals', 'Joke Articles', 'Explained Phenomena'),
             (self.cn('scp-001').links, self._tag('joke'),
                 self._tag('explained'))):
-            self.add_block(name, urls, parent=parent)
+            self.add_block(name, urls, parent)
 
-    @lru_cache()
+    @functools.lru_cache()
     @utils.listify(set)
     def _tag(self, *tags):
         for tag in tags:
-            yield from self.cn.list_pages(tag=tag)
+            yield from self.cn.list_urls(tag=tag)
 
     def _get_children_if_skip(self, url):
         for url in self.cn(url).links:
@@ -486,7 +486,7 @@ class HtmlParser:
 
 
 def build_complete(cn, output_path):
-    book = EbookBuilder(cn, list(cn.list_pages(rating='>0')),
+    book = EbookBuilder(cn, list(cn.list_urls(rating='>0')),
                         title='SCP Foundation: The Complete Collection')
     book.add_opening()
     skips = book.add_chapter('SCP Database')
@@ -499,7 +499,7 @@ def build_complete(cn, output_path):
 
 
 def build_tomes(cn, output_path):
-    heap = list(cn.list_pages(rating='>0'))
+    heap = list(cn.list_urls(rating='>0'))
     books = [
         EbookBuilder(cn, heap, title='SCP Foundation: Tome {}'.format(i + 1))
         for i in range(12)]
@@ -521,7 +521,7 @@ def build_digest(cn, output_path):
     date = arrow.now().replace(months=-1).format
     book = EbookBuilder(
         cn,
-        list(cn.list_pages(rating='>0', created=date('YYYY-MM'))),
+        list(cn.list_urls(rating='>0', created=date('YYYY-MM'))),
         title='SCP Foundation Monthly Digest: {}'.format(date('MMMM YYYY')))
     book.add_opening()
     skips = book.add_chapter('SCP Database')
@@ -535,11 +535,11 @@ def build_digest(cn, output_path):
 
 def main():
     sn = core.SnapshotConnector(
-        'www.scp-wiki.net', '/home/anqxyr/heap/_scp/scp-wiki.2015-05-01.db')
+        'www.scp-wiki.net', '/home/anqxyr/heap/_scp/scp-wiki.2015-06-01.db')
     for fn in (build_complete, build_tomes, build_digest):
         fn(sn, '/home/anqxyr/heap/_scp/ebook/')
 
 
 if __name__ == '__main__':
-    core.use_default_logging()
+    utils.default_logging()
     main()
