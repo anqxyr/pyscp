@@ -65,7 +65,7 @@ def redactions(pages):
 ###############################################################################
 
 
-def make_counter(key, pages, func):
+def make_counter(pages, func, key):
     """Generic counter factory."""
     subgroups = collections.defaultdict(list)
     for p in pages:
@@ -75,9 +75,25 @@ def make_counter(key, pages, func):
     return collections.Counter({k: func(v) for k, v in subgroups.items()})
 
 
-def counter_authors(pages, func):
-    """Author counter."""
-    return make_counter(lambda p: p.author, pages, func)
+def counter_author(pages, func):
+    """Group per page author."""
+    return make_counter(pages, func, lambda p: p.author)
+
+
+def counter_month(pages, func):
+    """Group per month the page was posted on."""
+    return make_counter(pages, func, lambda p: p.created[:7])
+
+
+def chain_counters(pages, func, *counters):
+    """Apply counters one after another."""
+    if len(counters) == 1:
+        return counters[0](pages, func)
+    results = collections.Counter()
+    for key, val in counters[0](pages, lambda x: x).items():
+        for ikey, ival in chain_counters(val, func, *counters[1:]).items():
+            results['%s, %s' % (key, ikey)] = ival
+    return results
 
 ###############################################################################
 # Filters
@@ -95,7 +111,7 @@ def filter_tag(pages, tag):
 
 def filter_min_authored(pages, min_val=3):
     """Pages by authors who have at least min_val pages."""
-    authors = counter_authors(pages, len)
+    authors = counter_author(pages, len)
     return [p for p in pages if authors[p.author] >= min_val]
 
 ###############################################################################
@@ -121,19 +137,27 @@ def records(pages):
         'Most -J Articles Written:',
         'Highest Joke Average (>=3):',
         'Most Essay Articles Written:',
-        'Highest Essay Average (>=3):',)
+        'Highest Essay Average (>=3):',
+        'Most Successful Articles posted in 1 Month:',
+        'Most Successful SCPs posted in 1 Month:')
     counters = (
-        counter_authors(pages, upvotes),
-        counter_authors(skips, upvotes),
-        counter_authors(tales, upvotes),
-        counter_authors(skips, len),
-        counter_authors(tales, len),
-        counter_authors(filter_min_authored(skips), average),
-        counter_authors(filter_min_authored(tales), average),
-        counter_authors(jokes, len),
-        counter_authors(filter_min_authored(jokes), average),
-        counter_authors(essays, len),
-        counter_authors(filter_min_authored(essays), average),)
+        counter_author(pages, upvotes),
+        counter_author(skips, upvotes),
+        counter_author(tales, upvotes),
+        counter_author(skips, len),
+        counter_author(tales, len),
+        counter_author(filter_min_authored(skips), average),
+        counter_author(filter_min_authored(tales), average),
+        counter_author(jokes, len),
+        counter_author(filter_min_authored(jokes), average),
+        counter_author(essays, len),
+        counter_author(filter_min_authored(essays), average),
+        chain_counters(
+            [p for p in pages if p.created[:7] != '2008-07'],
+            len, counter_author, counter_month),
+        chain_counters(
+            [p for p in skips if p.created[:7] != '2008-07'],
+            len, counter_author, counter_month),)
     for message, counter in zip(messages, counters):
         print(message)
         for k, v in counter.most_common(5):
