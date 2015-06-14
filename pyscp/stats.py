@@ -11,6 +11,7 @@ import logging
 import pyscp
 import re
 import itertools
+import functools
 
 ###############################################################################
 # Global Constants And Variables
@@ -19,57 +20,124 @@ import itertools
 log = logging.getLogger(__name__)
 
 ###############################################################################
-# Per-Author Counters
+# Scalars
+#
+# These functions receive a list of pages and return a single value.
+# They're the smallest blocks on which the rest of the stats module is build.
+###############################################################################
+
+# builtin len is a scalar too
+
+
+def upvotes(pages):
+    """Upvotes."""
+    return sum([v.value for v in p.votes].count(1) for p in pages)
+
+
+def rating(pages):
+    """Net rating."""
+    return sum(p.rating for p in pages)
+
+
+def average(pages):
+    """Average rating."""
+    return rating(pages) / len(pages)
+
+
+def divided(pages):
+    """Controversy score."""
+    return sum(len(p.votes) / p.rating for p in pages)
+
+
+def redactions(pages):
+    """Redaction score."""
+    return sum(
+        p.text.count('█') +
+        20 * sum(map(p.text.count, ('REDACTED', 'EXPUNGED')))
+        for p in pages)
+
+###############################################################################
+# Counters
+#
+# These function receive a list of pages and a scalar function. They then
+# split the pages based on some criteria, and apply the scalar to each
+# subgroup. The results are returned as a collections.Counter object.
 ###############################################################################
 
 
-def a_upvotes(pages):
-    counter = collections.Counter()
+def make_counter(key, pages, func):
+    """Generic counter factory."""
+    subgroups = collections.defaultdict(list)
     for p in pages:
-        counter[p.author] += [v.value for v in p.votes].count(1)
-    return counter
+        key_value = key(p)
+        if key_value:
+            subgroups[key_value].append(p)
+    return collections.Counter({k: func(v) for k, v in subgroups.items()})
 
 
-def a_rating(pages):
-    counter = collections.Counter()
-    for p in pages:
-        counter[p.author] += p.rating
-    return counter
+def counter_authors(pages, func):
+    """Author counter."""
+    return make_counter(lambda p: p.author, pages, func)
+
+###############################################################################
+# Filters
+#
+# These functions take a list of pages and return a list filtered based on
+# some criteria. Some of these are basically shortcuts for list comprehensions,
+# while others are more complicated.
+###############################################################################
 
 
-def a_pages(pages):
-    counter = collections.Counter()
-    for p in pages:
-        counter[p.author] += 1
-    return counter
+def filter_tag(pages, tag):
+    """Pages with a given tag."""
+    return [p for p in pages if tag in p.tags]
 
 
-def a_average(pages):
-    r = a_rating(pages)
-    c = a_pages(pages)
-    return collections.Counter({k: r[k] / c[k] for k in c})
+def filter_min_authored(pages, min_val=3):
+    """Pages by authors who have at least min_val pages."""
+    authors = counter_authors(pages, len)
+    return [p for p in pages if authors[p.author] >= min_val]
 
 ###############################################################################
 # Records
+#
+# Pretty-printing numbers for the 'SCP WORLD RECORDS' thread.
 ###############################################################################
-
-
-def print_record(pages, func, tag=None):
-    print('{} ({}):'.format(func.__name__, tag))
-    group = pages if not tag else [p for p in pages if tag in p.tags]
-    for k, v in func(group).most_common(5):
-        print(k.ljust(40), v)
 
 
 def records(pages):
     pages = [p for p in pages if p.author != 'Unknown Author']
-    print_record(pages, a_upvotes)
-    print_record(pages, a_upvotes, 'scp')
-    print_record(pages, a_upvotes, 'tale')
-    print_record(pages, a_pages, 'scp')
-    print_record(pages, a_pages, 'tale')
-    print_record(pages, a_average, 'scp')
-    print_record(pages, a_average, 'tale')
+    pages = [p for p in pages if '_sys' not in p.tags]
+    skips, tales, jokes, essays = [
+        filter_tag(pages, tag) for tag in ('scp', 'tale', 'joke', 'essay')]
+    messages = (
+        'Users with Most Upvotes (General):',
+        'Users with Most Upvotes (SCPs):',
+        'Users with Most Upvotes (Tales):',
+        'Most SCPs Written:',
+        'Most Tales Written:',
+        'Highest SCP Average (>=3):',
+        'Highest Tale Average (>=3):',
+        'Most -J Articles Written:',
+        'Highest Joke Average (>=3):',
+        'Most Essay Articles Written:',
+        'Highest Essay Average (>=3):',)
+    counters = (
+        counter_authors(pages, upvotes),
+        counter_authors(skips, upvotes),
+        counter_authors(tales, upvotes),
+        counter_authors(skips, len),
+        counter_authors(tales, len),
+        counter_authors(filter_min_authored(skips), average),
+        counter_authors(filter_min_authored(tales), average),
+        counter_authors(jokes, len),
+        counter_authors(filter_min_authored(jokes), average),
+        counter_authors(essays, len),
+        counter_authors(filter_min_authored(essays), average),)
+    for message, counter in zip(messages, counters):
+        print(message)
+        for k, v in counter.most_common(5):
+            print(k.ljust(40), round(v, 2))
 
 
 ###############################################################################
