@@ -90,6 +90,21 @@ def cr_page(pages, func):
     return make_counter(pages, func, lambda p: p.url)
 
 
+def cr_block(pages, func):
+    """Group skips based on which 100-block they're in."""
+    def key(page):
+        if 'scp' not in page.tags:
+            return
+        match = re.search(r'[0-9]{3,4}$', page.url)
+        if not match:
+            return
+        match = int(match.group())
+        if match == 1:
+            return
+        return str((match // 100) * 100).zfill(3)
+    return make_counter(pages, func, key)
+
+
 def chain_crs(pages, func, *counters):
     """Apply counters one after another."""
     if len(counters) == 1:
@@ -111,9 +126,12 @@ def chain_crs(pages, func, *counters):
 
 def fl_tag(pages, tag):
     """Pages with a given tag."""
+    if tag is None:
+        return pages
     return [p for p in pages if tag in p.tags]
 
 
+# TODO: needs more indicative name.
 def fl_authored(pages, min_val=3):
     """Pages by authors who have at least min_val pages."""
     authors = cr_author(pages, len)
@@ -140,46 +158,39 @@ def fl_rating(pages, min_val=20):
 def records(pages):
     pages = [p for p in pages if p.author != 'Unknown Author']
     pages = [p for p in pages if '_sys' not in p.tags]
-    skips, tales, jokes, essays = [
-        fl_tag(pages, tag) for tag in ('scp', 'tale', 'joke', 'essay')]
-    messages = (
-        'Users with Most Upvotes (General):',
-        'Users with Most Upvotes (SCPs):',
-        'Users with Most Upvotes (Tales):',
-        'Most SCPs Written:',
-        'Most Tales Written:',
-        'Highest SCP Average (>=3):',
-        'Highest Tale Average (>=3):',
-        'Most -J Articles Written:',
-        'Highest Joke Average (>=3):',
-        'Most Essay Articles Written:',
-        'Highest Essay Average (>=3):',
-        'Most Successful Articles posted in 1 Month:',
-        'Most Successful SCPs posted in 1 Month:',
-        'Most Divided SCP Vote (>+20):',
-        'Highest Redaction Score (SCPs):',
-        'Highest Redaction Score (Tales):')
-    counters = (
-        cr_author(pages, upvotes),
-        cr_author(skips, upvotes),
-        cr_author(tales, upvotes),
-        cr_author(skips, len),
-        cr_author(tales, len),
-        cr_author(fl_authored(skips), average),
-        cr_author(fl_authored(tales), average),
-        cr_author(jokes, len),
-        cr_author(fl_authored(jokes), average),
-        cr_author(essays, len),
-        cr_author(fl_authored(essays), average),
-        chain_crs(fl_not_migrated(pages), len, cr_author, cr_month),
-        chain_crs(fl_not_migrated(skips), len, cr_author, cr_month),
-        cr_page(fl_rating(skips), divided),
-        cr_page(skips, redactions),
-        cr_page(tales, redactions))
-    for message, counter in zip(messages, counters):
-        print(message)
-        for k, v in counter.most_common(5):
-            print(k.ljust(40), round(v, 2))
+    templates = (
+        'Users with Most Upvotes ({}s):',
+        'Most {}s Written:',
+        'Highest {} Average (>=3):',
+        'Most Successful {}s posted in 1 Month:',
+        'Most Divided {} Vote (>+20):',
+        'Highest Redaction Score ({}s):',
+        'Highest {} Block Average:')
+    template_funcs = (  # (counter, filter, *args_for_counter)
+        (cr_author, None, upvotes),
+        (cr_author, None, len),
+        (cr_author, fl_authored, average),
+        (chain_crs, fl_not_migrated, len, cr_author, cr_month),
+        (cr_page, fl_rating, divided),
+        (cr_page, None, redactions),
+        (cr_block, None, average))
+    template_tags = (  # which tags to apply to each template
+        (None, 'scp', 'tale'),
+        ('scp', 'tale', 'joke', 'essay'),
+        ('scp', 'tale', 'joke', 'essay'),
+        (None, 'scp'),
+        ('scp', ),
+        ('scp', 'tale'),
+        ('scp', ))
+    for template, funcs, tags in zip(templates, template_funcs, template_tags):
+        for tag in tags:
+            subgr = fl_tag(pages, tag)
+            subgr = subgr if funcs[1] is None else funcs[1](subgr)
+            name = 'Article' if tag is None else (
+                'SCP' if tag == 'scp' else tag.capitalize())
+            print(template.format(name))
+            for k, v in funcs[0](subgr, *funcs[2:]).most_common(5):
+                print(k.ljust(40 if len(k) < 40 else 80), round(v, 2))
 
 
 ###############################################################################
