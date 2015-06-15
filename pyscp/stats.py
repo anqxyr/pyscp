@@ -75,23 +75,28 @@ def make_counter(pages, func, key):
     return collections.Counter({k: func(v) for k, v in subgroups.items()})
 
 
-def counter_author(pages, func):
+def cr_author(pages, func):
     """Group per page author."""
     return make_counter(pages, func, lambda p: p.author)
 
 
-def counter_month(pages, func):
+def cr_month(pages, func):
     """Group per month the page was posted on."""
     return make_counter(pages, func, lambda p: p.created[:7])
 
 
-def chain_counters(pages, func, *counters):
+def cr_page(pages, func):
+    """Each page into its own group."""
+    return make_counter(pages, func, lambda p: p.url)
+
+
+def chain_crs(pages, func, *counters):
     """Apply counters one after another."""
     if len(counters) == 1:
         return counters[0](pages, func)
     results = collections.Counter()
     for key, val in counters[0](pages, lambda x: x).items():
-        for ikey, ival in chain_counters(val, func, *counters[1:]).items():
+        for ikey, ival in chain_crs(val, func, *counters[1:]).items():
             results['%s, %s' % (key, ikey)] = ival
     return results
 
@@ -104,15 +109,26 @@ def chain_counters(pages, func, *counters):
 ###############################################################################
 
 
-def filter_tag(pages, tag):
+def fl_tag(pages, tag):
     """Pages with a given tag."""
     return [p for p in pages if tag in p.tags]
 
 
-def filter_min_authored(pages, min_val=3):
+def fl_authored(pages, min_val=3):
     """Pages by authors who have at least min_val pages."""
-    authors = counter_author(pages, len)
+    authors = cr_author(pages, len)
     return [p for p in pages if authors[p.author] >= min_val]
+
+
+def fl_not_migrated(pages):
+    """Exclude pages that were moved from editthis wiki."""
+    # this particular approach to it is rather crude
+    return [p for p in pages if p.created[:7] != '2008-07']
+
+
+def fl_rating(pages, min_val=20):
+    """Pages with rating above min_val."""
+    return [p for p in pages if p.rating > min_val]
 
 ###############################################################################
 # Records
@@ -125,7 +141,7 @@ def records(pages):
     pages = [p for p in pages if p.author != 'Unknown Author']
     pages = [p for p in pages if '_sys' not in p.tags]
     skips, tales, jokes, essays = [
-        filter_tag(pages, tag) for tag in ('scp', 'tale', 'joke', 'essay')]
+        fl_tag(pages, tag) for tag in ('scp', 'tale', 'joke', 'essay')]
     messages = (
         'Users with Most Upvotes (General):',
         'Users with Most Upvotes (SCPs):',
@@ -139,25 +155,27 @@ def records(pages):
         'Most Essay Articles Written:',
         'Highest Essay Average (>=3):',
         'Most Successful Articles posted in 1 Month:',
-        'Most Successful SCPs posted in 1 Month:')
+        'Most Successful SCPs posted in 1 Month:',
+        'Most Divided SCP Vote (>+20):',
+        'Highest Redaction Score (SCPs):',
+        'Highest Redaction Score (Tales):')
     counters = (
-        counter_author(pages, upvotes),
-        counter_author(skips, upvotes),
-        counter_author(tales, upvotes),
-        counter_author(skips, len),
-        counter_author(tales, len),
-        counter_author(filter_min_authored(skips), average),
-        counter_author(filter_min_authored(tales), average),
-        counter_author(jokes, len),
-        counter_author(filter_min_authored(jokes), average),
-        counter_author(essays, len),
-        counter_author(filter_min_authored(essays), average),
-        chain_counters(
-            [p for p in pages if p.created[:7] != '2008-07'],
-            len, counter_author, counter_month),
-        chain_counters(
-            [p for p in skips if p.created[:7] != '2008-07'],
-            len, counter_author, counter_month),)
+        cr_author(pages, upvotes),
+        cr_author(skips, upvotes),
+        cr_author(tales, upvotes),
+        cr_author(skips, len),
+        cr_author(tales, len),
+        cr_author(fl_authored(skips), average),
+        cr_author(fl_authored(tales), average),
+        cr_author(jokes, len),
+        cr_author(fl_authored(jokes), average),
+        cr_author(essays, len),
+        cr_author(fl_authored(essays), average),
+        chain_crs(fl_not_migrated(pages), len, cr_author, cr_month),
+        chain_crs(fl_not_migrated(skips), len, cr_author, cr_month),
+        cr_page(fl_rating(skips), divided),
+        cr_page(skips, redactions),
+        cr_page(tales, redactions))
     for message, counter in zip(messages, counters):
         print(message)
         for k, v in counter.most_common(5):
