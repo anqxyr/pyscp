@@ -75,22 +75,22 @@ def make_counter(pages, func, key):
     return collections.Counter({k: func(v) for k, v in subgroups.items()})
 
 
-def cr_author(pages, func):
+def counter_author(pages, func):
     """Group per page author."""
     return make_counter(pages, func, lambda p: p.author)
 
 
-def cr_month(pages, func):
+def counter_month(pages, func):
     """Group per month the page was posted on."""
     return make_counter(pages, func, lambda p: p.created[:7])
 
 
-def cr_page(pages, func):
+def counter_page(pages, func):
     """Each page into its own group."""
     return make_counter(pages, func, lambda p: p.url)
 
 
-def cr_block(pages, func):
+def counter_block(pages, func):
     """Group skips based on which 100-block they're in."""
     def key(page):
         if 'scp' not in page.tags:
@@ -105,13 +105,13 @@ def cr_block(pages, func):
     return make_counter(pages, func, key)
 
 
-def chain_crs(pages, func, *counters):
+def chain_counters(pages, func, *counters):
     """Apply counters one after another."""
     if len(counters) == 1:
         return counters[0](pages, func)
     results = collections.Counter()
     for key, val in counters[0](pages, lambda x: x).items():
-        for ikey, ival in chain_crs(val, func, *counters[1:]).items():
+        for ikey, ival in chain_counters(val, func, *counters[1:]).items():
             results['%s, %s' % (key, ikey)] = ival
     return results
 
@@ -124,7 +124,7 @@ def chain_crs(pages, func, *counters):
 ###############################################################################
 
 
-def fl_tag(pages, tag):
+def filter_tag(pages, tag):
     """Pages with a given tag."""
     if tag is None:
         return pages
@@ -132,19 +132,19 @@ def fl_tag(pages, tag):
 
 
 # TODO: needs more indicative name.
-def fl_authored(pages, min_val=3):
+def filter_authored(pages, min_val=3):
     """Pages by authors who have at least min_val pages."""
-    authors = cr_author(pages, len)
+    authors = counter_author(pages, len)
     return [p for p in pages if authors[p.author] >= min_val]
 
 
-def fl_not_migrated(pages):
+def filter_not_migrated(pages):
     """Exclude pages that were moved from editthis wiki."""
     # this particular approach to it is rather crude
     return [p for p in pages if p.created[:7] != '2008-07']
 
 
-def fl_rating(pages, min_val=20):
+def filter_rating(pages, min_val=20):
     """Pages with rating above min_val."""
     return [p for p in pages if p.rating > min_val]
 
@@ -158,39 +158,56 @@ def fl_rating(pages, min_val=20):
 def records(pages):
     pages = [p for p in pages if p.author != 'Unknown Author']
     pages = [p for p in pages if '_sys' not in p.tags]
-    templates = (
-        'Users with Most Upvotes ({}s):',
-        'Most {}s Written:',
-        'Highest {} Average (>=3):',
-        'Most Successful {}s posted in 1 Month:',
-        'Most Divided {} Vote (>+20):',
-        'Highest Redaction Score ({}s):',
-        'Highest {} Block Average:')
-    template_funcs = (  # (counter, filter, *args_for_counter)
-        (cr_author, None, upvotes),
-        (cr_author, None, len),
-        (cr_author, fl_authored, average),
-        (chain_crs, fl_not_migrated, len, cr_author, cr_month),
-        (cr_page, fl_rating, divided),
-        (cr_page, None, redactions),
-        (cr_block, None, average))
-    template_tags = (  # which tags to apply to each template
-        (None, 'scp', 'tale'),
-        ('scp', 'tale', 'joke', 'essay'),
-        ('scp', 'tale', 'joke', 'essay'),
-        (None, 'scp'),
-        ('scp', ),
-        ('scp', 'tale'),
-        ('scp', ))
-    for template, funcs, tags in zip(templates, template_funcs, template_tags):
-        for tag in tags:
-            subgr = fl_tag(pages, tag)
-            subgr = subgr if funcs[1] is None else funcs[1](subgr)
-            name = 'Article' if tag is None else (
-                'SCP' if tag == 'scp' else tag.capitalize())
-            print(template.format(name))
-            for k, v in funcs[0](subgr, *funcs[2:]).most_common(5):
-                print(k.ljust(40 if len(k) < 40 else 80), round(v, 2))
+    rec = collections.namedtuple('Record', 'template counter filter args tags')
+    records = (
+        rec(template='Users with Most Upvotes ({}s):',
+            counter=counter_author,
+            filter=None,
+            args=(upvotes, ),
+            tags=(None, 'scp', 'tale')),
+        rec(template='Most {}s Written:',
+            counter=counter_author,
+            filter=None,
+            args=(len, ),
+            tags=('scp', 'tale', 'joke', 'essay')),
+        rec(template='Highest {} Average (>=3):',
+            counter=counter_author,
+            filter=filter_authored,
+            args=(average, ),
+            tags=('scp', 'tale', 'joke', 'essay')),
+        rec(template='Most Successful {}s posted in one Month:',
+            counter=chain_counters,
+            filter=filter_not_migrated,
+            args=(len, counter_author, counter_month),
+            tags=(None, 'scp')),
+        rec(template='Most Divided {} Vote (>+20):',
+            counter=counter_page,
+            filter=filter_rating,
+            args=(divided, ),
+            tags=('scp', )),
+        rec(template='Highest Redaction Score ({}s):',
+            counter=counter_page,
+            filter=None,
+            args=(redactions, ),
+            tags=('scp', 'tale')),
+        rec(template='Highest {} Block Average:',
+            counter=counter_block,
+            filter=None,
+            args=(average, ),
+            tags=('scp', )))
+    for record, tag in [(r, t) for r in records for t in r.tags]:
+        fpages = filter_tag(pages, tag)
+        if record.filter:
+            fpages = record.filter(fpages)
+        if not tag:
+            insert = 'Article'
+        elif tag == 'scp':
+            insert = 'SCP'
+        else:
+            insert = tag.capitalize()
+        print(record.template.format(insert))
+        for k, v in record.counter(fpages, *record.args).most_common(5):
+            print(k.ljust(40 if len(k) < 40 else 80), round(v, 2))
 
 
 ###############################################################################
