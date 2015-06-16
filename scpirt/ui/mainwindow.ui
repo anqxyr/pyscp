@@ -13,10 +13,6 @@
   <property name="windowTitle">
    <string>SCPIRT</string>
   </property>
-  <property name="windowIcon">
-   <iconset>
-    <normaloff>:/scpirt/resources/scpwiki.png</normaloff>:/scpirt/resources/scpwiki.png</iconset>
-  </property>
   <widget class="QWidget" name="centralwidget">
    <layout class="QGridLayout" name="gridLayout">
     <item row="0" column="0">
@@ -29,7 +25,7 @@
       </property>
       <property name="minimumSize">
        <size>
-        <width>520</width>
+        <width>560</width>
         <height>325</height>
        </size>
       </property>
@@ -74,6 +70,7 @@
     <property name="title">
      <string>&amp;File</string>
     </property>
+    <addaction name="login"/>
     <addaction name="save"/>
     <addaction name="quit"/>
    </widget>
@@ -312,10 +309,13 @@
     <string>Ctrl+S</string>
    </property>
   </action>
+  <action name="login">
+   <property name="text">
+    <string>Login</string>
+   </property>
+  </action>
  </widget>
- <resources>
-  <include location="scpirt.qrc"/>
- </resources>
+ <resources/>
  <connections>
   <connection>
    <sender>quit</sender>

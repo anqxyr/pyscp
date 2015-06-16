@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 
-# Form implementation generated from reading ui file 'scpirt.ui'
+# Form implementation generated from reading ui file 'ui/mainwindow.ui'
 #
-# Created: Fri May 22 13:03:34 2015
+# Created: Tue Jun 16 20:55:42 2015
 #      by: pyside-uic 0.2.15 running on PySide 1.2.1
 #
 # WARNING! All changes made in this file will be lost!
@@ -13,9 +13,6 @@ class Ui_MainWindow(object):
     def setupUi(self, MainWindow):
         MainWindow.setObjectName("MainWindow")
         MainWindow.resize(600, 800)
-        icon = QtGui.QIcon()
-        icon.addPixmap(QtGui.QPixmap(":/scpirt/resources/scpwiki.png"), QtGui.QIcon.Normal, QtGui.QIcon.Off)
-        MainWindow.setWindowIcon(icon)
         self.centralwidget = QtGui.QWidget(MainWindow)
         self.centralwidget.setObjectName("centralwidget")
         self.gridLayout = QtGui.QGridLayout(self.centralwidget)
@@ -26,7 +23,7 @@ class Ui_MainWindow(object):
         sizePolicy.setVerticalStretch(0)
         sizePolicy.setHeightForWidth(self.scroll.sizePolicy().hasHeightForWidth())
         self.scroll.setSizePolicy(sizePolicy)
-        self.scroll.setMinimumSize(QtCore.QSize(520, 325))
+        self.scroll.setMinimumSize(QtCore.QSize(560, 325))
         self.scroll.setFrameShadow(QtGui.QFrame.Plain)
         self.scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
         self.scroll.setWidgetResizable(True)
@@ -127,6 +124,9 @@ class Ui_MainWindow(object):
         self.scp29.setObjectName("scp29")
         self.save = QtGui.QAction(MainWindow)
         self.save.setObjectName("save")
+        self.login = QtGui.QAction(MainWindow)
+        self.login.setObjectName("login")
+        self.File.addAction(self.login)
         self.File.addAction(self.save)
         self.File.addAction(self.quit)
         self.series1.addAction(self.scp0)
@@ -214,5 +214,5 @@ class Ui_MainWindow(object):
         self.scp29.setText(QtGui.QApplication.translate("MainWindow", "2900 - 2999", None, QtGui.QApplication.UnicodeUTF8))
         self.save.setText(QtGui.QApplication.translate("MainWindow", "&Save", None, QtGui.QApplication.UnicodeUTF8))
         self.save.setShortcut(QtGui.QApplication.translate("MainWindow", "Ctrl+S", None, QtGui.QApplication.UnicodeUTF8))
+        self.login.setText(QtGui.QApplication.translate("MainWindow", "Login", None, QtGui.QApplication.UnicodeUTF8))
 
-import scpirt_rc
