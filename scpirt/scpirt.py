@@ -8,10 +8,11 @@ import pathlib
 import pyscp
 import logging
 import webbrowser
+import bs4
 
-from scpirt_ui import Ui_MainWindow
-from imagebox_ui import Ui_imagebox
-from bs4 import BeautifulSoup as soup
+import scpirt_ui
+import imagebox_ui
+
 from PySide import QtGui, QtCore
 
 ###############################################################################
@@ -20,7 +21,44 @@ from PySide import QtGui, QtCore
 
 log = logging.getLogger(__name__)
 req = pyscp.core.InsistentRequest()
-sandbox = pyscp.WikidotConnector('scpsandbox2')
+sandbox = pyscp.core.WikidotConnector('scpsandbox2')
+
+###############################################################################
+
+
+class Image:
+
+    def __init__(self, url, page, user, source, status, notes):
+        self.url, self.page, self.user, self.source = url, page, user, source
+        self.status = self._saved = status
+        self.notes = notes
+
+    @property
+    def attribute(self):
+        if self.status == self._saved:
+            return False
+        if self.status in ('BY-SA CC', 'BY-NC-SA CC', 'PERMISSION GRANTED'):
+            return True
+        return False
+
+    @property
+    def remove(self):
+        if self.status == self._saved:
+            return False
+        if self.status in ('AWAITING REPLY', 'PERMANENTLY REMOVED'):
+            return True
+        return False
+
+    def row_code(self):
+        pic = '[[image {} width="50px"]]'.format(self.url)
+        page = '[{} {}]'.format(self.page, self.page.split('/')[-1])
+        user = '[[user {}]]'.format(self.user) if self.user else ' '
+        source = '[{} source]'.format(self.source) if self.source else ' '
+        status = '**{}**'.format(self.status) if self.status else ' '
+        notes = self.notes.replace('\n', ' _\n') if self.notes else ' '
+        return '||{}||{} _\n{}||{}||{}||{}||'.format(
+            pic, page, user, source, status, notes)
+
 
 ###############################################################################
 
@@ -29,61 +67,42 @@ class Imagebox(QtGui.QWidget):
 
     def __init__(self, image):
         super().__init__()
-        self.ui = Ui_imagebox()
+        self.ui = imagebox_ui.Ui_imagebox()
         self.ui.setupUi(self)
         self.ui.status.wheelEvent = lambda x: self.parentWidget().wheelEvent(x)
-        self.ui.status.currentIndexChanged.connect(self.change_status)
         self.ui.google.clicked.connect(self.open_google)
         self.ui.tineye.clicked.connect(self.open_tineye)
-        self.ui.attribute.stateChanged.connect(self.check('attribute'))
-        self.ui.send_pm.stateChanged.connect(self.check('send_pm'))
-        self.ui.remove.stateChanged.connect(self.check('remove'))
         self.ui.picture.addAction(self.ui.list_delete)
         self.ui.picture.addAction(self.ui.email)
         self.load_image(image)
+        self.ui.status.currentIndexChanged.connect(self.change_status)
 
     def load_image(self, image):
         self.image = image
-        self.ui.source.setText(image['source'])
-        self.ui.comments.setText(image['comments'])
-        self.ui.picture.setToolTip('{url}\n{page}\n{user}'.format(**image))
-        self.ui.status.setCurrentIndex(
-            self.ui.status.findText(image['status']))
-        self.worker = ImageDownloader(image['url'])
+        self.ui.source.setText(image.source)
+        self.ui.notes.setText(image.notes)
+        self.ui.picture.setToolTip('{0.url}\n{0.page}\n{0.user}'.format(image))
+        self.ui.status.setCurrentIndex(self.ui.status.findText(image.status))
+        self.worker = ImageDownloader(image.url)
         self.worker.finished.connect(self.set_picture)
         self.worker.start()
 
     def change_status(self):
-        status = self.ui.status.currentText()
-        self.image['status'] = status
-        if status in (
-                self.image['saved_status'], '', 'PUBLIC DOMAIN', 'REPLACED',
-                'SOURCE UNKNOWN', 'UNABLE TO CONTACT', 'PERMISSION DENIED'):
-            # PERMISSION DENIED is in this group because usually it was
-            # preceeded by AWAITING REPLY, and so the image is already removed
-            values = 0, 0, 0
-        elif status in ('BY-SA CC', 'BY-NC-SA CC', 'PERMISSION GRANTED'):
-            values = 1, 0, 0
-        elif status in ('AWAITING REPLY', 'PERMANENTLY REMOVED'):
-            values = 0, 1, 1
-        for field, value in zip(('attribute', 'send_pm', 'remove'), values):
-            state = QtCore.Qt.Checked if value else QtCore.Qt.Unchecked
-            getattr(self.ui, field).setCheckState(state)
-
-    def check(self, field):
-        return lambda x: self.image.update({field: x == 2})
+        self.image.status = self.ui.status.currentText()
+        for w, s in (
+                (self.ui.remove, self.image.remove),
+                (self.ui.attribute, self.image.attribute)):
+            w.setCheckState(QtCore.Qt.Checked if s else QtCore.Qt.Unchecked)
 
     def open_google(self):
-        #url = 'https://www.google.com/searchbyimage?&image_url='
-        #webbrowser.open(url + self.image['url'])
-        from pprint import pprint
-        pprint(self.image)
+        webbrowser.open('https://www.google.com/searchbyimage?&image_url=' +
+                        self.image.url)
 
     def open_tineye(self):
-        webbrowser.open('http://tineye.com/search?url=' + self.image['url'])
+        webbrowser.open('http://tineye.com/search?url=' + self.image.url)
 
     def set_picture(self):
-        filename = 'images/' + '_'.join(self.image['url'].split('/')[-2:])
+        filename = 'images/' + '_'.join(self.image.url.split('/')[-2:])
         self.ui.picture.setPixmap(QtGui.QPixmap(filename))
 
 
@@ -108,31 +127,14 @@ class ImageListDownloader(QtCore.QThread):
 
     update_status = QtCore.Signal(str)
 
-    def __init__(self, block_number, result_container):
-        self.block_number = block_number
+    def __init__(self, index, result_container):
+        self.index = index
         self.result_container = result_container
         super().__init__()
 
     def run(self):
         self.update_status.emit('Downloading image list.')
-        html = sandbox('image-review-{}'.format(self.block_number)).html
-        tables = soup(html)(class_='wiki-content-table')
-        self.update_status.emit('Parsing tables.')
-        rows = [i('td') for table in tables for i in table('tr')[1:]]
-        for row in rows:
-            user, source = None, None
-            if row[1]('span'):
-                user = row[1].span.a.text
-            if row[3]('a'):
-                source = row[3].a['href']
-            self.result_container.append(dict(
-                url=row[0]('img')[0]['src'],
-                page=row[1].a['href'],
-                user=user,
-                source=source,
-                status=row[4].text,
-                saved_status=row[4].text,
-                comments=row[5].text if row[5].text else None))
+        self.result_container.extend(list(parse_review_page(self.index)))
         self.update_status.emit('Done.')
 
 
@@ -140,15 +142,16 @@ class SCPIRT(QtGui.QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.ui = Ui_MainWindow()
+        self.ui = scpirt_ui.Ui_MainWindow()
         self.ui.setupUi(self)
         self.show()
+        self.ui.save.triggered.connect(self.save)
         for i in range(10):
             action = getattr(self.ui, 'scp{}'.format(i))
             action.triggered.connect(lambda i=i: self.get_list(i + 1))
 
     def get_list(self, index):
-        self.current_review_block = index
+        self.current_review_page = index
         self.images = []
         self.worker = ImageListDownloader(index, self.images)
         self.worker.finished.connect(self.display_detailed)
@@ -162,6 +165,41 @@ class SCPIRT(QtGui.QMainWindow):
             child = self.ui.main.takeAt(0)
         for i in self.images:
             self.ui.main.addWidget(Imagebox(i))
+
+    def save(self):
+        print('||~ Image||~ Page||~ Source||~ Status||~ Notes||')
+        for img in self.images:
+            print(img.row_code())
+        #p = sandbox('image-review-' + str(self.current_review_page))
+        #p.edit(source)
+
+
+def parse_review_page(index):
+    p = sandbox('image-review-' + str(index))
+    tables = bs4.BeautifulSoup(p.html)(class_='wiki-content-table')
+    rows = [i('td') for t in tables for i in t('tr')[1:]]
+    for row in rows:
+        url = row[0].find('img')['src']
+        page = row[1].a['href']
+        user = row[1].span.a.text if row[1].select('span a') else None
+        source = row[3].a['href'] if row[3]('a') else None
+        status, notes = [row[i].text for i in (4, 5)]
+        yield Image(url, page, user, source, status, notes)
+
+
+def generate_stats():
+    idxs = range(1, 28)
+    data = []
+    for i in idxs:
+        data.extend(list(parse_review_page(i)))
+    print('Review pages:', len(idxs))
+    print('Images indexed:', len(data))
+    print('Reviewed:', len(data) - [i['status'] for i in data].count(None))
+    for status in [
+            'PUBLIC DOMAIN', 'REPLACED', 'SOURCE UNKNOWN', 'UNABLE TO CONTACT',
+            'PERMISSION DENIED', 'BY-SA CC', 'BY-NC-SA CC',
+            'PERMISSION GRANTED', 'AWAITING REPLY', 'PERMANENTLY REMOVED']:
+        print(status + ':', [i['status'] for i in data].count(status))
 
 
 if __name__ == '__main__':
