@@ -10,8 +10,7 @@ import logging
 import webbrowser
 import bs4
 
-import scpirt_ui
-import imagebox_ui
+import ui
 
 from PySide import QtGui, QtCore
 
@@ -33,7 +32,6 @@ class Image:
         self.status = self._saved = status
         self.notes = notes
 
-    @property
     def attribute(self):
         if self.status == self._saved:
             return False
@@ -41,7 +39,6 @@ class Image:
             return True
         return False
 
-    @property
     def remove(self):
         if self.status == self._saved:
             return False
@@ -67,7 +64,7 @@ class Imagebox(QtGui.QWidget):
 
     def __init__(self, image):
         super().__init__()
-        self.ui = imagebox_ui.Ui_imagebox()
+        self.ui = ui.ImageBox()
         self.ui.setupUi(self)
         self.ui.status.wheelEvent = lambda x: self.parentWidget().wheelEvent(x)
         self.ui.google.clicked.connect(self.open_google)
@@ -90,8 +87,8 @@ class Imagebox(QtGui.QWidget):
     def change_status(self):
         self.image.status = self.ui.status.currentText()
         for w, s in (
-                (self.ui.remove, self.image.remove),
-                (self.ui.attribute, self.image.attribute)):
+                (self.ui.remove, self.image.remove()),
+                (self.ui.attribute, self.image.attribute())):
             w.setCheckState(QtCore.Qt.Checked if s else QtCore.Qt.Unchecked)
 
     def open_google(self):
@@ -142,7 +139,7 @@ class SCPIRT(QtGui.QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.ui = scpirt_ui.Ui_MainWindow()
+        self.ui = ui.MainWindow()
         self.ui.setupUi(self)
         self.show()
         self.ui.save.triggered.connect(self.save)
@@ -194,12 +191,10 @@ def generate_stats():
         data.extend(list(parse_review_page(i)))
     print('Review pages:', len(idxs))
     print('Images indexed:', len(data))
-    print('Reviewed:', len(data) - [i['status'] for i in data].count(None))
-    for status in [
-            'PUBLIC DOMAIN', 'REPLACED', 'SOURCE UNKNOWN', 'UNABLE TO CONTACT',
-            'PERMISSION DENIED', 'BY-SA CC', 'BY-NC-SA CC',
-            'PERMISSION GRANTED', 'AWAITING REPLY', 'PERMANENTLY REMOVED']:
-        print(status + ':', [i['status'] for i in data].count(status))
+    statuses = [i.status for i in data]
+    print('Reviewed:', len(data) - statuses.count(None))
+    for status in set(statuses):
+        print(status + ':', statuses.count(status))
 
 
 if __name__ == '__main__':
