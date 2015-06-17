@@ -390,6 +390,8 @@ class WikidotPageAdapter:
 
     def __init__(self, connector):
         self.cn = connector
+        for i in 'page_id', 'thread_id', 'html', 'tags':
+            setattr(self, 'get_' + i, self._load_page)
 
     ###########################################################################
     # Private Methods
@@ -407,11 +409,12 @@ class WikidotPageAdapter:
         take the parts of the tuple they need.
         """
         html = self.cn.req.get(page.url).text
-        page._page_id = int(re.search('pageId = ([0-9]+);', html).group(1))
         soup = bs4.BeautifulSoup(html)
-        page._thread_id = self.cn._get_id(soup.find(id='discuss-button'))
-        page._tags = {e.text for e in soup.select('.page-tags a')}
-        page._html = str(soup.find(id='main-content'))
+        return dict(
+            page_id=int(re.search('pageId = ([0-9]+);', html).group(1)),
+            thread_id=self.cn._get_id(soup.find(id='discuss-button')),
+            html=str(soup.find(id='main-content')),
+            tags={e.text for e in soup.select('.page-tags a')})
 
     @staticmethod
     def _crawl_posts(post_containers, parent=None):
@@ -432,18 +435,6 @@ class WikidotPageAdapter:
     # Public Methods
     ###########################################################################
 
-    def get_page_id(self, page):
-        """Return the id of the page."""
-        self._load_page(page)
-
-    def get_thread_id(self, page):
-        """Return the id of the discussion thread."""
-        self._load_page(page)
-
-    def get_html(self, page):
-        """Return the html source of the page."""
-        self._load_page(page)
-
     def get_history(self, page):
         """Return the revision history of the page."""
         data = self.cn._module(
@@ -452,7 +443,7 @@ class WikidotPageAdapter:
             page=1,
             perpage=99999)['body']
         soup = bs4.BeautifulSoup(data)
-        page._history = []
+        history = []
         for row in reversed(soup('tr')[1:]):
             rev_id = int(row['id'].split('-')[-1])
             cells = row('td')
@@ -462,7 +453,8 @@ class WikidotPageAdapter:
             comment = cells[6].text
             if not comment:
                 comment = None
-            page._history.append(Revision(rev_id, number, user, time, comment))
+            history.append(Revision(rev_id, number, user, time, comment))
+        return {'history': history}
 
     def get_votes(self, page):
         """Return all votes made on the page."""
@@ -472,13 +464,10 @@ class WikidotPageAdapter:
         soup = bs4.BeautifulSoup(data)
         spans = [i.text.strip() for i in soup('span')]
         pairs = zip(spans[::2], spans[1::2])
-        page._votes = [Vote(u, 1 if v == '+' else -1) for u, v in pairs]
-
-    def get_tags(self, page):
-        self._load_page(page)
+        return {'votes': [Vote(u, 1 if v == '+' else -1) for u, v in pairs]}
 
     def get_posts(self, page):
-        page._posts = list(self.get_thread_posts(page.thread_id))
+        return {'posts': list(self.get_thread_posts(page.thread_id))}
 
     def get_thread_posts(self, thread_id):
         """Download and parse the contents of the forum thread."""
@@ -510,7 +499,7 @@ class WikidotPageAdapter:
             'viewsource/ViewSourceModule',
             page_id=page.page_id)['body']
         soup = bs4.BeautifulSoup(data)
-        page._source = soup.text[11:].strip().replace(chr(160), ' ')
+        return {'source': soup.text[11:].strip().replace(chr(160), ' ')}
 
 
 class SnapshotConnector:
@@ -622,10 +611,10 @@ class SnapshotConnector:
     @utils.listify()
     def list_overrides(self):
         for row in (
-                orm.Rewrite
-                .select(orm.Rewrite, orm.User.name, orm.RewriteStatus.label)
-                .join(orm.User).switch(orm.Rewrite).join(orm.RewriteStatus)):
-            yield Override(row._data['page'], row.user.name, row.status.label)
+                orm.Override
+                .select(orm.Override, orm.User.name, orm.OverrideType.name)
+                .join(orm.User).switch(orm.Override).join(orm.OverrideType)):
+            yield Override(row._data['url'], row.user.name, row.type.name)
 
     @functools.lru_cache()
     @utils.listify()
@@ -783,6 +772,8 @@ class SnapshotPageAdapter:
 
     def __init__(self, connector):
         self.cn = connector
+        for i in 'page_id', 'thread_id', 'html':
+            setattr(self, 'get_' + i, self._load_page)
 
     ###########################################################################
     # Private Methods
@@ -813,51 +804,32 @@ class SnapshotPageAdapter:
         thing for very different reason.
         """
         pdata = orm.Page.get(orm.Page.url == page.url)
-        page._page_id = pdata.id
-        page._thread_id = pdata._data['thread']
-        page._html = pdata.html
+        return dict(page_id=pdata.id,
+                    thread_id=pdata._data['thread'],
+                    html=pdata.html)
 
     ###########################################################################
     # Public Methods
     ###########################################################################
 
-    def get_page_id(self, page):
-        """Retrieve the id of the page."""
-        self._load_page(page)
-
-    def get_thread_id(self, page):
-        """
-        Retrieve the id of the comments thread of the page.
-
-        If the page has no comments, returns None.
-        """
-        self._load_page(page)
-
-    def get_html(self, page):
-        """
-        Retrieve the html source of the page.
-        """
-        self._load_page(page)
-
     def get_history(self, page):
         """Return the revisions of the page."""
         revs = self._query(page, 'Revision')
         revs = sorted(revs, key=operator.attrgetter('number'))
-        page._history = [
+        return {'history': [
             Revision(r.id, r.number, r.user.name, str(r.time), r.comment)
-            for r in revs]
+            for r in revs]}
 
     def get_votes(self, page):
         """Return all votes made on the page."""
-        page._votes = [
+        return {'votes': [
             Vote(user=v.user.name, value=v.value)
-            for v in self._query(page, 'Vote')]
+            for v in self._query(page, 'Vote')]}
 
     def get_tags(self, page):
         """Return the set of tags with which the page is tagged."""
-        page._tags = {
-            pt.tag.name
-            for pt in self._query(page, 'PageTag', 'Tag')}
+        return {'tags': {
+            pt.tag.name for pt in self._query(page, 'PageTag', 'Tag')}}
 
     def get_posts(self, page):
         """
@@ -866,10 +838,10 @@ class SnapshotPageAdapter:
         This is also the only Adapter method to work on ForumThread objects,
         for which it returns the posts contained in the forum thread.
         """
-        page._posts = [ForumPost(
+        return {'posts': [ForumPost(
             p.id, p.title, p.content, p.user.name,
             str(p.time), p._data['parent'])
-            for p in self._query(page, 'ForumPost', key='thread')]
+            for p in self._query(page, 'ForumPost', key='thread')]}
 
     def get_source(self):
         """Raise NotImplementedError."""
@@ -889,6 +861,7 @@ class Page:
             url = '{}/{}'.format(connector.site, url)
         self.url = url.lower()
         self._cn = connector
+        self._cache = {}
 
     def __repr__(self):
         return "{}({}, {})".format(
@@ -900,17 +873,15 @@ class Page:
     # Internal Methods
     ###########################################################################
 
-    def _flush(self, *properties):
-        for i in properties:
-            if hasattr(self, '_' + i):
-                delattr(self, '_' + i)
+    def _flush(self, *names):
+        self._cache = {k: v for k, v in self._cache.items() if k not in names}
 
     @classmethod
     @functools.lru_cache()
     @utils.listify(dict)
     def _scp_titles(cls, connector):
         log.debug('Constructing title index.')
-        splash = list(connector.list_urls(tag='splash'))
+        splash = list(connector.list_pages(tag='splash'))
         for url in ('scp-series', 'scp-series-2', 'scp-series-3'):
             for element in bs4.BeautifulSoup(
                     connector(url).html).select('ul > li'):
@@ -932,9 +903,9 @@ class Page:
         return title.text.strip() if title else ''
 
     def _get_adapter_value(self, name):
-        if not hasattr(self, '_' + name):
-            getattr(self._cn.adapter, 'get_' + name)(self)
-        return getattr(self, '_' + name)
+        if name not in self._cache:
+            self._cache.update(getattr(self._cn.adapter, 'get_' + name)(self))
+        return self._cache[name]
 
     ###########################################################################
     # Properties
@@ -993,8 +964,11 @@ class Page:
     @property
     def title(self):
         if 'scp' in self.tags and re.search('[scp]+-[0-9]+$', self.url):
-            return '{}: {}'.format(
-                self._onpage_title, self._scp_titles(self.cn)[self.url])
+            try:
+                return '{}: {}'.format(
+                    self._onpage_title, self._scp_titles(self._cn)[self.url])
+            except KeyError:
+                pass
         return self._onpage_title
 
     @property
