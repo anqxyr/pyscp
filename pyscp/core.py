@@ -1,5 +1,20 @@
 #!/usr/bin/env python3
 
+"""
+Python API and utilities for the scp-wiki.net website.
+
+pyscp is a python library for interacting with wikidot-hosted websites. The
+library is mainly intended for use by the administrative staff of the
+www.scp-wiki.net website, and has a host of feature exclusive to it. However,
+the majority of the core functionality should be applicalbe to any
+wikidot-based site.
+
+The core module holds the classes responsible for communicating with the
+wikidot sites, representing individual wiki pages as python objects, and
+creating and accessing site snapshots.
+"""
+
+
 ###############################################################################
 # Module Imports
 ###############################################################################
@@ -80,7 +95,7 @@ class ConnectorError(Exception):
 class WikidotConnector:
 
     """
-    Provide a low-level interface to a Wikidot site.
+    Provide access to a Wikidot site.
 
     This class does not use any of the official Wikidot API, and instead
     relies on sending http post/get requests to internal Wikidot pages and
@@ -101,9 +116,7 @@ class WikidotConnector:
         return Page(url, self)
 
     def __repr__(self):
-        return "{}({})".format(
-            self.__class__.__name__,
-            repr(self.site[7:].replace('.wikidot.com', '')))
+        return '{}({})'.format(self.__class__.__name__, repr(self.site))
 
     ###########################################################################
     # Helper Methods
@@ -285,6 +298,15 @@ class WikidotConnector:
     @functools.lru_cache(maxsize=1)
     @utils.listify()
     def list_overrides(self):
+        """
+        List page ownership overrides.
+
+        This method is exclusive to the scp-wiki, and is used to fine-tune
+        the page ownership information beyond what is possible with Wikidot.
+        This allows a single page to have an author different from the user
+        who created the zeroth revision of the page, or even have multiple
+        users attached to the page in various roles.
+        """
         if 'scp-wiki' not in self.site:
             return None
         urls = 'http://05command.wikidot.com/alexandra-rewrite'
@@ -367,14 +389,11 @@ class WikidotConnector:
 class WikidotPageAdapter:
 
     """
-    Retrieve data about the page.
+    Retrieve page data.
 
     Page Adapters are used by the Page class to gain information pertaining to
     a specific page. They request raw data from their respective Connectors and
     format it in a manner that is expected by the Page class.
-
-    The Adapters are also responsible for caching and any other optimizations,
-    depending on the connector.
 
     This class supports the following fields:
 
@@ -403,10 +422,8 @@ class WikidotPageAdapter:
         """
         Download the page and extract data from the html.
 
-        Returns a tuple consisting of the id of the page, id of the comment
-        thread, stripped-down html string, and a set of tags. The tuple is
-        saved via lru_cache, and the individual get_ methods can then
-        take the parts of the tuple they need.
+        Returns a dict of page_id, thread_id, html, and tags. Methods such
+        as get_html are in fact merely aliases for this method.
         """
         html = self.cn.req.get(page.url).text
         soup = bs4.BeautifulSoup(html)
@@ -793,15 +810,13 @@ class SnapshotPageAdapter:
         """
         Retrieve the contents of the page.
 
-        Returns a tuple consisting of the id of the page, id of the comment
-        thread, and the html string.The tuple is saved via lru_cache, and the
-        individual get_ methods then take whichever part of the tuple they
-        need.
+        Returns a dict specifying the id of the page, id of the comment
+        thread, and the html string.
 
-        The idea here is that most of the time, you will be needing all three
-        of those, so it's better to get them all in a single query. This also
-        mirrors the behavior of WikidotPageAdapter, which does a similar
-        thing for very different reason.
+        The idea here is that most of the time, the user will be needing all
+        three of those, so it's better to get them all in a single query. This
+        also mirrors the behavior of WikidotPageAdapter, which behaves
+        similarly, but for a different reason.
         """
         pdata = orm.Page.get(orm.Page.url == page.url)
         return dict(page_id=pdata.id,
