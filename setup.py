@@ -1,12 +1,11 @@
-import pathlib
 import setuptools
 
-with open(str(pathlib.Path(__file__).resolve().parent / 'README.md')) as f:
+with open('README.md') as f:
     readme = f.read()
 
 setuptools.setup(
     name='pyscp',
-    version='0.8.2',
+    version='0.9.0',
     description='Python API and utilities for the scp-wiki.net website.',
     long_description=readme,
     url='https://github.com/anqxyr/pyscp/',
@@ -23,7 +22,8 @@ setuptools.setup(
     install_requires=[
         'arrow',
         'beautifulsoup4',
-        'cached_property',
+        'blessings',
+        'lxml'
         'requests',
         'peewee'],
 )

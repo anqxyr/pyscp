@@ -44,7 +44,7 @@ If the site doesn't use a custom domain, you can use the name of the site instea
 
 ```python
 
-wiki = WikidotConnector('scpsandbox2')
+wiki = pyscp.core.WikidotConnector('scpsandbox2')
 wiki.auth('example_username', 'example_password')
 p = wiki('test')
 last_revision = p.history[-1].number

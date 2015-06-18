@@ -5,7 +5,6 @@
 ###############################################################################
 
 import logging
-import blessings
 import re
 import time
 import threading
@@ -81,14 +80,8 @@ def log_errors(call, logger=print):
     try:
         return call()
     except Exception as error:
-        logger(repr(error))
+        logger(error)
         raise(error)
-
-
-@decorator
-def log_calls(call, logger=print):
-    logger('{}: {}, {}'.format(call._func.__name__, call._args, call._kwargs))
-    return call()
 
 
 @decorator
@@ -112,7 +105,6 @@ class ProgressBar:
         self.title = title
         self.max_value = max_value
         self.value = 0
-        self.term = blessings.Terminal()
         signal.signal(signal.SIGINT, self.exit)
 
     def start(self):
@@ -121,8 +113,7 @@ class ProgressBar:
         threading.Thread(target=self.run).start()
 
     def update(self):
-        with self.term.hidden_cursor():
-            print(self.line() + '\r', end='')
+        print(self.line() + '\r', end='')
 
     def line(self):
         filled = 40 * self.value / self.max_value
@@ -132,7 +123,7 @@ class ProgressBar:
         tm = time.gmtime(time.time() - self.time_started)
         return '{} |{}| {:>3}% ({}:{:02}:{:02})   '.format(
             self.title,
-            self.term.green(bar[:40]),
+            bar[:40],
             100 * self.value // self.max_value,
             tm.tm_hour, tm.tm_min, tm.tm_sec)
 

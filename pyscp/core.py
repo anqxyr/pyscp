@@ -58,6 +58,7 @@ class InsistentRequest(requests.Session):
             self.__class__.__name__, self.max_attempts)
 
     def request(self, method, url, **kwargs):
+        log.debug('%s: %s %s', method, url, repr(kwargs) if kwargs else '')
         kwargs.setdefault('timeout', 30)
         kwargs.setdefault('allow_redirects', False)
         for _ in range(self.max_attempts):
@@ -75,11 +76,9 @@ class InsistentRequest(requests.Session):
         raise requests.ConnectionError(
             'Max retries exceeded with url: {}'.format(url))
 
-    @utils.log_calls(log.debug)
     def get(self, url, **kwargs):
         return self.request('GET', url, **kwargs)
 
-    @utils.log_calls(log.debug)
     def post(self, url, **kwargs):
         return self.request('POST', url, **kwargs)
 
