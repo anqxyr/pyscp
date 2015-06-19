@@ -5,13 +5,9 @@
 ###############################################################################
 
 import collections
-import csv
-import json
 import logging
 import pyscp
 import re
-import itertools
-import functools
 
 ###############################################################################
 # Global Constants And Variables
@@ -126,7 +122,7 @@ def chain_counters(pages, func, *counters):
 
 def filter_tag(pages, tag):
     """Pages with a given tag."""
-    if tag is None:
+    if not tag:
         return pages
     return [p for p in pages if tag in p.tags]
 
@@ -163,51 +159,114 @@ def records(pages):
         rec(template='Users with Most Upvotes ({}s):',
             counter=counter_author,
             filter=None,
-            args=(upvotes, ),
-            tags=(None, 'scp', 'tale')),
+            args=upvotes,
+            tags=('_all', 'scp', 'tale')),
         rec(template='Most {}s Written:',
             counter=counter_author,
             filter=None,
-            args=(len, ),
+            args=len,
             tags=('scp', 'tale', 'joke', 'essay')),
         rec(template='Highest {} Average (>=3):',
             counter=counter_author,
             filter=filter_authored,
-            args=(average, ),
+            args=average,
             tags=('scp', 'tale', 'joke', 'essay')),
         rec(template='Most Successful {}s posted in one Month:',
             counter=chain_counters,
             filter=filter_not_migrated,
             args=(len, counter_author, counter_month),
-            tags=(None, 'scp')),
+            tags=('_all', 'scp')),
         rec(template='Most Divided {} Vote (>+20):',
             counter=counter_page,
             filter=filter_rating,
-            args=(divided, ),
-            tags=('scp', )),
+            args=divided,
+            tags='scp'),
         rec(template='Highest Redaction Score ({}s):',
             counter=counter_page,
             filter=None,
-            args=(redactions, ),
+            args=redactions,
             tags=('scp', 'tale')),
         rec(template='Highest {} Block Average:',
             counter=counter_block,
             filter=None,
-            args=(average, ),
-            tags=('scp', )))
-    for record, tag in [(r, t) for r in records for t in r.tags]:
-        fpages = filter_tag(pages, tag)
+            args=average,
+            tags='scp'))
+    maybe_tuple = lambda x: x if isinstance(x, tuple) else (x,)
+    for record, tag in [(r, t) for r in records for t in maybe_tuple(r.tags)]:
+        fpages = pages if tag == '_all' else filter_tag(pages, tag)
         if record.filter:
             fpages = record.filter(fpages)
-        if not tag:
-            insert = 'Article'
-        elif tag == 'scp':
-            insert = 'SCP'
-        else:
-            insert = tag.capitalize()
+        insert = {'_all': 'Article', 'scp': 'SCP'}.get(tag, tag.capitalize())
         print(record.template.format(insert))
-        for k, v in record.counter(fpages, *record.args).most_common(5):
+        args = maybe_tuple(record.args)
+        for k, v in record.counter(fpages, *args).most_common(5):
             print(k.ljust(40 if len(k) < 40 else 80), round(v, 2))
+
+
+###############################################################################
+# Stats Wiki
+#
+# Collecting numbers for the stats wiki and posting them there.
+###############################################################################
+
+
+def ranking_source(counter):
+    source = '||~ Rank||~ User||~ Score||\n'
+    items = counter.items()
+    items = sorted(items, key=lambda x: x[0].lower())
+    items = sorted(items, key=lambda x: x[1], reverse=True)
+    for idx, item in enumerate(items):
+        source += '||{0}||[[[user:{1[0]}]]]||{1[1]}||\n'.format(idx + 1, item)
+    return source
+
+
+def update_users(pages, stwiki):
+    """Update the stats wiki with the author stats."""
+    #stwiki('ranking:pages-created').edit(
+    #    ranking_source(counter_author(pages, len)))
+    users = {p.author for p in pages}
+    for user in pyscp.utils.pbar(users, 'POSTING STATS'):
+        try:
+            post_user(user, pages, stwiki)
+        except KeyError as e:
+            print(repr(e))
+            print('oops:', user)
+
+
+def post_page(stwiki, name, source, existing=[]):
+    if not existing:
+        existing.extend(stwiki.list_pages())
+    p = stwiki(name)
+    if p.url not in existing:
+        res = p.create(source, name.split(':')[-1], force=True)
+    else:
+        res = p.edit(source, force=True)
+    if res['status'] != 'ok':
+        post_page(stwiki, name, source)
+
+
+def post_user(user, pages, stwiki):
+    authored = [p for p in pages if p.author == user]
+    source = """
+        ++ Authorship Statistics
+        {{{{[[[ranking:Pages Created]]]:@@          @@**{}**}}}}
+        {{{{Net Rating:@@             @@**{}**}}}}
+        {{{{Average Rating:@@         @@**{}**}}}}
+        {{{{Wordcount:@@              @@**{}**}}}}
+        {{{{Average Wordcount:@@      @@**{}**}}}}
+        """
+    # remove extra indent
+    source = '\n'.join(i.strip() for i in source.split('\n')).strip()
+    pcount = len(authored)
+    rating = sum(p.rating for p in authored)
+    wcount = sum(p.wordcount for p in authored)
+    source = source.format(
+        pcount,
+        rating,
+        round(rating / pcount, 2),
+        wcount,
+        round(wcount / pcount, 2))
+    post_page(stwiki, 'user:' + user, source)
 
 
 ###############################################################################
@@ -217,4 +276,8 @@ if __name__ == "__main__":
     sn = pyscp.core.SnapshotConnector(
         'www.scp-wiki.net', '/home/anqxyr/heap/_scp/scp-wiki.2015-06-13.db')
     pages = list(map(sn, sn.list_pages()))
-    records(pages)
+    stwiki = pyscp.core.WikidotConnector('scp-stats')
+    stwiki.auth(
+        'anqxyr',
+        """3/?E:lqXJ.?L1Ga6W1"e.Cm5r+Nb%O6rxFXweR59=BT~!W'HEz?zYa]'.wp8rvtI""")
+    update_users(pages, stwiki)
