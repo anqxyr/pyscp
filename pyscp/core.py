@@ -137,17 +137,19 @@ class WikidotConnector:
 
     def _edit(self, page_id, url, source, title, comment):
         """Overwrite the page with the new source and title."""
+        wiki_page = url.split('/')[-1]
         lock = self._module(
             'edit/PageEditModule',
             page_id=page_id,
-            mode='page')
+            mode='page',
+            wiki_page=wiki_page)
         return self._page_action(
             page_id, 'savePage',
             source=source, title=title, comments=comment,
-            wiki_page=url.split('/')[-1],
+            wiki_page=wiki_page,
             lock_id=lock['lock_id'],
             lock_secret=lock['lock_secret'],
-            revision_id=lock['page_revision_id'])
+            revision_id=lock.get('page_revision_id', None))
 
     def _revert_to(self, page_id, revision_id):
         return self._page_action(page_id, 'revert', revisionId=revision_id)
@@ -1030,6 +1032,9 @@ class Page:
             title = self._onpage_title
         self._cn._edit(self.page_id, self.url, source, title, comment)
         self._flush('html', 'history', 'source')
+
+    def create(self, source, title=None, comment=None):
+        self._cn._edit(None, self.url, source, title, comment)
 
     def revert_to(self, rev_n):
         self._cn._revert_to(self.page_id, self.history[rev_n].id)
