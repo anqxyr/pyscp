@@ -77,11 +77,11 @@ class Wiki:
     @functools.lru_cache(maxsize=1)
     def titles(self):
         """Return a dict of url/title pairs for scp articles."""
-        splash = list(self.list_pages(tag='splash'))
         pages = map(self, ('scp-series', 'scp-series-2', 'scp-series-3'))
-        elems = itertools.chain.from_iterable(
-            p._soup.select('ul > li') for p in pages)
+        elems = [p._soup.select('ul > li') for p in pages]
+        elems = itertools.chain(*elems)
         titles = {}
+        splash = set(self.list_pages(tag='splash'))
         for elem in elems:
             if not re.search('[SCP]+-[0-9]+', elem.text):
                 continue
@@ -125,13 +125,13 @@ class Page:
     # Internal Methods
     ###########################################################################
 
-    @pyscp.core.cached_property
+    @pyscp.utils.cached_property
     def _title(self):
         """Title as displayed on the page."""
         title = self._soup.find(id='page-title')
         return title.text.strip() if title else ''
 
-    @pyscp.core.cached_property
+    @pyscp.utils.cached_property
     def _soup(self):
         return bs4.BeautifulSoup(self.html)
 
