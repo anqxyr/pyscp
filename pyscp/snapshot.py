@@ -51,20 +51,35 @@ class Wiki(pyscp.core.Wiki):
         return '{}.{}({}, {})'.format(
             self.__module__,
             self.__class__.__qualname__,
-            repr(self.site.replace('http://', '')),
+            repr(self.site),
             repr(self.dbpath))
 
     ###########################################################################
     # Internal Methods
     ###########################################################################
 
+    @staticmethod
+    def _filter_query_author(query, author):
+        o = pyscp.orm
+        filter_query = (
+            o.Page.select(o.Page.url).join(o.Revision).join(o.User)
+            .where(o.Revision.number == 0).where(o.User.name == author))
+        return query & filter_query
+
+    @staticmethod
+    def _filter_query_tag(query, tag):
+        o = pyscp.orm
+        filter_query = (o.Page.select(o.Page.url)
+                        .join(o.PageTag).join(o.Tag)
+                        .where(o.Tag.name == tag))
+        return query & filter_query
+
     def _urls(self, **kwargs):
-        page = pyscp.orm.Page
-        ptag = pyscp.orm.PageTag
-        tag = pyscp.orm.Tag
-        query = page.select(page.url)
-        if 'tag' in kwargs:
-            query = query.join(ptag).join(tag).where(tag.name == kwargs['tag'])
+        query = pyscp.orm.Page.select(pyscp.orm.Page.url)
+        keys = ('author', 'tag')
+        keys = [k for k in keys if k in kwargs]
+        for k in keys:
+            query = getattr(self, '_filter_query_' + k)(query, kwargs[k])
         if 'limit' in kwargs:
             query = query.limit(kwargs['limit'])
         for p in query:
@@ -117,14 +132,6 @@ class Page(pyscp.core.Page):
         """
         pdata = pyscp.orm.Page.get(pyscp.orm.Page.url == self.url)
         return pdata.id, pdata._data['thread'], pdata.html
-
-    @property
-    def _id(self):
-        return self._pdata[0]
-
-    @pyscp.utils.cached_property
-    def _thread(self):
-        return Thread(self._wiki, self._pdata[1])
 
     ###########################################################################
     # Properties

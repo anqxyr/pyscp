@@ -25,9 +25,9 @@ import functools
 import logging
 import re
 import urllib.parse
-import pyscp
 import itertools
 
+import pyscp.utils
 
 ###############################################################################
 # Global Constants And Variables
@@ -95,6 +95,38 @@ class Wiki:
             titles[url] = title
         return titles
 
+    def list_pages(self, **kwargs):
+        """
+        Return pages matching the specified criteria.
+        """
+        urls = self._urls(**kwargs)
+        author = kwargs.pop('author', None)
+        if not author:
+            # if 'author' isn't specified, there's no need to check rewrites
+            yield from map(self, urls)
+            return
+        include, exclude = set(), set()
+        for over in self.list_overrides():
+            if over.user == author:
+                # if username matches, include regardless of type
+                include.add(over.url)
+            elif over.type == 'author':
+                # exclude only if override type is author.
+                # if url has author and rewrite author,
+                # it will appear in list_pages for both.
+                exclude.add(over.url)
+        urls = set(urls) | include - exclude
+        # if no other options beside author were specified,
+        # just return everything we can
+        if not kwargs:
+            yield from map(self, sorted(urls))
+            return
+        # otherwise, retrieve the list of urls without the author parameter
+        # to check which urls we should return and in which order
+        for url in self._urls(**kwargs):
+            if url in urls:
+                yield self(url)
+
 
 class Page:
 
@@ -118,20 +150,29 @@ class Page:
         self._wiki = wiki
 
     def __repr__(self):
-        return '{}({}, {})'.format(
-            self.__class__.__name__, repr(self.url), repr(self._cn))
+        return '{}.{}({}, {})'.format(
+            self.__module__, self.__class__.__name__,
+            repr(self.url), repr(self._wiki))
 
     ###########################################################################
     # Internal Methods
     ###########################################################################
 
+    @property
+    def _id(self):
+        return self._pdata[0]
+
     @pyscp.utils.cached_property
+    def _thread(self):
+        return self._wiki.Thread(self._wiki, self._pdata[1])
+
+    @property
     def _title(self):
         """Title as displayed on the page."""
         title = self._soup.find(id='page-title')
         return title.text.strip() if title else ''
 
-    @pyscp.utils.cached_property
+    @property
     def _soup(self):
         return bs4.BeautifulSoup(self.html)
 
@@ -140,8 +181,12 @@ class Page:
     ###########################################################################
 
     @property
+    def posts(self):
+        return self._thread.posts
+
+    @property
     def comments(self):
-        return self.posts
+        return self._thread.posts
 
     @property
     def text(self):
@@ -167,14 +212,14 @@ class Page:
 
     @property
     def author(self):
-        for over in self._cn.list_overrides():
+        for over in self._wiki.list_overrides():
             if over.url == self.url and over.type == 'author':
                 return over.user
         return self.history[0].user
 
     @property
     def rewrite_author(self):
-        for over in self._cn.list_overrides():
+        for over in self._wiki.list_overrides():
             if over.url == self.url and over.type == 'rewrite_author':
                 return over.user
 
@@ -192,7 +237,7 @@ class Page:
             if (not href or href[0] != '/' or  # bad or absolute link
                     href[-4:] in ('.png', '.jpg', '.gif')):
                 continue
-            url = self._cn.site + href.rstrip('|')
+            url = self._wiki.site + href.rstrip('|')
             if url not in unique:
                 unique.add(url)
                 yield url
@@ -200,9 +245,9 @@ class Page:
 
 class Thread:
 
-    def __init__(self, wiki, id, title=None, description=None):
+    def __init__(self, wiki, _id, title=None, description=None):
         self._wiki = wiki
-        self.id, self.title, self.description = id, title, description
+        self._id, self.title, self.description = _id, title, description
 
 ###############################################################################
 # Simple Containers

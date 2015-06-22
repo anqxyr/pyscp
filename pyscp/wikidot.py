@@ -17,6 +17,7 @@ import functools
 import itertools
 import logging
 import pyscp
+import re
 import requests
 
 ###############################################################################
@@ -25,10 +26,10 @@ import requests
 
 log = logging.getLogger(__name__)
 
+
 ###############################################################################
 # Utility Classes
 ###############################################################################
-
 
 class InsistentRequest(requests.Session):
 
@@ -67,12 +68,12 @@ class InsistentRequest(requests.Session):
     def post(self, url, **kwargs):
         return self.request('POST', url, **kwargs)
 
+
 ###############################################################################
 # Public Classes
 ###############################################################################
 
-
-class Wiki:
+class Wiki(pyscp.core.Wiki):
 
     """
     Create a Wiki object.
@@ -87,27 +88,14 @@ class Wiki:
     ###########################################################################
 
     def __init__(self, site):
-        self.site = pyscp.core.full_url(site)
+        super().__init__(site)
         self.req = InsistentRequest()
 
-    def __call__(self, url):
-        """Convinience method to quickly create Page instances."""
-        return Page(url, self)
-
     def __repr__(self):
-        return '{}({})'.format(self.__class__.__name__, repr(self.site))
-
-    ###########################################################################
-
-    def reply_to(self, thread_id, post_id, source, title):
-        """Make a new post in the given thread."""
-        return self._module('Empty',
-                            threadId=thread_id,
-                            parentId=post_id,
-                            title=title,
-                            source=source,
-                            action='ForumAction',
-                            event='savePost')
+        return '{}.{}({})'.format(
+            self.__module__,
+            self.__class__.__name__,
+            repr(self.site))
 
     ###########################################################################
     # Internal Methods
@@ -146,7 +134,7 @@ class Wiki:
             kwargs.update({_key: idx if _update is None else _update(idx)})
             yield self._module(name, **kwargs)
 
-    def _list_pages_base(self, **kwargs):
+    def _list_pages_raw(self, **kwargs):
         """
         Call ListPages module.
 
@@ -155,7 +143,7 @@ class Wiki:
         pages created by a given user, and up to full html contents of every
         page on the site.
         """
-        pages = self._pager(
+        yield from self._pager(
             'list/ListPagesModule',
             _key='offset',
             _update=lambda x: 250 * (x - 1),
@@ -167,14 +155,13 @@ class Wiki:
             order=kwargs.get('order', 'title'),
             module_body=kwargs.get('body', '%%title_linked%%'),
             perPage=250)
-        if 'body' in kwargs:
-            # if body param was specified, return raw htmls
-            yield from pages
-        else:
-            # otherwise parse out the urls and return them instead.
-            soups = (bs4.BeautifulSoup(p['body']) for p in pages)
-            elems = (s.select('div.list-pages-item a') for s in soups)
-            yield from (self.site + e['href'] for e in itertools.chain(*elems))
+
+    def _urls(self, **kwargs):
+        pages = self._list_pages_raw(**kwargs)
+        soups = (bs4.BeautifulSoup(p['body']) for p in pages)
+        elems = (s.select('div.list-pages-item a') for s in soups)
+        elems = itertools.chain.from_iterable(elems)
+        yield from (self.site + e['href'] for e in elems)
 
     ###########################################################################
     # Public Methods
@@ -189,47 +176,6 @@ class Wiki:
                 password=password,
                 action='Login2Action',
                 event='login'))
-
-    def list_pages(self, **kwargs):
-        """
-        Return urls matching the specified criteria.
-
-        This method uses the results of the ListPages module and the custom
-        override data to correctly return urls for pages that have been
-        rewritten or have author that differs from the 0th revision for
-        some other reasons.
-        """
-        pages = self._list_pages_base(**kwargs)
-        if 'body' in kwargs:
-            # if 'body' is specified, return raw pages
-            yield from pages
-            return
-        author = kwargs.pop('author', None)
-        if not author:
-            # if 'author' isn't specified, there's no need to check rewrites
-            yield from pages
-            return
-        include, exclude = set(), set()
-        for over in self.list_overrides():
-            if over.user == author:
-                # if username matches, include regardless of type
-                include.add(over.url)
-            elif over.type == 'author':
-                # exclude only if override type is author.
-                # if url has author and rewrite author,
-                # it will appear in list_pages for both.
-                exclude.add(over.url)
-        pages = set(pages) | include - exclude
-        # if no other options beside author were specified,
-        # just return everything we can
-        if not kwargs:
-            yield from sorted(pages)
-            return
-        # otherwise, make an additional ListPages request to check
-        # which urls from include we should return and in which order
-        for page in self._list_pages_base(**kwargs):
-            if page in pages:
-                yield page
 
     def list_categories(self):
         """Return forum categories."""
@@ -280,10 +226,10 @@ class Wiki:
             url = '{}/{}'.format(self.site, row[0].text)
             user = row[1].text.split(':override:')[-1]
             if ':override:' in row[1].text:
-                type_ = 'author'
+                type = 'author'
             else:
-                type_ = 'rewrite_author'
-            yield pyscp.core.Override(url, user, type_)
+                type = 'rewrite_author'
+            yield pyscp.core.Override(url, user, type)
 
     @functools.lru_cache(maxsize=1)
     @pyscp.utils.listify()
@@ -306,6 +252,10 @@ class Wiki:
             yield pyscp.core.Image(url, source, status, notes)
 
 
+###############################################################################
+# Internal Classes
+###############################################################################
+
 class Page(pyscp.core.Page):
     """
     Create Page object.
@@ -317,7 +267,7 @@ class Page(pyscp.core.Page):
 
     def _module(self, *args, **kwargs):
         """Call Wikidot module."""
-        return self._cn._module(*args, page_id=self.page_id, **kwargs)
+        return self._wiki._module(*args, page_id=self._id, **kwargs)
 
     def _action(self, event, **kwargs):
         """Execute WikiPageAction."""
@@ -333,21 +283,34 @@ class Page(pyscp.core.Page):
             force=True)
 
     def _flush(self, *names):
+        if not hasattr(self, '_cache'):
+            return
         self._cache = {k: v for k, v in self._cache.items() if k not in names}
+
+    @pyscp.utils.cached_property
+    def _pdata(self):
+        data = self._wiki.req.get(self.url).text
+        soup = bs4.BeautifulSoup(data)
+        return (int(re.search('pageId = ([0-9]+);', data).group(1)),
+                parse_element_id(soup.find(id='discuss-button')),
+                str(soup.find(id='main-content')),
+                {e.text for e in soup.select('.page-tags a')})
 
     ###########################################################################
     # Properties
     ###########################################################################
 
     @property
+    def html(self):
+        return self._pdata[2]
+
+    @pyscp.utils.cached_property
+    @pyscp.utils.listify()
     def history(self):
         """Return the revision history of the page."""
-        if 'history' in self._cache:
-            return self._cache['history']
         data = self._module(
             'history/PageRevisionListModule', page=1, perpage=99999)['body']
         soup = bs4.BeautifulSoup(data)
-        history = []
         for row in reversed(soup('tr')[1:]):
             rev_id = int(row['id'].split('-')[-1])
             cells = row('td')
@@ -355,33 +318,26 @@ class Page(pyscp.core.Page):
             user = cells[4].text
             time = parse_element_time(cells[5])
             comment = cells[6].text if cells[6].text else None
-            history.append(
-                pyscp.core.Revision(rev_id, number, user, time, comment))
-        self._cache['history'] = history
-        return history
+            yield pyscp.core.Revision(rev_id, number, user, time, comment)
 
-    @property
+    @pyscp.utils.cached_property
     def votes(self):
         """Return all votes made on the page."""
-        if 'votes' in self._cache:
-            return self._cache['votes']
         data = self._module('pagerate/WhoRatedPageModule')['body']
         soup = bs4.BeautifulSoup(data)
         spans = [i.text.strip() for i in soup('span')]
         pairs = zip(spans[::2], spans[1::2])
-        votes = [pyscp.core.Vote(u, 1 if v == '+' else -1) for u, v in pairs]
-        self._cache['votes'] = votes
-        return votes
+        return [pyscp.core.Vote(u, 1 if v == '+' else -1) for u, v in pairs]
+
+    @property
+    def tags(self):
+        return self._pdata[3]
 
     @property
     def source(self):
-        if 'source' in self._cache:
-            return self._cache['source']
         data = self._module('viewsource/ViewSourceModule')['body']
         soup = bs4.BeautifulSoup(data)
-        source = soup.text[11:].strip().replace(chr(160), ' ')
-        self._cache['source'] = source
-        return source
+        return soup.text[11:].strip().replace(chr(160), ' ')
 
     ###########################################################################
     # Page-Modifying Methods
@@ -391,13 +347,14 @@ class Page(pyscp.core.Page):
         """Overwrite the page with the new source and title."""
         if title is None:
             title = self._title
+        self._flush('html', 'history', 'source')
         wiki_page = self.url.split('/')[-1]
         lock = self._module(
             'edit/PageEditModule',
             mode='page',
             wiki_page=wiki_page,
             force_lock=True)
-        res = self._action(
+        return self._action(
             'savePage',
             source=source,
             title=title,
@@ -406,19 +363,16 @@ class Page(pyscp.core.Page):
             lock_id=lock['lock_id'],
             lock_secret=lock['lock_secret'],
             revision_id=lock.get('page_revision_id', None))
-        self._flush('html', 'history', 'source')
-        return res
 
     def revert(self, rev_n):
         """Revert the page to a previous revision."""
-        res = self._action('revert', revisionId=self.history[rev_n].id)
         self._flush('html', 'history', 'source', 'tags')
-        return res
+        return self._action('revert', revisionId=self.history[rev_n].id)
 
     def set_tags(self, tags):
         """Replace the tags of the page."""
         res = self._action('saveTags', tags=' '.join(tags))
-        self._flush('history', 'tags')
+        self._flush('history', '_pdata')
         return res
 
     ###########################################################################
@@ -437,6 +391,33 @@ class Page(pyscp.core.Page):
         self._vote(0)
         self._flush('votes')
 
+
+class Thread(pyscp.core.Thread):
+
+    @pyscp.utils.cached_property
+    @pyscp.utils.listify()
+    def posts(self):
+        pages = self._wiki._pager(
+            'forum/ForumViewThreadPostsModule', _key='pageNo', t=self._id)
+        pages = (bs4.BeautifulSoup(p['body']).body for p in pages)
+        pages = (p for p in pages if p)
+        posts = (p(class_='post-container', recursive=False) for p in pages)
+        posts = itertools.chain.from_iterable(posts)
+        for post, parent in crawl_posts(posts):
+            post_id = int(post['id'].split('-')[1])
+            title = post.find(class_='title').text.strip()
+            title = title if title else None
+            content = post.find(class_='content')
+            content.attrs.clear()
+            content = str(content)
+            user = post.find(class_='printuser').text
+            time = parse_element_time(post)
+            yield pyscp.core.Post(post_id, title, content, user, time, parent)
+
+
+Wiki.Page = Page
+Wiki.Thread = Thread
+
 ###############################################################################
 
 
@@ -450,3 +431,18 @@ def parse_element_time(element):
     """Extract and format time from an html element."""
     unixtime = element.find(class_='odate')['class'][1].split('_')[1]
     return arrow.get(unixtime).format('YYYY-MM-DD HH:mm:ss')
+
+
+def crawl_posts(post_containers, parent=None):
+    """
+    Retrieve posts from the comment tree.
+
+    For each post-container in the given list, returns a tuple of
+    (post, parent). Then recurses onto all the post-container children
+    of the current post-container.
+    """
+    for container in post_containers:
+        yield container.find(class_='post'), parent
+        yield from crawl_posts(
+            container(class_='post-container', recursive=False),
+            int(container['id'].split('-')[1]))

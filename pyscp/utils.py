@@ -91,6 +91,20 @@ def decochain(call, *decs):
         fn = dec(fn)
     return fn(*call.args, **call.kwargs)
 
+
+class cached_property:
+
+    def __init__(self, func):
+        self.func = func
+        functools.update_wrapper(self, func)
+
+    def __get__(self, obj, cls):
+        if not hasattr(obj, '_cache'):
+            obj._cache = {}
+        if self.func.__name__ not in obj._cache:
+            obj._cache[self.func.__name__] = self.func(obj)
+        return obj._cache[self.func.__name__]
+
 ###############################################################################
 
 
