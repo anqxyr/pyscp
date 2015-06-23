@@ -70,191 +70,7 @@ class InsistentRequest(requests.Session):
 
 
 ###############################################################################
-# Public Classes
-###############################################################################
 
-class Wiki(pyscp.core.Wiki):
-
-    """
-    Create a Wiki object.
-
-    This class does not use any of the official Wikidot API, and instead
-    relies on sending http post/get requests to internal Wikidot pages and
-    parsing the returned data.
-    """
-
-    ###########################################################################
-    # Special Methods
-    ###########################################################################
-
-    def __init__(self, site):
-        super().__init__(site)
-        self.req = InsistentRequest()
-
-    def __repr__(self):
-        return '{}.{}({})'.format(
-            self.__module__,
-            self.__class__.__name__,
-            repr(self.site))
-
-    ###########################################################################
-    # Internal Methods
-    ###########################################################################
-
-    @pyscp.utils.morph(requests.RequestException, pyscp.core.ConnectorError)
-    @pyscp.utils.log_errors(log.warning)
-    def _module(self, name, **kwargs):
-        """
-        Call a Wikidot module.
-
-        This method is responsible for most of the class' functionality.
-        Almost all other methods of the class are using _module in one way
-        or another.
-        """
-        return self.req.post(
-            self.site + '/ajax-module-connector.php',
-            data=dict(
-                pageId=kwargs.get('page_id', None),  # fuck wikidot
-                moduleName=name,
-                # token7 can be any 6-digit number, as long as it's the same
-                # in the payload and in the cookie
-                wikidot_token7='123456',
-                **kwargs),
-            headers={'Content-Type': 'application/x-www-form-urlencoded;'},
-            cookies={'wikidot_token7': '123456'}).json()
-
-    def _pager(self, name, _key, _update=None, **kwargs):
-        """Iterate over multi-page module results."""
-        first_page = self._module(name, **kwargs)
-        yield first_page
-        counter = bs4.BeautifulSoup(first_page['body']).find(class_='pager-no')
-        if not counter:
-            return
-        for idx in range(2, int(counter.text.split(' ')[-1]) + 1):
-            kwargs.update({_key: idx if _update is None else _update(idx)})
-            yield self._module(name, **kwargs)
-
-    def _list_pages_raw(self, **kwargs):
-        """
-        Call ListPages module.
-
-        Wikidot's ListPages is an extremely versatile php module that can be
-        used to retrieve all sorts of interesting informations, from urls of
-        pages created by a given user, and up to full html contents of every
-        page on the site.
-        """
-        yield from self._pager(
-            'list/ListPagesModule',
-            _key='offset',
-            _update=lambda x: 250 * (x - 1),
-            category='*',
-            limit=kwargs.get('limit', None),
-            tags=kwargs.get('tag', None),
-            rating=kwargs.get('rating', None),
-            created_by=kwargs.get('author', None),
-            order=kwargs.get('order', 'title'),
-            module_body=kwargs.get('body', '%%title_linked%%'),
-            perPage=250)
-
-    def _urls(self, **kwargs):
-        pages = self._list_pages_raw(**kwargs)
-        soups = (bs4.BeautifulSoup(p['body']) for p in pages)
-        elems = (s.select('div.list-pages-item a') for s in soups)
-        elems = itertools.chain.from_iterable(elems)
-        yield from (self.site + e['href'] for e in elems)
-
-    ###########################################################################
-    # Public Methods
-    ###########################################################################
-
-    def auth(self, username, password):
-        """Login to wikidot with the given username/password pair."""
-        return self.req.post(
-            'https://www.wikidot.com/default--flow/login__LoginPopupScreen',
-            data=dict(
-                login=username,
-                password=password,
-                action='Login2Action',
-                event='login'))
-
-    def list_categories(self):
-        """Return forum categories."""
-        data = self._module('forum/ForumStartModule')['body']
-        soup = bs4.BeautifulSoup(data)
-        for elem in [e.parent for e in soup(class_='name')]:
-            cat_id = parse_element_id(elem.select('.title a')[0])
-            title, description, size = [
-                elem.find(class_=i).text.strip()
-                for i in ('title', 'description', 'threads')]
-            yield pyscp.core.ForumCategory(
-                cat_id, title, description, int(size))
-
-    def list_threads(self, category_id):
-        """Return threads in the given category."""
-        pages = self._pager(
-            'forum/ForumViewCategoryModule', _key='p', c=category_id)
-        soups = (bs4.BeautifulSoup(p['body']) for p in pages)
-        elems = (s(class_='name') for s in soups)
-        for elem in itertools.chain(*elems):
-            thread_id = parse_element_id(elem.select('.title a')[0])
-            title, description = [
-                elem.find(class_=i).text.strip()
-                for i in ('title', 'description')]
-            yield pyscp.core.ForumThread(thread_id, title, description)
-
-    ###########################################################################
-    # SCP-Wiki Specific Methods
-    ###########################################################################
-
-    @functools.lru_cache(maxsize=1)
-    @pyscp.utils.listify()
-    def list_overrides(self):
-        """
-        List page ownership overrides.
-
-        This method is exclusive to the scp-wiki, and is used to fine-tune
-        the page ownership information beyond what is possible with Wikidot.
-        This allows a single page to have an author different from the user
-        who created the zeroth revision of the page, or even have multiple
-        users attached to the page in various roles.
-        """
-        if 'scp-wiki' not in self.site:
-            return None
-        url = 'http://05command.wikidot.com/alexandra-rewrite'
-        soup = bs4.BeautifulSoup(self.req.get(url).text)
-        for row in [r('td') for r in soup('tr')[1:]]:
-            url = '{}/{}'.format(self.site, row[0].text)
-            user = row[1].text.split(':override:')[-1]
-            if ':override:' in row[1].text:
-                type = 'author'
-            else:
-                type = 'rewrite_author'
-            yield pyscp.core.Override(url, user, type)
-
-    @functools.lru_cache(maxsize=1)
-    @pyscp.utils.listify()
-    def list_images(self):
-        if 'scp-wiki' not in self.site:
-            return
-        base = 'http://scpsandbox2.wikidot.com/image-review-{}'
-        urls = [base.format(i) for i in range(1, 28)]
-        pages = [self.req.get(u).text for u in urls]
-        soups = [bs4.BeautifulSoup(p) for p in pages]
-        elems = [s('tr') for s in soups]
-        elems = itertools.chain(*elems)
-        elems = [e('td') for e in elems]
-        elems = [e for e in elems if e]
-        for elem in elems:
-            url = elem[0].img['src']
-            source = elem[3].find('a')['href']
-            status, notes = [elem[i].text for i in (4, 5)]
-            status, notes = [i if i else None for i in (status, notes)]
-            yield pyscp.core.Image(url, source, status, notes)
-
-
-###############################################################################
-# Internal Classes
-###############################################################################
 
 class Page(pyscp.core.Page):
     """
@@ -397,6 +213,8 @@ class Thread(pyscp.core.Thread):
     @pyscp.utils.cached_property
     @pyscp.utils.listify()
     def posts(self):
+        if self._id is None:
+            return
         pages = self._wiki._pager(
             'forum/ForumViewThreadPostsModule', _key='pageNo', t=self._id)
         pages = (bs4.BeautifulSoup(p['body']).body for p in pages)
@@ -415,8 +233,188 @@ class Thread(pyscp.core.Thread):
             yield pyscp.core.Post(post_id, title, content, user, time, parent)
 
 
-Wiki.Page = Page
-Wiki.Thread = Thread
+class Wiki(pyscp.core.Wiki):
+
+    """
+    Create a Wiki object.
+
+    This class does not use any of the official Wikidot API, and instead
+    relies on sending http post/get requests to internal Wikidot pages and
+    parsing the returned data.
+    """
+
+    Page = Page
+    Thread = Thread
+    # Tautology = Tautology
+
+    ###########################################################################
+    # Special Methods
+    ###########################################################################
+
+    def __init__(self, site):
+        super().__init__(site)
+        self.req = InsistentRequest()
+
+    def __repr__(self):
+        return '{}.{}({})'.format(
+            self.__module__,
+            self.__class__.__name__,
+            repr(self.site))
+
+    ###########################################################################
+    # Internal Methods
+    ###########################################################################
+
+    @pyscp.utils.log_errors(log.warning)
+    def _module(self, name, **kwargs):
+        """
+        Call a Wikidot module.
+
+        This method is responsible for most of the class' functionality.
+        Almost all other methods of the class are using _module in one way
+        or another.
+        """
+        return self.req.post(
+            self.site + '/ajax-module-connector.php',
+            data=dict(
+                pageId=kwargs.get('page_id', None),  # fuck wikidot
+                moduleName=name,
+                # token7 can be any 6-digit number, as long as it's the same
+                # in the payload and in the cookie
+                wikidot_token7='123456',
+                **kwargs),
+            headers={'Content-Type': 'application/x-www-form-urlencoded;'},
+            cookies={'wikidot_token7': '123456'}).json()
+
+    def _pager(self, name, _key, _update=None, **kwargs):
+        """Iterate over multi-page module results."""
+        first_page = self._module(name, **kwargs)
+        yield first_page
+        counter = bs4.BeautifulSoup(first_page['body']).find(class_='pager-no')
+        if not counter:
+            return
+        for idx in range(2, int(counter.text.split(' ')[-1]) + 1):
+            kwargs.update({_key: idx if _update is None else _update(idx)})
+            yield self._module(name, **kwargs)
+
+    def _list_pages_raw(self, **kwargs):
+        """
+        Call ListPages module.
+
+        Wikidot's ListPages is an extremely versatile php module that can be
+        used to retrieve all sorts of interesting informations, from urls of
+        pages created by a given user, and up to full html contents of every
+        page on the site.
+        """
+        yield from self._pager(
+            'list/ListPagesModule',
+            _key='offset',
+            _update=lambda x: 250 * (x - 1),
+            category='*',
+            limit=kwargs.get('limit', None),
+            tags=kwargs.get('tag', None),
+            rating=kwargs.get('rating', None),
+            created_by=kwargs.get('author', None),
+            order=kwargs.get('order', 'title'),
+            module_body=kwargs.get('body', '%%title_linked%%'),
+            perPage=250)
+
+    def _urls(self, **kwargs):
+        pages = self._list_pages_raw(**kwargs)
+        soups = (bs4.BeautifulSoup(p['body']) for p in pages)
+        elems = (s.select('div.list-pages-item a') for s in soups)
+        elems = itertools.chain.from_iterable(elems)
+        yield from (self.site + e['href'] for e in elems)
+
+    ###########################################################################
+    # Public Methods
+    ###########################################################################
+
+    def auth(self, username, password):
+        """Login to wikidot with the given username/password pair."""
+        return self.req.post(
+            'https://www.wikidot.com/default--flow/login__LoginPopupScreen',
+            data=dict(
+                login=username,
+                password=password,
+                action='Login2Action',
+                event='login'))
+
+    def list_categories(self):
+        """Return forum categories."""
+        data = self._module('forum/ForumStartModule')['body']
+        soup = bs4.BeautifulSoup(data)
+        for elem in [e.parent for e in soup(class_='name')]:
+            cat_id = parse_element_id(elem.select('.title a')[0])
+            title, description, size = [
+                elem.find(class_=i).text.strip()
+                for i in ('title', 'description', 'threads')]
+            yield pyscp.core.ForumCategory(
+                cat_id, title, description, int(size))
+
+    def list_threads(self, category_id):
+        """Return threads in the given category."""
+        pages = self._pager(
+            'forum/ForumViewCategoryModule', _key='p', c=category_id)
+        soups = (bs4.BeautifulSoup(p['body']) for p in pages)
+        elems = (s(class_='name') for s in soups)
+        for elem in itertools.chain(*elems):
+            thread_id = parse_element_id(elem.select('.title a')[0])
+            title, description = [
+                elem.find(class_=i).text.strip()
+                for i in ('title', 'description')]
+            yield self.Thread(thread_id, title, description)
+
+    ###########################################################################
+    # SCP-Wiki Specific Methods
+    ###########################################################################
+
+    @functools.lru_cache(maxsize=1)
+    @pyscp.utils.listify()
+    def list_overrides(self):
+        """
+        List page ownership overrides.
+
+        This method is exclusive to the scp-wiki, and is used to fine-tune
+        the page ownership information beyond what is possible with Wikidot.
+        This allows a single page to have an author different from the user
+        who created the zeroth revision of the page, or even have multiple
+        users attached to the page in various roles.
+        """
+        if 'scp-wiki' not in self.site:
+            return None
+        url = 'http://05command.wikidot.com/alexandra-rewrite'
+        soup = bs4.BeautifulSoup(self.req.get(url).text)
+        for row in [r('td') for r in soup('tr')[1:]]:
+            url = '{}/{}'.format(self.site, row[0].text)
+            user = row[1].text.split(':override:')[-1]
+            if ':override:' in row[1].text:
+                type = 'author'
+            else:
+                type = 'rewrite_author'
+            yield pyscp.core.Override(url, user, type)
+
+    @functools.lru_cache(maxsize=1)
+    @pyscp.utils.listify()
+    def list_images(self):
+        if 'scp-wiki' not in self.site:
+            return
+        base = 'http://scpsandbox2.wikidot.com/image-review-{}'
+        urls = [base.format(i) for i in range(1, 28)]
+        pages = [self.req.get(u).text for u in urls]
+        soups = [bs4.BeautifulSoup(p) for p in pages]
+        elems = [s('tr') for s in soups]
+        elems = itertools.chain(*elems)
+        elems = [e('td') for e in elems]
+        elems = [e for e in elems if e]
+        for elem in elems:
+            url = elem[0].img['src']
+            source = elem[3].find('a')
+            if source:
+                source = source['href']
+            status, notes = [elem[i].text for i in (4, 5)]
+            status, notes = [i if i else None for i in (status, notes)]
+            yield pyscp.core.Image(url, source, status, notes)
 
 ###############################################################################
 

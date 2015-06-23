@@ -40,10 +40,6 @@ log = logging.getLogger(__name__)
 ###############################################################################
 
 
-class ConnectorError(Exception):
-    pass
-
-
 class Wiki:
     """
     Wiki Abstract Base Class.
