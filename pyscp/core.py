@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 
 """
-Python API and utilities for the scp-wiki.net website.
+Abstract Base Classes.
 
-pyscp is a python library for interacting with wikidot-hosted websites. The
-library is mainly intended for use by the administrative staff of the
-www.scp-wiki.net website, and has a host of feature exclusive to it. However,
-the majority of the core functionality should be applicalbe to any
-wikidot-based site.
+pyscp builds most of its functionality on top of three large classes: Wiki,
+Page, and Thread. This module contains the abstract base classes for those
+three. The ABC-s define the abstact methods that each child must implement,
+as well as some common functionality that builds on top of the abstract
+methods.
 
-The core module holds the classes responsible for communicating with the
-wikidot sites, representing individual wiki pages as python objects, and
-creating and accessing site snapshots.
+Each class inheriting from the ABC-s must implement its own realization of
+the abstract methods, and can also provide additional methods unique to it.
+
+This module also defines the named tuples for simple containers used by the
+three core classes, such as Revision or Vote.
 """
 
 
@@ -19,13 +21,14 @@ creating and accessing site snapshots.
 # Module Imports
 ###############################################################################
 
+import abc
 import bs4
 import collections
 import functools
+import itertools
 import logging
 import re
 import urllib.parse
-import itertools
 
 import pyscp.utils
 
@@ -36,13 +39,235 @@ import pyscp.utils
 log = logging.getLogger(__name__)
 
 ###############################################################################
-# Public Classes
+# Abstract Base Classes
 ###############################################################################
 
 
-class Wiki:
+class Page(metaclass=abc.ABCMeta):
+
+    """
+    Page Abstract Base Class.
+
+    Page object are wrappers around individual wiki-pages, and allow simple
+    operations with them, such as retrieving the rating or the author.
+
+    Each Page instance is attached to a specific instance of the Wiki class.
+    The wiki may be used by the page to retrieve a list of titles or other
+    similar wiki-wide information that may be used by the Page to, in turn,
+    deduce some information about itself.
+
+    Typically, the Page instances should not be created directly. Instead,
+    calling an instance of a Wiki class will creating a Page instance
+    attached to that wiki.
+    """
+
+    ###########################################################################
+    # Special Methods
+    ###########################################################################
+
+    def __init__(self, wiki, url):
+        if wiki.site not in url:
+            url = '{}/{}'.format(wiki.site, url)
+        self.url = url.lower()
+        self._wiki = wiki
+
+    def __repr__(self):
+        return '{}.{}({}, {})'.format(
+            self.__module__, self.__class__.__name__,
+            repr(self.url), repr(self._wiki))
+
+    ###########################################################################
+    # Abstract Methods
+    ###########################################################################
+
+    @property
+    @abc.abstractmethod
+    def _pdata(self):
+        """
+        Commonly used data about the page.
+
+        This method should return a tuple, the first three elements of which
+        are the id number of the page; the id number of the page's comments
+        thread; and the html contents of the page.
+
+        Any additional elements of the tuple are left to the discretion
+        of the individual Page implimentations.
+        """
+        pass
+
+    @property
+    @abc.abstractmethod
+    def history(self):
+        """
+        Revision history of the page.
+
+        Should return a sorted list of Revision named tuples.
+        """
+        pass
+
+    @property
+    @abc.abstractmethod
+    def votes(self):
+        """
+        Page votes.
+
+        Should return a list of Vote named tuples.
+        """
+        pass
+
+    @property
+    @abc.abstractmethod
+    def tags(self):
+        """
+        Page tags.
+
+        Should return a set of strings.
+        """
+        pass
+
+    ###########################################################################
+    # Internal Methods
+    ###########################################################################
+
+    @property
+    def _id(self):
+        """Unique ID number of the page."""
+        return self._pdata[0]
+
+    @pyscp.utils.cached_property
+    def _thread(self):
+        """Thread object corresponding to the page's comments thread."""
+        return self._wiki.Thread(self._wiki, self._pdata[1])
+
+    @property
+    def _title(self):
+        """Title as displayed on the page."""
+        title = self._soup.find(id='page-title')
+        return title.text.strip() if title else ''
+
+    @property
+    def _soup(self):
+        """BeautifulSoup of the contents of the page."""
+        return bs4.BeautifulSoup(self.html)
+
+    ###########################################################################
+    # Properties
+    ###########################################################################
+
+    @property
+    def html(self):
+        """HTML contents of the page."""
+        return self._pdata[2]
+
+    @property
+    def posts(self):
+        """List of the comments made on the page."""
+        return self._thread.posts
+
+    @property
+    def comments(self):
+        """Alias for Page.posts."""
+        return self._thread.posts
+
+    @property
+    def text(self):
+        """Plain text of the page."""
+        return self._soup.find(id='page-content').text
+
+    @property
+    def wordcount(self):
+        """Number of words encountered on the page."""
+        return len(re.findall(r"[\w'█_-]+", self.text))
+
+    @property
+    def images(self):
+        """Number of images dislayed on the page."""
+        # TODO: needs more work.
+        return [i['src'] for i in self._soup('img')]
+
+    @property
+    def title(self):
+        """
+        Title of the page.
+
+        In case of SCP articles, will include the title from the 'series' page.
+        """
+        if 'scp' in self.tags and re.search('[scp]+-[0-9]+$', self.url):
+            return '{}: {}'.format(self._title, self._wiki.titles()[self.url])
+        return self._title
+
+    @property
+    def created(self):
+        """When was the page created."""
+        return self.history[0].time
+
+    @property
+    def author(self):
+        """Original author of the page."""
+        for over in self._wiki.list_overrides():
+            if over.url == self.url and over.type == 'author':
+                return over.user
+        return self.history[0].user
+
+    @property
+    def rewrite_author(self):
+        """Author of the current rewrite."""
+        for over in self._wiki.list_overrides():
+            if over.url == self.url and over.type == 'rewrite_author':
+                return over.user
+
+    @property
+    def rating(self):
+        """Rating of the page, excluding deleted accounts."""
+        return sum(
+            v.value for v in self.votes if v.user != '(account deleted)')
+
+    @property
+    @pyscp.utils.listify()
+    def links(self):
+        """
+        Other pages linked from this one.
+
+        Returns an ordered list of unique urls. Off-site links or links to
+        images are not included.
+        """
+        unique = set()
+        for element in self._soup.select('#page-content a'):
+            href = element.get('href', None)
+            if (not href or href[0] != '/' or  # bad or absolute link
+                    href[-4:] in ('.png', '.jpg', '.gif')):
+                continue
+            url = self._wiki.site + href.rstrip('|')
+            if url not in unique:
+                unique.add(url)
+                yield url
+
+
+class Thread(metaclass=abc.ABCMeta):
+
+    """
+    Thread Abstract Base Class.
+
+    Thread objects represent individual forum threads. Most pages have a
+    corresponding comments thread, accessible via Page._thread.
+    """
+
+    def __init__(self, wiki, _id, title=None, description=None):
+        self._wiki = wiki
+        self._id, self.title, self.description = _id, title, description
+
+    @abc.abstractmethod
+    def posts(self):
+        """Posts in this thread."""
+        pass
+
+
+class Wiki(metaclass=abc.ABCMeta):
     """
     Wiki Abstract Base Class.
+
+    Wiki objects provide wiki-wide functionality not limited to individual
+    pages or threads.
     """
 
     ###########################################################################
@@ -51,8 +276,8 @@ class Wiki:
 
     # should point to the respective Page and Thread classes in each submodule.
 
-    Page = None
-    Thread = None
+    Page = Page
+    Thread = Thread
 
     ###########################################################################
     # Special Methods
@@ -72,7 +297,7 @@ class Wiki:
 
     @functools.lru_cache(maxsize=1)
     def titles(self):
-        """Return a dict of url/title pairs for scp articles."""
+        """Dict of url/title pairs for scp articles."""
         pages = map(self, ('scp-series', 'scp-series-2', 'scp-series-3'))
         elems = [p._soup.select('ul > li') for p in pages]
         elems = itertools.chain(*elems)
@@ -123,130 +348,8 @@ class Wiki:
             if url in urls:
                 yield self(url)
 
-
-class Page:
-
-    """
-    Page Abstract Base Class.
-
-    Each submodule must implement its own Page class inheriting from
-    this one. The Page classes in each submodule are responsible for
-    retrieving the raw data, while this class provides several common
-    methods to manipulate it.
-    """
-
-    ###########################################################################
-    # Special Methods
-    ###########################################################################
-
-    def __init__(self, wiki, url):
-        if wiki.site not in url:
-            url = '{}/{}'.format(wiki.site, url)
-        self.url = url.lower()
-        self._wiki = wiki
-
-    def __repr__(self):
-        return '{}.{}({}, {})'.format(
-            self.__module__, self.__class__.__name__,
-            repr(self.url), repr(self._wiki))
-
-    ###########################################################################
-    # Internal Methods
-    ###########################################################################
-
-    @property
-    def _id(self):
-        return self._pdata[0]
-
-    @pyscp.utils.cached_property
-    def _thread(self):
-        return self._wiki.Thread(self._wiki, self._pdata[1])
-
-    @property
-    def _title(self):
-        """Title as displayed on the page."""
-        title = self._soup.find(id='page-title')
-        return title.text.strip() if title else ''
-
-    @property
-    def _soup(self):
-        return bs4.BeautifulSoup(self.html)
-
-    ###########################################################################
-    # Properties
-    ###########################################################################
-
-    @property
-    def posts(self):
-        return self._thread.posts
-
-    @property
-    def comments(self):
-        return self._thread.posts
-
-    @property
-    def text(self):
-        return self._soup.find(id='page-content').text
-
-    @property
-    def wordcount(self):
-        return len(re.findall(r"[\w'█_-]+", self.text))
-
-    @property
-    def images(self):
-        return [i['src'] for i in self._soup('img')]
-
-    @property
-    def title(self):
-        if 'scp' in self.tags and re.search('[scp]+-[0-9]+$', self.url):
-            return '{}: {}'.format(self._title, self._wiki.titles()[self.url])
-        return self._title
-
-    @property
-    def created(self):
-        return self.history[0].time
-
-    @property
-    def author(self):
-        for over in self._wiki.list_overrides():
-            if over.url == self.url and over.type == 'author':
-                return over.user
-        return self.history[0].user
-
-    @property
-    def rewrite_author(self):
-        for over in self._wiki.list_overrides():
-            if over.url == self.url and over.type == 'rewrite_author':
-                return over.user
-
-    @property
-    def rating(self):
-        return sum(
-            v.value for v in self.votes if v.user != '(account deleted)')
-
-    @property
-    @pyscp.utils.listify()
-    def links(self):
-        unique = set()
-        for element in self._soup.select('#page-content a'):
-            href = element.get('href', None)
-            if (not href or href[0] != '/' or  # bad or absolute link
-                    href[-4:] in ('.png', '.jpg', '.gif')):
-                continue
-            url = self._wiki.site + href.rstrip('|')
-            if url not in unique:
-                unique.add(url)
-                yield url
-
-
-class Thread:
-
-    def __init__(self, wiki, _id, title=None, description=None):
-        self._wiki = wiki
-        self._id, self.title, self.description = _id, title, description
-
 ###############################################################################
-# Simple Containers
+# Named Tuple Containers
 ###############################################################################
 
 nt = collections.namedtuple
