@@ -17,7 +17,7 @@ Done.
 ```python
 import pyscp
 
-wiki = pyscp.core.WikidotConnector('www.scp-wiki.net')
+wiki = pyscp.wikidot.Wiki('www.scp-wiki.net')
 p = wiki('scp-837')
 print(
     '"{}" has a rating of {}, {} revisions, and {} comments.'
@@ -27,10 +27,10 @@ print(
 "SCP-837: Multiplying Clay" has a rating of 108, 14 revisions, and 54 comments.
 ```
 
-You can use other sites to create a connector as well:
+You can access other sites as well:
 
 ```python
-ru_wiki = pyscp.core.WikidotConnector('scpfoundation.ru')
+ru_wiki = pyscp.wikidot.Wiki('scpfoundation.ru')
 p = ru_wiki('scp-837')
 print('"{}" was created by {} on {}.'.format(p.title, p.author, p.created))
 ```
@@ -38,13 +38,13 @@ print('"{}" was created by {} on {}.'.format(p.title, p.author, p.created))
 "SCP-837 - Глина умножения" was created by Gene R on 2012-12-26 11:12:13.
 ```
 
-If the site doesn't use a custom domain, you can use the name of the site instead of the full url. E.g. `WikidotConnector('scpsandbox2')` is the same as `WikidotConnector('scpsandbox2.wikidot.com')`.
+If the site doesn't use a custom domain, you can use the name of the site instead of the full url. E.g. `Wiki('scpsandbox2')` is the same as `Wiki('scpsandbox2.wikidot.com')`.
 
 ### Editing Pages
 
 ```python
 
-wiki = pyscp.core.WikidotConnector('scpsandbox2')
+wiki = pyscp.wikidot.Wiki('scpsandbox2')
 wiki.auth('example_username', 'example_password')
 p = wiki('test')
 last_revision = p.history[-1].number
@@ -54,7 +54,7 @@ p.edit(
     #you can leave out the comment too, but that'd be rude
     comment='testing automated editing')
 print(p.text)   # see if it worked
-p.revert_to(last_revision)  # let's revert it back to what it were.
+p.revert(last_revision)  # let's revert it back to what it were.
 ```
 ```
 This is centered text that uses Wikidot markup.
@@ -68,21 +68,21 @@ When working with large number of pages, it could be faster to create a snapshot
 ```python
 import pyscp
 
-creator = pyscp.core.SnapshotCreator('www.scp-wiki.net', 'snapshot_file.db')
+creator = pyscp.snapshot.SnapshotCreator('www.scp-wiki.net', 'snapshot_file.db')
 creator.take_snapshot(forums=False)
 # that's where we wait half an hour for it to finish
 ```
 
-Once a snapshot is created, you can use `SnapshotConnector` to read pages same as in the first example:
+Once a snapshot is created, you can use `snapshot.Wiki` to read pages same as in the first example:
 
 ```python
-sn = pyscp.core.SnapshotConnector('www.scp-wiki.net', 'snapshot_file.db')
-p = sn('scp-9005-2')
+wiki = pyscp.snapshot.Wiki('www.scp-wiki.net', 'snapshot_file.db')
+p = wiki('scp-9005-2')
 print(
     '"{}" has a rating of {}, was created by {}, and is awesome.'
     .format(p.title, p.rating, p.author))
 print('Other pages by {}:'.format(p.author))
-for other in map(sn, sn.list_pages(author=p.author)):
+for other in wiki.list_pages(author=p.author):
     print(
         '{} (rating: {}, created: {})'
         .format(other.title, other.rating, other.created))
