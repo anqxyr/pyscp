@@ -5,7 +5,7 @@ with open('README.md') as f:
 
 setuptools.setup(
     name='pyscp',
-    version='0.9.0',
+    version='1.0.0',
     description='Python API and utilities for the scp-wiki.net website.',
     long_description=readme,
     url='https://github.com/anqxyr/pyscp/',
