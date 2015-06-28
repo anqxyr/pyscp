@@ -68,6 +68,7 @@ class Page(metaclass=abc.ABCMeta):
     def __init__(self, wiki, url):
         if wiki.site not in url:
             url = '{}/{}'.format(wiki.site, url)
+        url = url.replace(' ', '-').replace('_', '-')
         self.url = url.lower()
         self._wiki = wiki
 

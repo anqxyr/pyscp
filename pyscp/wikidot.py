@@ -180,6 +180,14 @@ class Page(pyscp.core.Page):
             lock_secret=lock['lock_secret'],
             revision_id=lock.get('page_revision_id', None))
 
+    def create(self, source, title, comment=None):
+        if not hasattr(self, '_cache'):
+            self._cache = {}
+        self._cache['_pdata'] = (None, None, None)
+        response = self.edit(source, title, comment)
+        del self._cache['_pdata']
+        return response
+
     def revert(self, rev_n):
         """Revert the page to a previous revision."""
         self._flush('html', 'history', 'source', 'tags')
