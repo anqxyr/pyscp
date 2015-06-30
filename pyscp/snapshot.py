@@ -142,22 +142,34 @@ class Wiki(core.Wiki):
                 .where(orm.Tag.name == tag))
 
     @staticmethod
-    def _filter_rating(rating):
-        cmp, value, *_ = re.split(r'(\d+)', rating)
-        if cmp not in ('>', '<', '>=', '<=', '=', ''):
+    def _get_operator(string):
+        symbol, *values = re.split(r'(\d+)', string)
+        opdict = {
+            '>': 'gt', '<': 'lt', '>=': 'ge', '<=': 'le', '=': 'eq', '': 'eq'}
+        if symbol not in opdict:
             raise ValueError
-        cmp = {
-            '>': 'gt', '<': 'lt', '>=': 'ge',
-            '<=': 'le', '=': 'eq', '': 'eq'}[cmp]
-        cmp = getattr(operator, cmp)
-        value = int(value)
+        return getattr(operator, opdict[symbol]), values
+
+    def _filter_rating(self, rating):
+        compare, values = self._get_operator(rating)
+        rating = int(values[0])
         return (orm.Page.select(orm.Page.url)
                 .join(orm.Vote).group_by(orm.Page.url)
-                .having(cmp(orm.peewee.fn.sum(orm.Vote.value), value)))
+                .having(compare(orm.peewee.fn.sum(orm.Vote.value), rating)))
+
+    def _filter_created(self, created):
+        compare, values = self._get_operator(created)
+        date = '-'.join(values[::2])
+        return (orm.Page.select(orm.Page.url)
+                .join(orm.Revision).where(orm.Revision.number == 0)
+                .group_by(orm.Page.url)
+                .having(compare(
+                    orm.peewee.fn.substr(orm.Revision.time, 1, len(date)),
+                    date)))
 
     def _urls(self, **kwargs):
         query = orm.Page.select(orm.Page.url)
-        keys = ('author', 'tag', 'rating')
+        keys = ('author', 'tag', 'rating', 'created')
         keys = [k for k in keys if k in kwargs]
         for k in keys:
             query = query & getattr(self, '_filter_' + k)(kwargs[k])
