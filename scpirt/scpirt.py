@@ -19,32 +19,51 @@ from PySide import QtGui, QtCore
 ###############################################################################
 
 log = logging.getLogger(__name__)
-req = pyscp.core.InsistentRequest()
-sandbox = pyscp.core.WikidotConnector('scpsandbox2')
+req = pyscp.wikidot.InsistentRequest()
+sandbox = pyscp.wikidot.Wiki('scpsandbox2')
+authenticated = False
 
 ###############################################################################
 
 
 class Image:
 
+    statuses = (
+        'PUBLIC DOMAIN',
+        'BY-SA CC',
+        'BY-NC-SA CC',
+        'PERMISSION GRANTED',
+        'REPLACED',
+        'AWAITING REPLY',
+        'SOURCE UNKNOWN',
+        'UNABLE TO CONTACT',
+        'PERMISSION DENIED',
+        'PERMANENTLY REMOVED')
+
     def __init__(self, url, page, user, source, status, notes):
-        self.url, self.page, self.user, self.source = url, page, user, source
-        self.status = self._saved = status
-        self.notes = notes
+        self.url, self.page, self.user = url, page, user
+        self.source, self.notes = source, notes
+        self.status = status if status.strip() else None
+        if self.status and self.status not in self.statuses:
+            self.status = 'OTHER'
+        self.attribute, self.remove = False, False
 
-    def attribute(self):
-        if self.status == self._saved:
-            return False
-        if self.status in ('BY-SA CC', 'BY-NC-SA CC', 'PERMISSION GRANTED'):
-            return True
-        return False
+    def status_index(self):
+        if self.status not in self.statuses:
+            return None
+        return self.statuses.index(self.status)
 
-    def remove(self):
-        if self.status == self._saved:
-            return False
-        if self.status in ('AWAITING REPLY', 'PERMANENTLY REMOVED'):
-            return True
-        return False
+    def color(self):
+        index = self.status_index()
+        if index is None:
+            return None
+        if index < 2:
+            color = 'green'
+        elif index < 6:
+            color = 'blue'
+        else:
+            color = 'darkred'
+        return color
 
     def row_code(self):
         pic = '[[image {} width="50px"]]'.format(self.url)
@@ -52,6 +71,8 @@ class Image:
         user = '[[user {}]]'.format(self.user) if self.user else ' '
         source = '[{} source]'.format(self.source) if self.source else ' '
         status = '**{}**'.format(self.status) if self.status else ' '
+        if self.status_index() is not None:
+            status = '##{}|{}##'.format(self.color(), status)
         notes = self.notes.replace('\n', ' _\n') if self.notes else ' '
         return '||{}||{} _\n{}||{}||{}||{}||'.format(
             pic, page, user, source, status, notes)
@@ -73,6 +94,8 @@ class Imagebox(QtGui.QWidget):
         self.ui.picture.addAction(self.ui.email)
         self.load_image(image)
         self.ui.status.currentIndexChanged.connect(self.change_status)
+        self.ui.source.textChanged.connect(self.change_source)
+        self.ui.notes.textChanged.connect(self.change_notes)
 
     def load_image(self, image):
         self.image = image
@@ -86,10 +109,12 @@ class Imagebox(QtGui.QWidget):
 
     def change_status(self):
         self.image.status = self.ui.status.currentText()
-        for w, s in (
-                (self.ui.remove, self.image.remove()),
-                (self.ui.attribute, self.image.attribute())):
-            w.setCheckState(QtCore.Qt.Checked if s else QtCore.Qt.Unchecked)
+
+    def change_source(self):
+        self.image.source = self.ui.source.text()
+
+    def change_notes(self):
+        self.image.notes = self.ui.notes.toPlainText()
 
     def open_google(self):
         webbrowser.open('https://www.google.com/searchbyimage?&image_url=' +
@@ -101,6 +126,20 @@ class Imagebox(QtGui.QWidget):
     def set_picture(self):
         filename = 'images/' + '_'.join(self.image.url.split('/')[-2:])
         self.ui.picture.setPixmap(QtGui.QPixmap(filename))
+
+
+class LoginForm(QtGui.QDialog, ui.LoginForm):
+
+    def __init__(self):
+        super().__init__()
+        self.setupUi(self)
+        self.ok_button.clicked.connect(self.login)
+
+    def login(self):
+        sandbox.auth(self.name.text(), self.password.text())
+        global authenticated
+        authenticated = True
+        self.close()
 
 
 class ImageDownloader(QtCore.QThread):
@@ -143,7 +182,8 @@ class SCPIRT(QtGui.QMainWindow):
         self.ui.setupUi(self)
         self.show()
         self.ui.save.triggered.connect(self.save)
-        for i in range(10):
+        self.ui.login.triggered.connect(self.login)
+        for i in range(30):
             action = getattr(self.ui, 'scp{}'.format(i))
             action.triggered.connect(lambda i=i: self.get_list(i + 1))
 
@@ -163,12 +203,21 @@ class SCPIRT(QtGui.QMainWindow):
         for i in self.images:
             self.ui.main.addWidget(Imagebox(i))
 
+    def login(self):
+        if authenticated:
+            return True
+        form = LoginForm()
+        form.exec()
+        return authenticated
+
     def save(self):
-        print('||~ Image||~ Page||~ Source||~ Status||~ Notes||')
-        for img in self.images:
-            print(img.row_code())
-        #p = sandbox('image-review-' + str(self.current_review_page))
-        #p.edit(source)
+        if not self.login():
+            return
+        source = ['||~ Image||~ Page||~ Source||~ Status||~ Notes||']
+        source.extend(i.row_code() for i in self.images)
+        source = '\n'.join(source)
+        p = sandbox('image-review-' + str(self.current_review_page))
+        p.edit(source, comment='SCPIRT automated edit')
 
 
 def parse_review_page(index):
@@ -179,13 +228,13 @@ def parse_review_page(index):
         url = row[0].find('img')['src']
         page = row[1].a['href']
         user = row[1].span.a.text if row[1].select('span a') else None
-        source = row[3].a['href'] if row[3]('a') else None
-        status, notes = [row[i].text for i in (4, 5)]
+        source = row[2].a['href'] if row[2]('a') else None
+        status, notes = [row[i].text for i in (3, 4)]
         yield Image(url, page, user, source, status, notes)
 
 
 def generate_stats():
-    idxs = range(1, 28)
+    idxs = range(1, 36)
     data = []
     for i in idxs:
         data.extend(list(parse_review_page(i)))
@@ -193,11 +242,13 @@ def generate_stats():
     print('Images indexed:', len(data))
     statuses = [i.status for i in data]
     print('Reviewed:', len(data) - statuses.count(None))
-    for status in set(statuses):
+    for status in {i for i in statuses if i}:
         print(status + ':', statuses.count(status))
 
 
 if __name__ == '__main__':
+    generate_stats()
+    exit()
     app = QtGui.QApplication('')
     SCPIRT()
     app.exec_()
