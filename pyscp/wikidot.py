@@ -357,7 +357,7 @@ class Wiki(pyscp.core.Wiki):
             title, description, size = [
                 elem.find(class_=i).text.strip()
                 for i in ('title', 'description', 'threads')]
-            yield pyscp.core.ForumCategory(
+            yield pyscp.core.Category(
                 cat_id, title, description, int(size))
 
     def list_threads(self, category_id):
@@ -371,7 +371,7 @@ class Wiki(pyscp.core.Wiki):
             title, description = [
                 elem.find(class_=i).text.strip()
                 for i in ('title', 'description')]
-            yield self.Thread(thread_id, title, description)
+            yield self.Thread(self, thread_id, title, description)
 
     ###########################################################################
     # SCP-Wiki Specific Methods
@@ -408,7 +408,7 @@ class Wiki(pyscp.core.Wiki):
         if 'scp-wiki' not in self.site:
             return
         base = 'http://scpsandbox2.wikidot.com/image-review-{}'
-        urls = [base.format(i) for i in range(1, 28)]
+        urls = [base.format(i) for i in range(1, 36)]
         pages = [self.req.get(u).text for u in urls]
         soups = [bs4.BeautifulSoup(p) for p in pages]
         elems = [s('tr') for s in soups]
@@ -416,13 +416,11 @@ class Wiki(pyscp.core.Wiki):
         elems = [e('td') for e in elems]
         elems = [e for e in elems if e]
         for elem in elems:
-            url = elem[0].img['src']
-            source = elem[3].find('a')
-            if source:
-                source = source['href']
-            status, notes = [elem[i].text for i in (4, 5)]
+            url = elem[0].find('img')['src']
+            source = elem[2].a['href'] if elem[2]('a') else None
+            status, notes = [elem[i].text for i in (3, 4)]
             status, notes = [i if i else None for i in (status, notes)]
-            yield pyscp.core.Image(url, source, status, notes)
+            yield pyscp.core.Image(url, source, status, notes, None)
 
 ###############################################################################
 

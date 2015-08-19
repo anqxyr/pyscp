@@ -184,20 +184,19 @@ class Wiki(core.Wiki):
 
     @functools.lru_cache(maxsize=1)
     def list_overrides(self):
-        ov = orm.Override
-        ot = orm.OverrideType
-        us = orm.User
-        query = ov.select(ov, us.name, ot).join(us).switch(ov).join(ot)
+        query = (
+            orm.Override.select(orm.Override, orm.User.name, orm.OverrideType)
+            .join(orm.User).switch(orm.Override).join(orm.OverrideType))
         return [core.Override(r._data['url'], r.user.name, r.type.name)
                 for r in query]
 
-    @functools.lru_cache()
-    @utils.listify()
-    def images(self):
-        for row in orm.Image.select():
-            yield dict(
-                url=row.url, source=row.source, status=row.status.label,
-                notes=row.notes, data=row.data)
+    @functools.lru_cache(maxsize=1)
+    def list_images(self):
+        query = (
+            orm.Image.select(orm.Image, orm.ImageStatus.name)
+            .join(orm.ImageStatus))
+        return [core.Image(r.url, r.source, r.status.name, r.notes, r.data)
+                for r in query]
 
 ###############################################################################
 
@@ -221,15 +220,15 @@ class SnapshotCreator:
     metadata is saved.
     """
 
-    def __init__(self, site, dbpath):
+    def __init__(self, dbpath):
         if pathlib.Path(dbpath).exists():
             raise FileExistsError(dbpath)
         orm.connect(dbpath)
-        self.wiki = wikidot.Wiki(site)
         self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=20)
 
-    def take_snapshot(self, forums=False):
+    def take_snapshot(self, wiki, forums=False):
         """Take new snapshot."""
+        self.wiki = wiki
         self._save_all_pages()
         if forums:
             self._save_forums()
@@ -239,9 +238,6 @@ class SnapshotCreator:
         self._save_cache()
         orm.queue.join()
         log.info('Snapshot succesfully taken.')
-
-    def auth(self, username, password):
-        return self.wiki.auth(username, password)
 
     def _save_all_pages(self):
         """Iterate over the site pages, call _save_page for each."""
@@ -286,7 +282,7 @@ class SnapshotCreator:
         bar = utils.ProgressBar('SAVING FORUM THREADS', total_size)
         bar.start()
         for cat in cats:
-            threads = self.wiki.list_threads(cat.id)
+            threads = set(self.wiki.list_threads(cat.id))
             c_id = itertools.repeat(cat.id)
             for _ in self.pool.map(self._save_thread, threads, c_id):
                 bar.value += 1
@@ -330,5 +326,5 @@ class SnapshotCreator:
 
     def _save_cache(self):
         for table in orm.User, orm.Tag, orm.OverrideType, orm.ImageStatus:
-            if table.table_exists():
+            if hasattr(table, '_id_cache') and table._id_cache:
                 table.write_ids('name')

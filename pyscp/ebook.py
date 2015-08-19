@@ -17,7 +17,7 @@ from collections import namedtuple
 from lxml import etree, html
 from pathlib import Path
 from pkgutil import get_data
-from pyscp import core, utils
+from pyscp import snapshot, utils
 from shutil import copy2
 from tempfile import TemporaryDirectory
 
@@ -192,9 +192,9 @@ class EbookBuilder:
 
     item = namedtuple('EbookItem', 'uid url title content children')
 
-    def __init__(self, cn, urlheap, title):
-        self.cn = cn
-        self.urlheap = urlheap
+    def __init__(self, wiki, urlheap, title):
+        self.wiki = wiki
+        self.urlheap = [p.url for p in urlheap]
         self.book = Epub(title=title, author='Various Authors')
         resources = Path(__file__).parent / 'resources'
         self.book.stylesheet = str(resources / 'stylesheet.css')
@@ -203,9 +203,9 @@ class EbookBuilder:
         self.images = []
         self.uid = ('{:04}'.format(i) for i in itertools.count(1))
         self.image_whitelist = {
-            i['url']: (i['status'], i['source'], i['data'])
-            for i in self.cn.images()
-            if i['status'] in ('BY-SA CC', 'PUBLIC DOMAIN')}
+            i.url: (i.status, i.source, i.data)
+            for i in self.wiki.list_images()
+            if i.status in ('BY-SA CC', 'PUBLIC DOMAIN')}
 
     def add_page(self, url=None, title=None, content=None, parent=None):
         if url:
@@ -213,8 +213,9 @@ class EbookBuilder:
             if url not in self.urlheap:
                 return
             self.urlheap.remove(url)
-            self.images.extend(
-                [i for i in self.cn(url).images if i in self.image_whitelist])
+            self.images.extend([
+                i for i in self.wiki(url).images
+                if i in self.image_whitelist])
         item = self.item(next(self.uid), url, title, content, [])
         if not parent:
             self.root.append(item)
@@ -248,7 +249,7 @@ class EbookBuilder:
             if item.title and item.children:    # separate book section
                 subchapters.append([item.title, ''])
             elif item.url:
-                page = self.cn(item.url)
+                page = self.wiki(item.url)
                 if (page.author.startswith('Anonymous (') or
                         page.author.startswith('(account deleted)')):
                     continue
@@ -283,7 +284,7 @@ class EbookBuilder:
     def add_block(self, name, urls, parent=None):
         if set(urls) & set(self.urlheap):
             block = self.add_chapter(name, parent)
-            for url in urls:
+            for url in sorted(urls):
                 self.add_page(url=url, parent=block)
 
     def add_skips(self, start, end, parent=None):
@@ -317,7 +318,7 @@ class EbookBuilder:
     def add_extras(self, parent=None):
         for name, urls in zip(
             ('001 Proposals', 'Joke Articles', 'Explained Phenomena'),
-            (self.cn('scp-001').links, self._tag('joke'),
+            (self.wiki('scp-001').links, self._tag('joke'),
                 self._tag('explained'))):
             self.add_block(name, urls, parent)
 
@@ -325,36 +326,37 @@ class EbookBuilder:
     @utils.listify(set)
     def _tag(self, *tags):
         for tag in tags:
-            yield from self.cn.list_urls(tag=tag)
+            for p in self.wiki.list_pages(tag=tag):
+                yield p.url
 
     def _get_children_if_skip(self, url):
-        for url in self.cn(url).links:
+        for url in self.wiki(url).links:
             if url in self._tag('supplement', 'splash'):
                 yield url
 
     def _get_children_if_hub(self, url):
         maybe_children = []
         confirmed_children = []
-        for suburl in self.cn(url).links:
+        for suburl in self.wiki(url).links:
             if suburl in self._tag('hub'):
                 continue
             if suburl in self._tag('tale', 'goi-format', 'goi2014'):
                 maybe_children.append(suburl)
-            if url in self.cn(suburl).links:
+            if url in self.wiki(suburl).links:
                 confirmed_children.append(suburl)
             else:
-                subhtml = self.cn(suburl).html
+                subhtml = self.wiki(suburl).html
                 if not subhtml:
                     continue
                 crumb = bs4(subhtml).select('#breadcrumbs a')
-                if crumb and url == self.cn.site + crumb[-1]['href']:
+                if crumb and url == self.wiki.site + crumb[-1]['href']:
                     confirmed_children.append(suburl)
         if confirmed_children:
             return confirmed_children
         else:
             return maybe_children
 
-    @utils.ignore(core.ConnectorError, [])
+    @utils.ignore(snapshot.orm.Page.DoesNotExist, [])
     def get_page_children(self, url):
         if url in self._tag('scp', 'splash'):
             children = self._get_children_if_skip(url)
@@ -370,7 +372,7 @@ class EbookBuilder:
 
     def _write_item(self, item, parent=None):
         if item.url:
-            p = self.cn(item.url)
+            p = self.wiki(item.url)
             new_parent = self.book.add_page(
                 p.title,
                 self.parser(p.html, p.title, p.url in self._tag('scp')),
@@ -485,8 +487,8 @@ class HtmlParser:
 ###############################################################################
 
 
-def build_complete(cn, output_path):
-    book = EbookBuilder(cn, list(cn.list_urls(rating='>0')),
+def build_complete(wiki, output_path):
+    book = EbookBuilder(wiki, list(wiki.list_pages(rating='>0')),
                         title='SCP Foundation: The Complete Collection')
     book.add_opening()
     skips = book.add_chapter('SCP Database')
@@ -498,10 +500,10 @@ def build_complete(cn, output_path):
     book.write(output_path + book.book.title.replace(':', '') + '.epub')
 
 
-def build_tomes(cn, output_path):
-    heap = list(cn.list_urls(rating='>0'))
+def build_tomes(wiki, output_path):
+    heap = list(wiki.list_pages(rating='>0'))
     books = [
-        EbookBuilder(cn, heap, title='SCP Foundation: Tome {}'.format(i + 1))
+        EbookBuilder(wiki, heap, title='SCP Foundation: Tome {}'.format(i + 1))
         for i in range(12)]
     for book in books:
         book.add_opening()
@@ -517,11 +519,11 @@ def build_tomes(cn, output_path):
         book.write(output_path + book.book.title.replace(':', '') + '.epub')
 
 
-def build_digest(cn, output_path):
+def build_digest(wiki, output_path):
     date = arrow.now().replace(months=-1).format
     book = EbookBuilder(
-        cn,
-        list(cn.list_urls(rating='>0', created=date('YYYY-MM'))),
+        wiki,
+        list(wiki.list_pages(rating='>0', created=date('YYYY-MM'))),
         title='SCP Foundation Monthly Digest: {}'.format(date('MMMM YYYY')))
     book.add_opening()
     skips = book.add_chapter('SCP Database')
@@ -534,10 +536,10 @@ def build_digest(cn, output_path):
 
 
 def main():
-    sn = core.SnapshotConnector(
-        'www.scp-wiki.net', '/home/anqxyr/heap/_scp/scp-wiki.2015-06-01.db')
+    wiki = snapshot.Wiki(
+        'www.scp-wiki.net', '/home/anqxyr/heap/_scp/scp-wiki.2015-08-01.db')
     for fn in (build_complete, build_tomes, build_digest):
-        fn(sn, '/home/anqxyr/heap/_scp/ebook/')
+        fn(wiki, '/home/anqxyr/heap/_scp/ebook/')
 
 
 if __name__ == '__main__':

@@ -194,7 +194,11 @@ class Page(metaclass=abc.ABCMeta):
         In case of SCP articles, will include the title from the 'series' page.
         """
         if 'scp' in self.tags and re.search('[scp]+-[0-9]+$', self.url):
-            return '{}: {}'.format(self._title, self._wiki.titles()[self.url])
+            try:
+                return '{}: {}'.format(
+                    self._title, self._wiki.titles()[self.url])
+            except KeyError:
+                pass
         return self._title
 
     @property
@@ -359,5 +363,5 @@ Vote = nt('Vote', 'user value')
 Post = nt('Post', 'id title content user time parent')
 Override = nt('Override', 'url user type')
 Category = nt('Category', 'id title description size')
-Image = nt('Image', 'url source status notes')
+Image = nt('Image', 'url source status notes data')
 del nt
