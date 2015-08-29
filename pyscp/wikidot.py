@@ -106,7 +106,7 @@ class Page(pyscp.core.Page):
     @pyscp.utils.cached_property
     def _pdata(self):
         data = self._wiki.req.get(self.url).text
-        soup = bs4.BeautifulSoup(data)
+        soup = bs4.BeautifulSoup(data, 'lxml')
         return (int(re.search('pageId = ([0-9]+);', data).group(1)),
                 parse_element_id(soup.find(id='discuss-button')),
                 str(soup.find(id='main-content')),
@@ -126,7 +126,7 @@ class Page(pyscp.core.Page):
         """Return the revision history of the page."""
         data = self._module(
             'history/PageRevisionListModule', page=1, perpage=99999)['body']
-        soup = bs4.BeautifulSoup(data)
+        soup = bs4.BeautifulSoup(data, 'lxml')
         for row in reversed(soup('tr')[1:]):
             rev_id = int(row['id'].split('-')[-1])
             cells = row('td')
@@ -140,7 +140,7 @@ class Page(pyscp.core.Page):
     def votes(self):
         """Return all votes made on the page."""
         data = self._module('pagerate/WhoRatedPageModule')['body']
-        soup = bs4.BeautifulSoup(data)
+        soup = bs4.BeautifulSoup(data, 'lxml')
         spans = [i.text.strip() for i in soup('span')]
         pairs = zip(spans[::2], spans[1::2])
         return [pyscp.core.Vote(u, 1 if v == '+' else -1) for u, v in pairs]
@@ -152,7 +152,7 @@ class Page(pyscp.core.Page):
     @property
     def source(self):
         data = self._module('viewsource/ViewSourceModule')['body']
-        soup = bs4.BeautifulSoup(data)
+        soup = bs4.BeautifulSoup(data, 'lxml')
         return soup.text[11:].strip().replace(chr(160), ' ')
 
     ###########################################################################
@@ -225,7 +225,7 @@ class Thread(pyscp.core.Thread):
             return
         pages = self._wiki._pager(
             'forum/ForumViewThreadPostsModule', _key='pageNo', t=self._id)
-        pages = (bs4.BeautifulSoup(p['body']).body for p in pages)
+        pages = (bs4.BeautifulSoup(p['body'], 'lxml').body for p in pages)
         pages = (p for p in pages if p)
         posts = (p(class_='post-container', recursive=False) for p in pages)
         posts = itertools.chain.from_iterable(posts)
@@ -298,7 +298,8 @@ class Wiki(pyscp.core.Wiki):
         """Iterate over multi-page module results."""
         first_page = self._module(name, **kwargs)
         yield first_page
-        counter = bs4.BeautifulSoup(first_page['body']).find(class_='pager-no')
+        counter = bs4.BeautifulSoup(
+            first_page['body'], 'lxml').find(class_='pager-no')
         if not counter:
             return
         for idx in range(2, int(counter.text.split(' ')[-1]) + 1):
@@ -329,7 +330,7 @@ class Wiki(pyscp.core.Wiki):
 
     def _urls(self, **kwargs):
         pages = self._list_pages_raw(**kwargs)
-        soups = (bs4.BeautifulSoup(p['body']) for p in pages)
+        soups = (bs4.BeautifulSoup(p['body'], 'lxml') for p in pages)
         elems = (s.select('div.list-pages-item a') for s in soups)
         elems = itertools.chain.from_iterable(elems)
         yield from (self.site + e['href'] for e in elems)
@@ -351,7 +352,7 @@ class Wiki(pyscp.core.Wiki):
     def list_categories(self):
         """Return forum categories."""
         data = self._module('forum/ForumStartModule')['body']
-        soup = bs4.BeautifulSoup(data)
+        soup = bs4.BeautifulSoup(data, 'lxml')
         for elem in [e.parent for e in soup(class_='name')]:
             cat_id = parse_element_id(elem.select('.title a')[0])
             title, description, size = [
@@ -364,7 +365,7 @@ class Wiki(pyscp.core.Wiki):
         """Return threads in the given category."""
         pages = self._pager(
             'forum/ForumViewCategoryModule', _key='p', c=category_id)
-        soups = (bs4.BeautifulSoup(p['body']) for p in pages)
+        soups = (bs4.BeautifulSoup(p['body'], 'lxml') for p in pages)
         elems = (s(class_='name') for s in soups)
         for elem in itertools.chain(*elems):
             thread_id = parse_element_id(elem.select('.title a')[0])
@@ -392,7 +393,7 @@ class Wiki(pyscp.core.Wiki):
         if 'scp-wiki' not in self.site:
             return None
         url = 'http://05command.wikidot.com/alexandra-rewrite'
-        soup = bs4.BeautifulSoup(self.req.get(url).text)
+        soup = bs4.BeautifulSoup(self.req.get(url).text, 'lxml')
         for row in [r('td') for r in soup('tr')[1:]]:
             url = '{}/{}'.format(self.site, row[0].text)
             user = row[1].text.split(':override:')[-1]
@@ -410,7 +411,7 @@ class Wiki(pyscp.core.Wiki):
         base = 'http://scpsandbox2.wikidot.com/image-review-{}'
         urls = [base.format(i) for i in range(1, 36)]
         pages = [self.req.get(u).text for u in urls]
-        soups = [bs4.BeautifulSoup(p) for p in pages]
+        soups = [bs4.BeautifulSoup(p, 'lxml') for p in pages]
         elems = [s('tr') for s in soups]
         elems = itertools.chain(*elems)
         elems = [e('td') for e in elems]
