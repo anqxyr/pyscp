@@ -240,6 +240,16 @@ class Thread(pyscp.core.Thread):
             time = parse_element_time(post)
             yield pyscp.core.Post(post_id, title, content, user, time, parent)
 
+    def new_post(self, source, title=None, parent_id=None):
+        self._wiki._module(
+            'Empty',
+            threadId=self._id,
+            parentId=parent_id,
+            title=title,
+            source=source,
+            action='ForumAction',
+            event='savePost')
+
 
 class Wiki(pyscp.core.Wiki):
 
@@ -373,6 +383,26 @@ class Wiki(pyscp.core.Wiki):
                 elem.find(class_=i).text.strip()
                 for i in ('title', 'description')]
             yield self.Thread(self, thread_id, title, description)
+
+    def send_pm(self, username, text, title=None):
+        lookup = self.req.get(
+            'https://www.wikidot.com/quickmodule.php?'
+            'module=UserLookupQModule&q=' + username).json()
+        if not lookup['users'] or lookup['users'][0]['name'] != username:
+            raise ValueError('Username Not Found')
+        user_id = lookup['users'][0]['user_id']
+        return self.req.post(
+            'https://www.wikidot.com/ajax-module-connector.php',
+            data=dict(
+                moduleName='Empty',
+                source=text,
+                subject=title,
+                to_user_id=user_id,
+                action='DashboardMessageAction',
+                event='send',
+                wikidot_token7='123456'),
+            headers={'Content-Type': 'application/x-www-form-urlencoded;'},
+            cookies={'wikidot_token7': '123456'}).json()
 
     ###########################################################################
     # SCP-Wiki Specific Methods
