@@ -149,7 +149,7 @@ class Page(metaclass=abc.ABCMeta):
     @property
     def _soup(self):
         """BeautifulSoup of the contents of the page."""
-        return bs4.BeautifulSoup(self.html)
+        return bs4.BeautifulSoup(self.html, 'lxml')
 
     ###########################################################################
     # Properties
@@ -212,7 +212,10 @@ class Page(metaclass=abc.ABCMeta):
         for over in self._wiki.list_overrides():
             if over.url == self.url and over.type == 'author':
                 return over.user
-        return self.history[0].user
+        author = self.history[0].user
+        if any(map(author.startswith, ['Anonymous', '(accound deleted)'])):
+            return None
+        return author
 
     @property
     def rewrite_author(self):
