@@ -211,7 +211,7 @@ class Page(metaclass=abc.ABCMeta):
         """Original author of the page."""
         for over in self._wiki.list_overrides():
             if over.url == self.url and over.type == 'author':
-                return over.user
+                return over.user if over.user != 'Unknown Author' else None
         author = self.history[0].user
         if any(map(author.startswith, ['Anonymous', '(accound deleted)'])):
             return None
