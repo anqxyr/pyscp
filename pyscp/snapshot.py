@@ -184,6 +184,8 @@ class Wiki(core.Wiki):
 
     @functools.lru_cache(maxsize=1)
     def list_overrides(self):
+        if 'scp-wiki' not in self.site:
+            return []
         query = (
             orm.Override.select(orm.Override, orm.User.name, orm.OverrideType)
             .join(orm.User).switch(orm.Override).join(orm.OverrideType))
