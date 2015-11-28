@@ -250,6 +250,15 @@ class Page(metaclass=abc.ABCMeta):
                 unique.add(url)
                 yield url
 
+    @property
+    def parent(self):
+        """Parent of the current page."""
+        if not self.html:
+            return None
+        breadcrumb = self._soup.select('#breadcrumbs a')
+        if breadcrumb:
+            return self._wiki.site + breadcrumb[-1]['href']
+
 
 class Thread(metaclass=abc.ABCMeta):
 
