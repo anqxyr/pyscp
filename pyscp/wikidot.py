@@ -45,7 +45,7 @@ class InsistentRequest(requests.Session):
 
     def request(self, method, url, **kwargs):
         log.debug('%s: %s %s', method, url, repr(kwargs) if kwargs else '')
-        kwargs.setdefault('timeout', 30)
+        kwargs.setdefault('timeout', 60)
         kwargs.setdefault('allow_redirects', False)
         for _ in range(self.max_attempts):
             try:
@@ -428,10 +428,10 @@ class Wiki(pyscp.core.Wiki):
             url = '{}/{}'.format(self.site, row[0].text)
             user = row[1].text.split(':override:')[-1]
             if ':override:' in row[1].text:
-                type = 'author'
+                type_ = 'author'
             else:
-                type = 'rewrite_author'
-            yield pyscp.core.Override(url, user, type)
+                type_ = 'rewrite_author'
+            yield pyscp.core.Override(url, user, type_)
 
     @functools.lru_cache(maxsize=1)
     @pyscp.utils.listify()

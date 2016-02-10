@@ -1,11 +1,16 @@
 import setuptools
+import subprocess
 
 with open('README.md') as f:
     readme = f.read()
 
+major_version = '1.0'
+commits = subprocess.check_output(
+    ['/usr/bin/git', 'rev-list', 'HEAD', '--count']).decode('utf8').strip()
+
 setuptools.setup(
     name='pyscp',
-    version='1.0.0',
+    version='{}.{}'.format(major_version, commits),
     description='Python API and utilities for the scp-wiki.net website.',
     long_description=readme,
     url='https://github.com/anqxyr/pyscp/',
