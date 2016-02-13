@@ -33,9 +33,7 @@ log = logging.getLogger(__name__)
 
 
 class Page(core.Page):
-    """
-    Create Page object.
-    """
+    """Page object."""
 
     ###########################################################################
     # Internal Methods
@@ -48,9 +46,7 @@ class Page(core.Page):
 
     @utils.cached_property
     def _pdata(self):
-        """
-        Preload the ids and contents of the page.
-        """
+        """Preload the ids and contents of the page."""
         pdata = orm.Page.get(orm.Page.url == self.url)
         return pdata.id, pdata._data['thread'], pdata.html
 
@@ -60,6 +56,7 @@ class Page(core.Page):
 
     @property
     def html(self):
+        """Return HTML contents of the page."""
         return self._pdata[2]
 
     @utils.cached_property
@@ -84,9 +81,11 @@ class Page(core.Page):
 
 
 class Thread(core.Thread):
+    """Discussion/forum thread."""
 
     @utils.cached_property
     def posts(self):
+        """Post objects belonging to this thread."""
         fp = orm.ForumPost
         us = orm.User
         query = fp.select(fp, us.name).join(us).where(fp.thread == self._id)
@@ -97,10 +96,7 @@ class Thread(core.Thread):
 
 
 class Wiki(core.Wiki):
-
-    """
-    Create a Wiki object.
-    """
+    """Snapshot of a Wikidot website."""
 
     Page = Page
     Thread = Thread
@@ -111,6 +107,7 @@ class Wiki(core.Wiki):
     ###########################################################################
 
     def __init__(self, site, dbpath):
+        """Create wiki instance."""
         super().__init__(site)
         if not pathlib.Path(dbpath).exists():
             raise FileNotFoundError(dbpath)
@@ -118,6 +115,7 @@ class Wiki(core.Wiki):
         orm.connect(dbpath)
 
     def __repr__(self):
+        """Pretty-print current instance."""
         return '{}.{}({}, {})'.format(
             self.__module__,
             self.__class__.__qualname__,
@@ -184,6 +182,7 @@ class Wiki(core.Wiki):
 
     @functools.lru_cache(maxsize=1)
     def list_overrides(self):
+        """Page authorship exceptions."""
         if 'scp-wiki' not in self.site:
             return []
         query = (
@@ -194,6 +193,7 @@ class Wiki(core.Wiki):
 
     @functools.lru_cache(maxsize=1)
     def list_images(self):
+        """Image metadata."""
         query = (
             orm.Image.select(orm.Image, orm.ImageStatus.name)
             .join(orm.ImageStatus))
@@ -204,7 +204,6 @@ class Wiki(core.Wiki):
 
 
 class SnapshotCreator:
-
     """
     Create a snapshot of a wikidot site.
 
@@ -223,6 +222,7 @@ class SnapshotCreator:
     """
 
     def __init__(self, dbpath):
+        """Create an instance."""
         if pathlib.Path(dbpath).exists():
             raise FileExistsError(dbpath)
         orm.connect(dbpath)
@@ -260,14 +260,19 @@ class SnapshotCreator:
         """Download contents, revisions, votes and discussion of the page."""
         orm.Page.create(
             id=page._id, url=page.url, thread=page._thread._id, html=page.html)
-        history, votes = [map(vars, i) for i in (page.history, page.votes)]
-        history, votes = map(orm.User.convert_to_id, (history, votes))
-        tags = orm.Tag.convert_to_id(
-            [{'tag': t} for t in page.tags], key='tag')
-        for data, table in zip(
-                (history, votes, tags), ('Revision', 'Vote', 'PageTag')):
-            getattr(orm, table).insert_many(
-                dict(i, page=page._id) for i in data)
+
+        revisions = orm.User.convert_to_id(i._asdict() for i in page.history)
+        votes = orm.User.convert_to_id(i._asdict() for i in page.votes)
+        tags = [{'tag': t} for t in page.tags]
+        tags = orm.Tag.convert_to_id(tags, key='tag')
+
+        def _insert(table, data):
+            table.insert_many(dict(i, page=page._id) for i in data)
+
+        _insert(orm.Revision, revisions)
+        _insert(orm.Vote, votes)
+        _insert(orm.PageTag, tags)
+
         self._save_thread(page._thread)
 
     def _save_forums(self):
@@ -310,11 +315,11 @@ class SnapshotCreator:
         data = list(self.pool.map(self._save_image, images))
         self.ibar.stop()
         images = orm.ImageStatus.convert_to_id(
-            map(vars, images), key='status')
+            [i._asdict() for i in images], key='status')
         orm.Image.insert_many(
             dict(i, data=d) for i, d in zip(images, data) if d)
         overs = orm.User.convert_to_id(
-            map(vars, self.wiki.list_overrides()))
+            i._asdict() for i in self.wiki.list_overrides())
         overs = orm.OverrideType.convert_to_id(overs, key='type')
         orm.Override.insert_many(overs)
 
