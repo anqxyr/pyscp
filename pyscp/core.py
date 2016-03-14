@@ -29,6 +29,7 @@ import itertools
 import logging
 import re
 import urllib.parse
+import weakref
 
 import pyscp.utils
 
@@ -62,12 +63,30 @@ class Page(metaclass=abc.ABCMeta):
     """
 
     ###########################################################################
+    # Class Variables
+    ###########################################################################
+
+    _instance_pool = weakref.WeakValueDictionary()
+
+    ###########################################################################
     # Special Methods
     ###########################################################################
 
-    def __init__(self, wiki, url):
-        if wiki.site not in url:
-            url = '{}/{}'.format(wiki.site, url)
+    def __new__(cls, wiki, name):
+        """
+        Create new instance of the class.
+
+        The default implementation is overriden to turn the Page class
+        into a multiton (https://en.wikipedia.org/wiki/Multiton_pattern).
+        """
+        url = name if wiki.site in name else '{}/{}'.format(wiki.site, name)
+        if url not in cls._instance_pool:
+            cls._instance_pool[url] = page = super().__new__(cls)
+            return page
+        return cls._instance_pool[url]
+
+    def __init__(self, wiki, name):
+        url = name if wiki.site in name else '{}/{}'.format(wiki.site, name)
         url = url.replace(' ', '-').replace('_', '-')
         self.url = url.lower()
         self._wiki = wiki
