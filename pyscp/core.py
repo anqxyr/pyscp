@@ -156,10 +156,14 @@ class Page(metaclass=abc.ABCMeta):
         return self._wiki.Thread(self._wiki, self._pdata[1])
 
     @property
-    def _title(self):
+    def _raw_title(self):
         """Title as displayed on the page."""
         title = self._soup.find(id='page-title')
         return title.text.strip() if title else ''
+
+    @property
+    def _raw_author(self):
+        return self.history[0].user
 
     @property
     def _soup(self):
@@ -211,10 +215,10 @@ class Page(metaclass=abc.ABCMeta):
         if 'scp' in self.tags and re.search('[scp]+-[0-9]+$', self.url):
             try:
                 return '{}: {}'.format(
-                    self._title, self._wiki.titles()[self.url])
+                    self._raw_title, self._wiki.titles()[self.url])
             except KeyError:
                 pass
-        return self._title
+        return self._raw_title
 
     @property
     def created(self):
@@ -227,7 +231,7 @@ class Page(metaclass=abc.ABCMeta):
         for over in self._wiki.list_overrides():
             if over.url == self.url and over.type == 'author':
                 return over.user if over.user != 'Unknown Author' else None
-        author = self.history[0].user
+        author = self._raw_author
         if any(map(author.startswith, ['Anonymous', '(accound deleted)'])):
             return None
         return author

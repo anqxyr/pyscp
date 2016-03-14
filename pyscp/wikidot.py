@@ -113,6 +113,19 @@ class Page(pyscp.core.Page):
                 str(soup.find(id='main-content')),
                 {e.text for e in soup.select('.page-tags a')})
 
+    @property
+    def _raw_title(self):
+        if hasattr(self, '_body') and hasattr(self._body, 'title'):
+            return self._body.title
+        return super()._raw_title
+
+    @property
+    def _raw_author(self):
+        if hasattr(self, '_body') and hasattr(self._body, 'created_by'):
+            return self._body.created_by
+        return super()._raw_author
+
+
     ###########################################################################
     # Properties
     ###########################################################################
@@ -148,6 +161,8 @@ class Page(pyscp.core.Page):
 
     @property
     def tags(self):
+        if hasattr(self, '_body') and hasattr(self._body, 'tags'):
+            return self._body.tags.split()
         return self._pdata[3]
 
     @property
@@ -155,6 +170,13 @@ class Page(pyscp.core.Page):
         data = self._module('viewsource/ViewSourceModule')['body']
         soup = bs4.BeautifulSoup(data, 'lxml')
         return soup.text[11:].strip().replace(chr(160), ' ')
+
+    @property
+    def created(self):
+        if hasattr(self, '_body') and hasattr(self._body, 'created_at'):
+            time = arrow.get(self._body.created_at, 'DD MMM YYYY hh:mm')
+            return time.format('YYYY-MM-DD hh:mm:ss')
+        return super().created
 
     ###########################################################################
     # Page-Modifying Methods
