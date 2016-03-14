@@ -337,12 +337,11 @@ class Wiki(metaclass=abc.ABCMeta):
         """
         Return pages matching the specified criteria.
         """
-        urls = self._urls(**kwargs)
+        pages = self._list_pages_parsed(**kwargs)
         author = kwargs.pop('author', None)
         if not author:
             # if 'author' isn't specified, there's no need to check rewrites
-            yield from map(self, urls)
-            return
+            return pages
         include, exclude = set(), set()
         for over in self.list_overrides():
             if over.user == author:
@@ -353,17 +352,15 @@ class Wiki(metaclass=abc.ABCMeta):
                 # if url has author and rewrite author,
                 # it will appear in list_pages for both.
                 exclude.add(over.url)
-        urls = set(urls) | include - exclude
+        urls = {p.url for p in pages} | include - exclude
         # if no other options beside author were specified,
         # just return everything we can
         if not kwargs:
-            yield from map(self, sorted(urls))
-            return
+            return map(self, sorted(urls))
         # otherwise, retrieve the list of urls without the author parameter
         # to check which urls we should return and in which order
-        for url in self._urls(**kwargs):
-            if url in urls:
-                yield self(url)
+        pages = self._list_pages_parsed(**kwargs)
+        return [p for p in pages if p.url in urls]
 
 ###############################################################################
 # Named Tuple Containers

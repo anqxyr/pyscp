@@ -165,7 +165,7 @@ class Wiki(core.Wiki):
                     orm.peewee.fn.substr(orm.Revision.time, 1, len(date)),
                     date)))
 
-    def _urls(self, **kwargs):
+    def _list_pages_parsed(self, **kwargs):
         query = orm.Page.select(orm.Page.url)
         keys = ('author', 'tag', 'rating', 'created')
         keys = [k for k in keys if k in kwargs]
@@ -173,8 +173,7 @@ class Wiki(core.Wiki):
             query = query & getattr(self, '_filter_' + k)(kwargs[k])
         if 'limit' in kwargs:
             query = query.limit(kwargs['limit'])
-        for p in query:
-            yield p.url
+        return map(self, [p.url for p in query])
 
     ###########################################################################
     # SCP-Wiki Specific Methods

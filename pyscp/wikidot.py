@@ -13,6 +13,7 @@ and communication with the Wikidot-hosted sites.
 
 import arrow
 import bs4
+import collections
 import functools
 import itertools
 import logging
@@ -32,7 +33,6 @@ log = logging.getLogger(__name__)
 ###############################################################################
 
 class InsistentRequest(requests.Session):
-
     """Make an auto-retrying request that handles connection loss."""
 
     def __init__(self, max_attempts=10):
@@ -50,7 +50,10 @@ class InsistentRequest(requests.Session):
         for _ in range(self.max_attempts):
             try:
                 resp = super().request(method=method, url=url, **kwargs)
-            except (requests.ConnectionError, requests.Timeout):
+            except (
+                    requests.ConnectionError,
+                    requests.Timeout,
+                    requests.exceptions.ChunkedEncodingError):
                 continue
             if 200 <= resp.status_code < 300:
                 return resp
@@ -73,9 +76,7 @@ class InsistentRequest(requests.Session):
 
 
 class Page(pyscp.core.Page):
-    """
-    Create Page object.
-    """
+    """Create Page object."""
 
     ###########################################################################
     # Internal Methods
@@ -252,7 +253,6 @@ class Thread(pyscp.core.Thread):
 
 
 class Wiki(pyscp.core.Wiki):
-
     """
     Create a Wiki object.
 
@@ -329,21 +329,28 @@ class Wiki(pyscp.core.Wiki):
             'list/ListPagesModule',
             _key='offset',
             _update=lambda x: 250 * (x - 1),
-            category='*',
-            limit=kwargs.get('limit', None),
-            tags=kwargs.get('tag', None),
-            rating=kwargs.get('rating', None),
-            created_by=kwargs.get('author', None),
-            order=kwargs.get('order', 'title'),
-            module_body=kwargs.get('body', '%%title_linked%%'),
-            perPage=250)
+            perPage=250,
+            **kwargs)
 
-    def _urls(self, **kwargs):
-        pages = self._list_pages_raw(**kwargs)
-        soups = (bs4.BeautifulSoup(p['body'], 'lxml') for p in pages)
-        elems = (s.select('div.list-pages-item a') for s in soups)
-        elems = itertools.chain.from_iterable(elems)
-        yield from (self.site + e['href'] for e in elems)
+    def _list_pages_parsed(self, **kwargs):
+        """
+        Call ListPages module and parse the results.
+
+        Sets default arguments, parses ListPages body into a namedtuple.
+        Returns Page instances with a _body grafted in.
+        """
+        keys = set(kwargs.pop('body', '').split() + ['name'])
+        kwargs['module_body'] = '\n'.join(map('||{0}||%%{0}%%||'.format, keys))
+        lists = self._list_pages_raw(**kwargs)
+        soups = (bs4.BeautifulSoup(p['body'], 'lxml') for p in lists)
+        pages = (s.select('div.list-pages-item') for s in soups)
+        pages = itertools.chain.from_iterable(pages)
+        for page in pages:
+            data = {r('td')[0].text: r('td')[1].text for r in page('tr')}
+            page = self(data['name'])
+            _body = collections.namedtuple('_body', sorted(data.keys()))
+            page._body = _body(**data)
+            yield page
 
     ###########################################################################
     # Public Methods
