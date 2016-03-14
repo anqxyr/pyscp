@@ -45,7 +45,6 @@ log = logging.getLogger(__name__)
 
 
 class Page(metaclass=abc.ABCMeta):
-
     """
     Page Abstract Base Class.
 
@@ -72,23 +71,20 @@ class Page(metaclass=abc.ABCMeta):
     # Special Methods
     ###########################################################################
 
-    def __new__(cls, wiki, name):
+    def __new__(cls, wiki, url):
         """
         Create new instance of the class.
 
         The default implementation is overriden to turn the Page class
         into a multiton (https://en.wikipedia.org/wiki/Multiton_pattern).
         """
-        url = name if wiki.site in name else '{}/{}'.format(wiki.site, name)
         if url not in cls._instance_pool:
             cls._instance_pool[url] = page = super().__new__(cls)
             return page
         return cls._instance_pool[url]
 
-    def __init__(self, wiki, name):
-        url = name if wiki.site in name else '{}/{}'.format(wiki.site, name)
-        url = url.replace(' ', '-').replace('_', '-')
-        self.url = url.lower()
+    def __init__(self, wiki, url):
+        self.url = url
         self._wiki = wiki
 
     def __repr__(self):
@@ -280,7 +276,6 @@ class Page(metaclass=abc.ABCMeta):
 
 
 class Thread(metaclass=abc.ABCMeta):
-
     """
     Thread Abstract Base Class.
 
@@ -326,7 +321,9 @@ class Wiki(metaclass=abc.ABCMeta):
             netloc += '.wikidot.com'
         self.site = urllib.parse.urlunparse(['http', netloc, '', '', '', ''])
 
-    def __call__(self, url):
+    def __call__(self, name):
+        url = name if self.site in name else '{}/{}'.format(self.site, name)
+        url = url.replace(' ', '-').replace('_', '-').lower()
         return self.Page(self, url)
 
     ###########################################################################
