@@ -185,7 +185,7 @@ class Page(pyscp.core.Page):
     def edit(self, source, title=None, comment=None):
         """Overwrite the page with the new source and title."""
         if title is None:
-            title = self._title
+            title = self._raw_title
         self._flush('html', 'history', 'source')
         wiki_page = self.url.split('/')[-1]
         lock = self._module(
@@ -306,7 +306,7 @@ class Wiki(pyscp.core.Wiki):
     ###########################################################################
 
     @pyscp.utils.log_errors(log.warning)
-    def _module(self, name, **kwargs):
+    def _module(self, _name, **kwargs):
         """
         Call a Wikidot module.
 
@@ -318,7 +318,7 @@ class Wiki(pyscp.core.Wiki):
             self.site + '/ajax-module-connector.php',
             data=dict(
                 pageId=kwargs.get('page_id', None),  # fuck wikidot
-                moduleName=name,
+                moduleName=_name,
                 # token7 can be any 6-digit number, as long as it's the same
                 # in the payload and in the cookie
                 wikidot_token7='123456',
@@ -326,9 +326,9 @@ class Wiki(pyscp.core.Wiki):
             headers={'Content-Type': 'application/x-www-form-urlencoded;'},
             cookies={'wikidot_token7': '123456'}).json()
 
-    def _pager(self, name, _key, _update=None, **kwargs):
+    def _pager(self, _name, _key, _update=None, **kwargs):
         """Iterate over multi-page module results."""
-        first_page = self._module(name, **kwargs)
+        first_page = self._module(_name, **kwargs)
         yield first_page
         counter = bs4.BeautifulSoup(
             first_page['body'], 'lxml').find(class_='pager-no')
@@ -336,7 +336,7 @@ class Wiki(pyscp.core.Wiki):
             return
         for idx in range(2, int(counter.text.split(' ')[-1]) + 1):
             kwargs.update({_key: idx if _update is None else _update(idx)})
-            yield self._module(name, **kwargs)
+            yield self._module(_name, **kwargs)
 
     def _list_pages_raw(self, **kwargs):
         """
@@ -362,13 +362,15 @@ class Wiki(pyscp.core.Wiki):
         Returns Page instances with a _body grafted in.
         """
         keys = set(kwargs.pop('body', '').split() + ['name'])
-        kwargs['module_body'] = '\n'.join(map('||{0}||%%{0}%%||'.format, keys))
+        kwargs['module_body'] = '\n'.join(
+            map('||{0}||%%{0}%% ||'.format, keys))
         lists = self._list_pages_raw(**kwargs)
         soups = (bs4.BeautifulSoup(p['body'], 'lxml') for p in lists)
         pages = (s.select('div.list-pages-item') for s in soups)
         pages = itertools.chain.from_iterable(pages)
         for page in pages:
-            data = {r('td')[0].text: r('td')[1].text for r in page('tr')}
+            data = {
+                r('td')[0].text: r('td')[1].text.strip() for r in page('tr')}
             page = self(data['name'])
             _body = collections.namedtuple('_body', sorted(data.keys()))
             page._body = _body(**data)

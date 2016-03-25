@@ -232,7 +232,9 @@ class Page(metaclass=abc.ABCMeta):
             if over.url == self.url and over.type == 'author':
                 return over.user if over.user != 'Unknown Author' else None
         author = self._raw_author
-        if any(map(author.startswith, ['Anonymous', '(accound deleted)'])):
+        if any(map(author.startswith, ['Anonymous (', '(accound deleted)'])):
+            return None
+        if author == 'Anonymous':
             return None
         return author
 

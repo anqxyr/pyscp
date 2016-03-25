@@ -191,13 +191,13 @@ def log_sql_debug():
 
 def default_logging(debug=False):
     term = logging.StreamHandler()
-    file = logging.FileHandler('pyscp.log', mode='w', delay=True)
+    file = logging.FileHandler('pyscp.log', mode='a', delay=True)
     if debug:
         term.setLevel(logging.DEBUG)
         file.setLevel(logging.DEBUG)
     else:
         term.setLevel(logging.INFO)
-        file.setLevel(logging.WARNING)
+        file.setLevel(logging.INFO)
     term.setFormatter(logging.Formatter('{message}', style='{'))
     file.setFormatter(
         logging.Formatter('{asctime} {levelname:8s} {message}', style='{'))
