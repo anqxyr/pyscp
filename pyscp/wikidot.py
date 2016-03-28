@@ -162,7 +162,7 @@ class Page(pyscp.core.Page):
     @property
     def tags(self):
         if hasattr(self, '_body') and hasattr(self._body, 'tags'):
-            return self._body.tags.split()
+            return set(self._body.tags.split())
         return self._pdata[3]
 
     @property
@@ -177,6 +177,13 @@ class Page(pyscp.core.Page):
             time = arrow.get(self._body.created_at, 'DD MMM YYYY hh:mm')
             return time.format('YYYY-MM-DD hh:mm:ss')
         return super().created
+
+    @property
+    def rating(self):
+        if hasattr(self, '_body') and hasattr(self._body, 'rating'):
+            return int(self._body.rating)
+        return super().rating
+
 
     ###########################################################################
     # Page-Modifying Methods
