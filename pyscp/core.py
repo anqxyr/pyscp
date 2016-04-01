@@ -226,17 +226,27 @@ class Page(metaclass=abc.ABCMeta):
         return self.history[0].time
 
     @property
+    def author_overrides(self):
+        return {o.user: o.type for o in self._wiki.list_overrides()
+                if o.url == self.url}
+
+    @property
+    def authors(self):
+        authors = list(self.author_overrides.keys())
+        if 'author' not in self.author_overrides.values():
+            authors.append(self._raw_author)
+        unknown = ['Unknown Author', '(account deleted)', 'Anonymous']
+        authors = [a for a in authors if a not in unknown]
+        authors = [a for a in authors if '(' not in a]
+        return authors
+
+    @property
     def author(self):
         """Original author of the page."""
-        for over in self._wiki.list_overrides():
-            if over.url == self.url and over.type == 'author':
-                return over.user if over.user != 'Unknown Author' else None
-        author = self._raw_author
-        if any(map(author.startswith, ['Anonymous (', '(accound deleted)'])):
-            return None
-        if author == 'Anonymous':
-            return None
-        return author
+        for a in self.authors:
+            if self.author_overrides[a] == 'author':
+                return a
+        return self.author[0] if self.authors else None
 
     @property
     def rewrite_author(self):
