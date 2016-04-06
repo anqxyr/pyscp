@@ -368,7 +368,7 @@ class Wiki(pyscp.core.Wiki):
         Sets default arguments, parses ListPages body into a namedtuple.
         Returns Page instances with a _body grafted in.
         """
-        keys = set(kwargs.pop('body', '').split() + ['name'])
+        keys = set(kwargs.pop('body', '').split() + ['fullname'])
         kwargs['module_body'] = '\n'.join(
             map('||{0}||%%{0}%% ||'.format, keys))
         lists = self._list_pages_raw(**kwargs)
@@ -378,7 +378,7 @@ class Wiki(pyscp.core.Wiki):
         for page in pages:
             data = {
                 r('td')[0].text: r('td')[1].text.strip() for r in page('tr')}
-            page = self(data['name'])
+            page = self(data['fullname'])
             _body = collections.namedtuple('_body', sorted(data.keys()))
             page._body = _body(**data)
             yield page
@@ -468,7 +468,7 @@ class Wiki(pyscp.core.Wiki):
             if ':override:' in row[1].text:
                 type_ = 'author'
             else:
-                type_ = 'rewrite_author'
+                type_ = 'rewrite'
             yield pyscp.core.Override(url, user, type_)
 
     @functools.lru_cache(maxsize=1)

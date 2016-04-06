@@ -237,23 +237,18 @@ class Page(metaclass=abc.ABCMeta):
         authors = {
             o.user: o.type for o in self._wiki.list_overrides()
             if o.url == self.url}
-        if 'original_author' not in authors.values():
-            authors[self._raw_author] = 'original_author'
-        # only Unknown Author should be replaced with None
-        # Anonymous or deleted accounts should be replaced with Unknown Author
-        # via the override page
-        if 'Unknown Author' in authors:
-            authors[None] = authors.pop('Unknown Author')
+        if 'author' not in authors.values():
+            authors[self._raw_author] = 'author'
         return authors
 
     @property
     def author(self):
         """Original author of the page."""
-        original, rewrite = None, None
+        original, rewrite = '', ''
         for k, v in self.authors.items():
-            if v == 'original_author':
+            if v == 'author':
                 original = k
-            if v == 'rewrite_author':
+            if v == 'rewrite':
                 rewrite = k
         return rewrite if rewrite else original
 
