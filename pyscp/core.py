@@ -212,13 +212,11 @@ class Page(metaclass=abc.ABCMeta):
 
         In case of SCP articles, will include the title from the 'series' page.
         """
-        if 'scp' in self.tags and re.search('[scp]+-[0-9]+$', self.url):
-            try:
-                return '{}: {}'.format(
-                    self._raw_title, self._wiki.titles()[self.url])
-            except KeyError:
-                pass
-        return self._raw_title
+        try:
+            return '{}: {}'.format(
+                self._raw_title, self._wiki.titles()[self.url])
+        except KeyError:
+            return self._raw_title
 
     @property
     def created(self):
@@ -351,13 +349,18 @@ class Wiki(metaclass=abc.ABCMeta):
     @functools.lru_cache(maxsize=1)
     def titles(self):
         """Dict of url/title pairs for scp articles."""
-        pages = map(self, ('scp-series', 'scp-series-2', 'scp-series-3'))
+        pages = map(self, (
+            'scp-series', 'scp-series-2', 'scp-series-3',
+            'joke-scps', 'scp-ex', 'archived-scps'))
         elems = [p._soup.select('ul > li') for p in pages]
-        elems = itertools.chain(*elems)
+        elems = list(itertools.chain(*elems))
+        elems += list(self('scp-001')._soup(class_='series')[1]('p'))
         titles = {}
         splash = set(self.list_pages(tag='splash'))
         for elem in elems:
-            if not re.search('[SCP]+-[0-9]+', elem.text):
+            if not (
+                    re.search('[SCP]+-[0-9]+', elem.text) or
+                    'CODE NAME' in elem.text):
                 continue
             url = self.site + elem.a['href']
             try:
@@ -366,7 +369,7 @@ class Wiki(metaclass=abc.ABCMeta):
                 skip, title = elem.text.split(', ', maxsplit=1)
             if url in splash:
                 url = '{}/{}'.format(self.site, skip.lower())
-            titles[url] = title
+            titles[url] = title 
         return titles
 
     def list_pages(self, **kwargs):
