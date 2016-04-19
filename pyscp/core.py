@@ -29,7 +29,6 @@ import itertools
 import logging
 import re
 import urllib.parse
-import weakref
 
 import pyscp.utils
 
@@ -62,26 +61,8 @@ class Page(metaclass=abc.ABCMeta):
     """
 
     ###########################################################################
-    # Class Variables
-    ###########################################################################
-
-    _instance_pool = weakref.WeakValueDictionary()
-
-    ###########################################################################
     # Special Methods
     ###########################################################################
-
-    def __new__(cls, wiki, url):
-        """
-        Create new instance of the class.
-
-        The default implementation is overriden to turn the Page class
-        into a multiton (https://en.wikipedia.org/wiki/Multiton_pattern).
-        """
-        if url not in cls._instance_pool:
-            cls._instance_pool[url] = page = super().__new__(cls)
-            return page
-        return cls._instance_pool[url]
 
     def __init__(self, wiki, url):
         self.url = url
@@ -236,7 +217,7 @@ class Page(metaclass=abc.ABCMeta):
             o.user: (o.type, o.date) for o in self._wiki.metadata()
             if o.url == self.url}
         if 'author' not in {v[0] for v in data.values()}:
-            data[self._raw_author] = 'author'
+            data[self._raw_author] = ('author', '')
         return data
 
     @property
@@ -353,7 +334,7 @@ class Wiki(metaclass=abc.ABCMeta):
         for row in soup('tr')[1:]:
             name, user, type_, date = [i.text.strip() for i in row('td')]
             url = '{}/{}'.format(self.site, name)
-            results.append(pyscp.core.Attribution(url, user, type_, date))
+            results.append(pyscp.core.Metadata(url, user, type_, date))
         return results
 
     @functools.lru_cache(maxsize=1)
