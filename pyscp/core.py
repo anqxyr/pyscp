@@ -224,31 +224,20 @@ class Page(metaclass=abc.ABCMeta):
         return self.history[0].time
 
     @property
-    def authors(self):
+    def metadata(self):
         """
-        Return a dict of authors.
+        Return page metadata.
 
         Authors in this case includes all users related to the creation
         and subsequent maintenance of the page. The values of the dict
         describe the user's relationship to the page.
         """
-        authors = {
-            o.user: o.type for o in self._wiki.list_overrides()
+        data = {
+            o.user: (o.type, o.date) for o in self._wiki.metadata()
             if o.url == self.url}
-        if 'author' not in authors.values():
-            authors[self._raw_author] = 'author'
-        return authors
-
-    @property
-    def author(self):
-        """Original author of the page."""
-        original, rewrite = '', ''
-        for k, v in self.authors.items():
-            if v == 'author':
-                original = k
-            if v == 'rewrite':
-                rewrite = k
-        return rewrite if rewrite else original
+        if 'author' not in {v[0] for v in data.values()}:
+            data[self._raw_author] = 'author'
+        return data
 
     @property
     def rewrite_author(self):
@@ -347,6 +336,27 @@ class Wiki(metaclass=abc.ABCMeta):
     ###########################################################################
 
     @functools.lru_cache(maxsize=1)
+    def metadata(self):
+        """
+        List page ownership metadata.
+
+        This method is exclusive to the scp-wiki, and is used to fine-tune
+        the page ownership information beyond what is possible with Wikidot.
+        This allows a single page to have an author different from the user
+        who created the zeroth revision of the page, or even have multiple
+        users attached to the page in various roles.
+        """
+        if 'scp-wiki' not in self.site:
+            return None
+        soup = self('attribution-metadata')._soup
+        results = []
+        for row in soup('tr')[1:]:
+            name, user, type_, date = [i.text.strip() for i in row('td')]
+            url = '{}/{}'.format(self.site, name)
+            results.append(pyscp.core.Attribution(url, user, type_, date))
+        return results
+
+    @functools.lru_cache(maxsize=1)
     def titles(self):
         """Dict of url/title pairs for scp articles."""
         pages = map(self, (
@@ -369,7 +379,7 @@ class Wiki(metaclass=abc.ABCMeta):
                 skip, title = elem.text.split(', ', maxsplit=1)
             if url in splash:
                 url = '{}/{}'.format(self.site, skip.lower())
-            titles[url] = title 
+            titles[url] = title
         return titles
 
     def list_pages(self, **kwargs):
@@ -409,7 +419,7 @@ nt = collections.namedtuple
 Revision = nt('Revision', 'id number user time comment')
 Vote = nt('Vote', 'user value')
 Post = nt('Post', 'id title content user time parent')
-Override = nt('Override', 'url user type')
+Metadata = nt('Metadata', 'url user type date')
 Category = nt('Category', 'id title description size')
 Image = nt('Image', 'url source status notes data')
 del nt

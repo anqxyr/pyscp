@@ -180,17 +180,6 @@ class Wiki(core.Wiki):
     ###########################################################################
 
     @functools.lru_cache(maxsize=1)
-    def list_overrides(self):
-        """Page authorship exceptions."""
-        if 'scp-wiki' not in self.site:
-            return []
-        query = (
-            orm.Override.select(orm.Override, orm.User.name, orm.OverrideType)
-            .join(orm.User).switch(orm.Override).join(orm.OverrideType))
-        return [core.Override(r._data['url'], r.user.name, r.type.name)
-                for r in query]
-
-    @functools.lru_cache(maxsize=1)
     def list_images(self):
         """Image metadata."""
         query = (

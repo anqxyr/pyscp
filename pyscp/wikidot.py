@@ -448,31 +448,6 @@ class Wiki(pyscp.core.Wiki):
 
     @functools.lru_cache(maxsize=1)
     @pyscp.utils.listify()
-    def list_overrides(self):
-        """
-        List page ownership overrides.
-
-        This method is exclusive to the scp-wiki, and is used to fine-tune
-        the page ownership information beyond what is possible with Wikidot.
-        This allows a single page to have an author different from the user
-        who created the zeroth revision of the page, or even have multiple
-        users attached to the page in various roles.
-        """
-        if 'scp-wiki' not in self.site:
-            return None
-        url = 'http://05command.wikidot.com/alexandra-rewrite'
-        soup = bs4.BeautifulSoup(self.req.get(url).text, 'lxml')
-        for row in [r('td') for r in soup('tr')[1:]]:
-            url = '{}/{}'.format(self.site, row[0].text)
-            user = row[1].text.split(':override:')[-1]
-            if ':override:' in row[1].text:
-                type_ = 'author'
-            else:
-                type_ = 'rewrite'
-            yield pyscp.core.Override(url, user, type_)
-
-    @functools.lru_cache(maxsize=1)
-    @pyscp.utils.listify()
     def list_images(self):
         if 'scp-wiki' not in self.site:
             return
