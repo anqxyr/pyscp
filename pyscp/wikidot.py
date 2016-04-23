@@ -78,6 +78,10 @@ class InsistentRequest(requests.Session):
 class Page(pyscp.core.Page):
     """Create Page object."""
 
+    def __init__(self, wiki, url):
+        super().__init__(wiki, url)
+        self._body = {}
+
     ###########################################################################
     # Internal Methods
     ###########################################################################
@@ -115,14 +119,14 @@ class Page(pyscp.core.Page):
 
     @property
     def _raw_title(self):
-        if hasattr(self, '_body') and hasattr(self._body, 'title'):
-            return self._body.title
+        if 'title' in self._body:
+            return self._body['title']
         return super()._raw_title
 
     @property
     def _raw_author(self):
-        if hasattr(self, '_body') and hasattr(self._body, 'created_by'):
-            return self._body.created_by
+        if 'created_by' in self._body:
+            return self._body['created_by']
         return super()._raw_author
 
 
@@ -161,8 +165,8 @@ class Page(pyscp.core.Page):
 
     @property
     def tags(self):
-        if hasattr(self, '_body') and hasattr(self._body, 'tags'):
-            return set(self._body.tags.split())
+        if 'tags' in self._body:
+            return set(self._body['tags'].split())
         return self._pdata[3]
 
     @property
@@ -173,15 +177,15 @@ class Page(pyscp.core.Page):
 
     @property
     def created(self):
-        if hasattr(self, '_body') and hasattr(self._body, 'created_at'):
-            time = arrow.get(self._body.created_at, 'DD MMM YYYY hh:mm')
+        if 'created_at' in self._body:
+            time = arrow.get(self._body['created_at'], 'DD MMM YYYY hh:mm')
             return time.format('YYYY-MM-DD hh:mm:ss')
         return super().created
 
     @property
     def rating(self):
-        if hasattr(self, '_body') and hasattr(self._body, 'rating'):
-            return int(self._body.rating)
+        if 'rating' in self._body:
+            return int(self._body['rating'])
         return super().rating
 
 
@@ -379,8 +383,7 @@ class Wiki(pyscp.core.Wiki):
             data = {
                 r('td')[0].text: r('td')[1].text.strip() for r in page('tr')}
             page = self(data['fullname'])
-            _body = collections.namedtuple('_body', sorted(data.keys()))
-            page._body = _body(**data)
+            page._body = data
             yield page
 
     ###########################################################################
