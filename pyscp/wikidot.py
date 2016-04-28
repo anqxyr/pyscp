@@ -13,7 +13,6 @@ and communication with the Wikidot-hosted sites.
 
 import arrow
 import bs4
-import collections
 import functools
 import itertools
 import logging
@@ -177,8 +176,8 @@ class Page(pyscp.core.Page):
     @property
     def created(self):
         if 'created_at' in self._body:
-            time = arrow.get(self._body['created_at'], 'DD MMM YYYY hh:mm')
-            return time.format('YYYY-MM-DD hh:mm:ss')
+            time = arrow.get(self._body['created_at'], 'DD MMM YYYY HH:mm')
+            return time.format('YYYY-MM-DD HH:mm:ss')
         return super().created
 
     @property
