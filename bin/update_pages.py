@@ -30,15 +30,13 @@ class Updater:
         self.pages = pages
 
     def get_author(self, page):
-        author = self.format_author(page.author)
-        if page.rewrite_author:
-            if author != '-':
-                author += ' (original author) _\n'
-            author += '{} (rewrite author)'.format(
-                self.format_author(page.rewrite_author))
-        if 'co-authored' in page.tags:
-            author = '{} (co-author)'.format(author)
-        return author
+        if len(page.metadata) == 1:
+            return self.format_author(list(page.metadata.keys())[0])
+        result = []
+        for a in sorted(page.metadata):
+            result.append('{} ({})'.format(
+                self.format_author(a), page.metadata[a][0]))
+        return ' _\n'.join(result)
 
     def format_author(self, author):
         if not author:
@@ -87,8 +85,8 @@ class TaleUpdater(Updater):
 
     def format_page(self, page=None):
         return '||[[[{}|]]]||{}||//{}//||\n||||||{}||'.format(
-            page._body.name, self.get_author(page),
-            page.created[:10], page._body.preview)
+            page._body['fullname'], self.get_author(page),
+            page.created[:10], page._body['preview'])
 
     def update(self, target):
         targets = [
@@ -102,11 +100,11 @@ class TalesByTitle(TaleUpdater):
         return list(string.ascii_uppercase) + ['misc']
 
     def keyfunc(self, page):
-        l = page._body.title[0]
+        l = page._body['title'][0]
         return l.upper() if l.isalpha() else 'misc'
 
     def sortfunc(self, page):
-        return page._body.title
+        return page._body['title'].lower()
 
 
 class TalesByAuthor(TaleUpdater):
@@ -115,13 +113,13 @@ class TalesByAuthor(TaleUpdater):
         return sorted(list(string.ascii_uppercase) + ['Dr', 'misc'])
 
     def keyfunc(self, page):
-        if not page.author:
-            return 'misc'
-        l = page.author[0]
+        author = sorted(page.metadata.keys())[0]
+        l = author[0]
         return l.upper() if l.isalpha() else 'misc'
 
     def sortfunc(self, page):
-        return page.author if page.author else ''
+        author = sorted(page.metadata.keys())[0]
+        return author.lower()
 
 
 class TalesByDate(TaleUpdater):
@@ -159,7 +157,8 @@ class CreditUpdater(Updater):
 
     def format_page(self, page):
         return '||[[[{}|{}]]]||{}||'.format(
-            page._body.name, page.title.replace('[', '').replace(']', ''),
+            page._body['fullname'],
+            page.title.replace('[', '').replace(']', ''),
             self.get_author(page))
 
     def update(self, target):
@@ -177,14 +176,14 @@ class SeriesCredits(CreditUpdater):
                 for i in range(self.series, self.series + 999, 100)]
 
     def keyfunc(self, page):
-        num = re.search('[scp]+-([0-9]+)$', page._body.name)
+        num = re.search('[scp]+-([0-9]+)$', page._body['fullname'])
         if not num:
             return
         num = (int(num.group(1)) // 100) * 100
         return '{:03}-{:03}'.format(num or 2, num + 99)
 
     def sortfunc(self, page):
-        return page._body.title
+        return page._body['title']
 
 
 def update_credit_hubs(wiki):
@@ -201,10 +200,10 @@ def update_credit_hubs(wiki):
 ###############################################################################
 
 wiki = pyscp.wikidot.Wiki('scp-wiki')
-#with open('pyscp_bot.pass') as file:
-#    wiki.auth('pyscp_bot', file.read())
+with open('pyscp_bot.pass') as file:
+    wiki.auth('jarvis-bot', file.read())
 
 pyscp.utils.default_logging()
-update_credit_hubs(wiki)
+#update_credit_hubs(wiki)
 
-#update_tale_hubs(wiki)
+update_tale_hubs(wiki)

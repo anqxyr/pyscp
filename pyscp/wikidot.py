@@ -129,7 +129,6 @@ class Page(pyscp.core.Page):
             return self._body['created_by']
         return super()._raw_author
 
-
     ###########################################################################
     # Properties
     ###########################################################################
@@ -187,7 +186,6 @@ class Page(pyscp.core.Page):
         if 'rating' in self._body:
             return int(self._body['rating'])
         return super().rating
-
 
     ###########################################################################
     # Page-Modifying Methods
@@ -375,6 +373,7 @@ class Wiki(pyscp.core.Wiki):
         keys = set(kwargs.pop('body', '').split() + ['fullname'])
         kwargs['module_body'] = '\n'.join(
             map('||{0}||%%{0}%% ||'.format, keys))
+        kwargs['created_by'] = kwargs.pop('author', None)
         lists = self._list_pages_raw(**kwargs)
         soups = (bs4.BeautifulSoup(p['body'], 'lxml') for p in lists)
         pages = (s.select('div.list-pages-item') for s in soups)

@@ -364,24 +364,22 @@ class Wiki(metaclass=abc.ABCMeta):
         return titles
 
     def list_pages(self, **kwargs):
-        """
-        Return pages matching the specified criteria.
-        """
+        """Return pages matching the specified criteria."""
         pages = self._list_pages_parsed(**kwargs)
         author = kwargs.pop('author', None)
         if not author:
             # if 'author' isn't specified, there's no need to check rewrites
             return pages
         include, exclude = set(), set()
-        for over in self.list_overrides():
-            if over.user == author:
+        for meta in self.metadata():
+            if meta.user == author:
                 # if username matches, include regardless of type
-                include.add(over.url)
-            elif over.type == 'author':
+                include.add(meta.url)
+            elif meta.type == 'author':
                 # exclude only if override type is author.
                 # if url has author and rewrite author,
                 # it will appear in list_pages for both.
-                exclude.add(over.url)
+                exclude.add(meta.url)
         urls = {p.url for p in pages} | include - exclude
         # if no other options beside author were specified,
         # just return everything we can

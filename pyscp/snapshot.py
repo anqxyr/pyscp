@@ -234,7 +234,8 @@ class SnapshotCreator:
         orm.create_tables(
             'Page', 'Revision', 'Vote', 'ForumPost',
             'PageTag', 'ForumThread', 'User', 'Tag')
-        count = next(self.wiki.list_pages(body='total', limit=1))._body.total
+        count = next(
+            self.wiki.list_pages(body='total', limit=1))._body['total']
         bar = utils.ProgressBar('SAVING PAGES'.ljust(20), int(count))
         bar.start()
         for _ in self.pool.map(self._save_page, self.wiki.list_pages()):
