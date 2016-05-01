@@ -221,13 +221,6 @@ class Page(metaclass=abc.ABCMeta):
         return data
 
     @property
-    def rewrite_author(self):
-        """Author of the current rewrite."""
-        for over in self._wiki.list_overrides():
-            if over.url == self.url and over.type == 'rewrite_author':
-                return over.user
-
-    @property
     def rating(self):
         """Rating of the page, excluding deleted accounts."""
         return sum(
