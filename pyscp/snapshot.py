@@ -292,7 +292,7 @@ class SnapshotCreator:
 
     def _save_meta(self):
         orm.create_tables(
-            'Image', 'ImageStatus', 'Override', 'OverrideType')
+            'Image', 'ImageStatus')
         licenses = {
             'PERMISSION GRANTED', 'BY-NC-SA CC', 'BY-SA CC', 'PUBLIC DOMAIN'}
         images = [i for i in self.wiki.list_images() if i.status in licenses]
@@ -305,10 +305,6 @@ class SnapshotCreator:
             [i._asdict() for i in images], key='status')
         orm.Image.insert_many(
             dict(i, data=d) for i, d in zip(images, data) if d)
-        overs = orm.User.convert_to_id(
-            i._asdict() for i in self.wiki.list_overrides())
-        overs = orm.OverrideType.convert_to_id(overs, key='type')
-        orm.Override.insert_many(overs)
 
     @utils.ignore(requests.RequestException)
     def _save_image(self, image):

@@ -321,7 +321,7 @@ class Wiki(metaclass=abc.ABCMeta):
         users attached to the page in various roles.
         """
         if 'scp-wiki' not in self.site:
-            return None
+            return []
         soup = self('attribution-metadata')._soup
         results = []
         for row in soup('tr')[1:]:
@@ -333,6 +333,8 @@ class Wiki(metaclass=abc.ABCMeta):
     @functools.lru_cache(maxsize=1)
     def titles(self):
         """Dict of url/title pairs for scp articles."""
+        if 'scp-wiki' not in self.site:
+            return {}
         pages = map(self, (
             'scp-series', 'scp-series-2', 'scp-series-3',
             'joke-scps', 'scp-ex', 'archived-scps'))
