@@ -22,6 +22,19 @@ log = logging.getLogger('pyscp')
 
 ###############################################################################
 
+TEMPLATE = """
+[[# {name}]]
+[[div class="section"]]
++++ {disp}
+[#top ⇑]
+{header}
+{body}
+[[/div]]
+
+"""
+
+###############################################################################
+
 
 class Updater:
 
@@ -29,49 +42,46 @@ class Updater:
         self.wiki = wiki
         self.pages = pages
 
+    def disp(self):
+        return self.keys()
+
     def get_author(self, page):
-        if len(page.metadata) == 1:
-            return self.format_author(list(page.metadata.keys())[0])
-        result = []
-        for a in sorted(page.metadata):
-            result.append('{} ({})'.format(
-                self.format_author(a), page.metadata[a][0]))
-        return ' _\n'.join(result)
+        authors = [(a, r) for a, (r, d) in page.metadata.items()]
+        authors = [('[[user {}]]'.format(a), r) for a, r in authors]
+        if len(authors) == 1:
+            return authors[0][0]
+        rels = ['author', 'rewrite', 'translator', 'maintainer']
+        authors = sorted(authors, key=lambda x: [rels.index(x[1]), x[0]])
+        return ' _\n'.join(['{} ({})'.format(au, rel) for au, rel in authors])
 
-    def format_author(self, author):
-        if not author:
-            return '-'
-        deleted = [
-            'Wilt', 'Doctor Whiteface', 'Epic Phail Spy',
-            'Amuness Creeps', 'Amuness Creeeps']
-        if author in deleted:
-            return author
-        return '[[user {}]]'.format(author)
+    def get_section(self, idx):
+        name = self.keys()[idx]
+        disp = self.disp()[idx]
+        pages = [p for p in self.pages if self.keyfunc(p) == name]
 
-    def get_section(self, name, pages, disp=None):
-        if not disp:
-            disp = name
-        template = '\n'.join([
-            '[[# {}]]', '[[div class="section"]]', '+++ {}', '[#top ⇑]',
-            '{}', '{}', '[[/div]]', ''])
         if pages:
             body = '\n'.join(map(
                 self.format_page, sorted(pages, key=self.sortfunc)))
         else:
             body = self.NODATA
-        return template.format(name, disp, self.HEADER, body)
+
+        return TEMPLATE.format(
+            name=name.replace(' ', '-'),
+            disp=disp,
+            header=self.HEADER,
+            body=body)
 
     def update(self, *targets):
         output = ['']
-        for key in self.keys():
-            section = self.get_section(
-                key, [p for p in self.pages if self.keyfunc(p) == key])
+        for idx in range(len(self.keys())):
+            section = self.get_section(idx)
             if len(output[-1]) + len(section) < 180000:
                 output[-1] += section
             else:
                 output.append(section)
         for idx, target in enumerate(targets):
             source = output[idx] if idx < len(output) else ''
+            #self.wiki(target).revert(0)
             self.wiki(target).edit(source, comment='automated update')
             log.info('{} {}'.format(target, len(source)))
 
@@ -113,9 +123,16 @@ class TalesByAuthor(TaleUpdater):
         return sorted(list(string.ascii_uppercase) + ['Dr', 'misc'])
 
     def keyfunc(self, page):
-        author = sorted(page.metadata.keys())[0]
-        l = author[0]
-        return l.upper() if l.isalpha() else 'misc'
+        authors = [(a, r) for a, (r, d) in page.metadata.items()]
+        rels = ['author', 'rewrite', 'translator', 'maintainer']
+        authors = sorted(authors, key=lambda x: [rels.index(x[1]), x[0]])
+        author = authors[0][0]
+        if re.match(r'Dr[^a-z]|Doctor|Doc[^a-z]', author):
+            return 'Dr'
+        elif author[0].isalpha():
+            return author[0].upper()
+        else:
+            return 'misc'
 
     def sortfunc(self, page):
         author = sorted(page.metadata.keys())[0]
@@ -124,9 +141,9 @@ class TalesByAuthor(TaleUpdater):
 
 class TalesByDate(TaleUpdater):
 
-    def get_section(self, name, pages):
-        return super().get_section(
-            name, pages, arrow.get(name, 'YYYY-MM').format('MMM YYYY'))
+    def disp(self):
+        return [
+            arrow.get(i, 'YYYY-MM').format('MMMM YYYY') for i in self.keys()]
 
     def keys(self):
         return [i.format('YYYY-MM') for i in
@@ -161,6 +178,15 @@ class CreditUpdater(Updater):
             page.title.replace('[', '').replace(']', ''),
             self.get_author(page))
 
+    def sortfunc(self, page):
+        title = []
+        for word in re.split('([0-9]+)', page._body['title']):
+            if word.isdigit():
+                title.append(int(word))
+            else:
+                title.append(word.lower())
+        return title
+
     def update(self, target):
         super().update('component:credits-' + target)
 
@@ -182,8 +208,27 @@ class SeriesCredits(CreditUpdater):
         num = (int(num.group(1)) // 100) * 100
         return '{:03}-{:03}'.format(num or 2, num + 99)
 
-    def sortfunc(self, page):
-        return page._body['title']
+
+class MiscCredits(CreditUpdater):
+
+    def __init__(self, wiki, pages):
+        self.proposals = pyscp.wikidot.Wiki('scp-wiki')('scp-001').links
+        super().__init__(wiki, pages)
+
+    def keys(self):
+        return 'proposals explained joke archived'.split()
+
+    def disp(self):
+        return [
+            '001 Proposals', 'Explained Phenomena',
+            'Joke Articles', 'Archived Articles']
+
+    def keyfunc(self, page):
+        if page.url in self.proposals:
+            return 'proposals'
+        for tag in ('explained', 'joke', 'archived'):
+            if tag in page.tags:
+                return tag
 
 
 def update_credit_hubs(wiki):
@@ -191,11 +236,12 @@ def update_credit_hubs(wiki):
         tag='scp', body='title created_by tags'))
     wiki = pyscp.wikidot.Wiki('scpsandbox2')
     with open('pyscp_bot.pass') as file:
-        wiki.auth('pyscp_bot', file.read())
+        wiki.auth('jarvis-bot', file.read())
 
     SeriesCredits(wiki, pages, 1).update('series1')
     SeriesCredits(wiki, pages, 2).update('series2')
     SeriesCredits(wiki, pages, 3).update('series3')
+    MiscCredits(wiki, pages).update('misc')
 
 ###############################################################################
 
