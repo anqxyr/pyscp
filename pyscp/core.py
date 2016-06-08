@@ -349,10 +349,12 @@ class Wiki(metaclass=abc.ABCMeta):
                     'CODE NAME' in elem.text):
                 continue
             url = self.site + elem.a['href']
-            try:
+            if ' - ' in elem.text:
                 skip, title = elem.text.split(' - ', maxsplit=1)
-            except ValueError:
+            elif ', ' in elem.text:
                 skip, title = elem.text.split(', ', maxsplit=1)
+            else:
+                continue
             if url in splash:
                 url = '{}/{}'.format(self.site, skip.lower())
             titles[url] = title
