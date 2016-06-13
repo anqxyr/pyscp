@@ -326,6 +326,7 @@ class Wiki(metaclass=abc.ABCMeta):
         results = []
         for row in soup('tr')[1:]:
             name, user, type_, date = [i.text.strip() for i in row('td')]
+            name = name.lower()
             url = '{}/{}'.format(self.site, name)
             results.append(pyscp.core.Metadata(url, user, type_, date))
         return results
