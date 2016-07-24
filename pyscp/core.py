@@ -22,6 +22,7 @@ three core classes, such as Revision or Vote.
 ###############################################################################
 
 import abc
+import arrow
 import bs4
 import collections
 import functools
@@ -213,11 +214,11 @@ class Page(metaclass=abc.ABCMeta):
         and subsequent maintenance of the page. The values of the dict
         describe the user's relationship to the page.
         """
-        data = {
-            o.user: (o.type, o.date) for o in self._wiki.metadata()
-            if o.url == self.url}
-        if 'author' not in {v[0] for v in data.values()}:
-            data[self._raw_author] = ('author', '')
+        data = [i for i in self._wiki.metadata() if i.url == self.url]
+        data = {i.user: i for i in data}
+        if 'author' not in {i.role for i in data.values()}:
+            meta = Metadata(self.url, self._raw_author, 'author', None)
+            data[self._raw_author] = meta
         return data
 
     @property
@@ -254,6 +255,58 @@ class Page(metaclass=abc.ABCMeta):
         breadcrumb = self._soup.select('#breadcrumbs a')
         if breadcrumb:
             return self._wiki.site + breadcrumb[-1]['href']
+
+    ###########################################################################
+    # Methods
+    ###########################################################################
+
+    def build_attribution_string(
+            self, templates=None, group_templates=None, separator=', ',
+            user=None):
+        """
+        Create an attribution string based on the page's metadata.
+
+        This is a commonly needed operation. The result should be a nicely
+        formatted, human-readable description of who was and is involved with
+        the page, and in what role.
+        """
+        roles = 'author rewrite translator maintainer'.split()
+
+        if not templates:
+            templates = {i: '{{user}} ({})'.format(i) for i in roles}
+
+        items = list(self.metadata.values())
+        items.sort(key=lambda x: [roles.index(x.role), x.date])
+
+        # group users in the same role on the same date together
+        itemdict = collections.OrderedDict()
+        for i in items:
+            user = user.format(i.user) if user else i.user
+            key = (i.role, i.date)
+            itemdict[key] = itemdict.get(key, []) + [user]
+
+        output = []
+
+        for (role, date), users in itemdict.items():
+
+            if role == 'author' and not date:
+                date = self.created
+            hdate = arrow.get(date).humanize() if date else ''
+
+            if group_templates and len(users) > 1:
+                output.append(
+                    group_templates[role].format(
+                        date=date,
+                        hdate=hdate,
+                        users=', '.join(users[:-1]),
+                        last_user=users[-1]))
+            else:
+                for user in users:
+                    output.append(
+                        templates[role].format(
+                            date=date, hdate=hdate, user=user))
+
+        return separator.join(output)
 
 
 class Thread(metaclass=abc.ABCMeta):
@@ -396,7 +449,7 @@ nt = collections.namedtuple
 Revision = nt('Revision', 'id number user time comment')
 Vote = nt('Vote', 'user value')
 Post = nt('Post', 'id title content user time parent')
-Metadata = nt('Metadata', 'url user type date')
+Metadata = nt('Metadata', 'url user role date')
 Category = nt('Category', 'id title description size')
 Image = nt('Image', 'url source status notes data')
 del nt

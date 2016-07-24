@@ -11,6 +11,7 @@ This script is used to update scp-wiki tale hubs and other such pages.
 ###############################################################################
 
 import arrow
+import collections
 import logging
 import pyscp
 import re
@@ -46,13 +47,8 @@ class Updater:
         return self.keys()
 
     def get_author(self, page):
-        authors = [(a, r) for a, (r, d) in page.metadata.items()]
-        authors = [('[[user {}]]'.format(a), r) for a, r in authors]
-        if len(authors) == 1:
-            return authors[0][0]
-        rels = ['author', 'rewrite', 'translator', 'maintainer']
-        authors = sorted(authors, key=lambda x: [rels.index(x[1]), x[0]])
-        return ' _\n'.join(['{} ({})'.format(au, rel) for au, rel in authors])
+        return page.build_attribution_string(
+            user='[[user {}]]', separator=' _\n')
 
     def get_section(self, idx):
         name = self.keys()[idx]
@@ -81,7 +77,7 @@ class Updater:
                 output.append(section)
         for idx, target in enumerate(targets):
             source = output[idx] if idx < len(output) else ''
-            #self.wiki(target).revert(0)
+            self.wiki(target).revert(0)
             self.wiki(target).edit(source, comment='automated update')
             log.info('{} {}'.format(target, len(source)))
 
@@ -123,10 +119,9 @@ class TalesByAuthor(TaleUpdater):
         return sorted(list(string.ascii_uppercase) + ['Dr', 'misc'])
 
     def keyfunc(self, page):
-        authors = [(a, r) for a, (r, d) in page.metadata.items()]
-        rels = ['author', 'rewrite', 'translator', 'maintainer']
-        authors = sorted(authors, key=lambda x: [rels.index(x[1]), x[0]])
-        author = authors[0][0]
+        templates = collections.defaultdict(lambda: '{user}')
+        authors = page.build_attribution_string(templates).split(', ')
+        author = authors[0]
         if re.match(r'Dr[^a-z]|Doctor|Doc[^a-z]', author):
             return 'Dr'
         elif author[0].isalpha():
