@@ -411,7 +411,8 @@ class Wiki(metaclass=abc.ABCMeta):
                 continue
             if url in splash:
                 url = '{}/{}'.format(self.site, skip.lower())
-            titles[url] = title
+            if title != '[ACCESS DENIED]':
+                titles[url] = title
         return titles
 
     def list_pages(self, **kwargs):
