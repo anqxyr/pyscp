@@ -256,6 +256,19 @@ class Page(metaclass=abc.ABCMeta):
         if breadcrumb:
             return self._wiki.site + breadcrumb[-1]['href']
 
+    @property
+    def is_mainlist(self):
+        """
+        Indicate whether the page is a mainlist scp article.
+
+        This is an scp-wiki exclusive property.
+        """
+        if 'scp-wiki' not in self._wiki.site:
+            return False
+        if 'scp' not in self.tags:
+            return False
+        return bool(re.search(r'/scp-[0-9]{3,4}$', self.url))
+
     ###########################################################################
     # Methods
     ###########################################################################
