@@ -188,6 +188,10 @@ class Page(metaclass=abc.ABCMeta):
         return [i['src'] for i in self._soup('img')]
 
     @property
+    def name(self):
+        return self.url.split('/')[-1]
+
+    @property
     def title(self):
         """
         Title of the page.
