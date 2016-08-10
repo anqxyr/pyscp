@@ -279,7 +279,7 @@ class Page(metaclass=abc.ABCMeta):
 
     def build_attribution_string(
             self, templates=None, group_templates=None, separator=', ',
-            user=None):
+            user_formatter=None):
         """
         Create an attribution string based on the page's metadata.
 
@@ -298,7 +298,7 @@ class Page(metaclass=abc.ABCMeta):
         # group users in the same role on the same date together
         itemdict = collections.OrderedDict()
         for i in items:
-            user = user.format(i.user) if user else i.user
+            user = user_formatter.format(i.user) if user_formatter else i.user
             key = (i.role, i.date)
             itemdict[key] = itemdict.get(key, []) + [user]
 
