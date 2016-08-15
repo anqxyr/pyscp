@@ -220,9 +220,15 @@ class Page(metaclass=abc.ABCMeta):
         """
         data = [i for i in self._wiki.metadata() if i.url == self.url]
         data = {i.user: i for i in data}
+
         if 'author' not in {i.role for i in data.values()}:
             meta = Metadata(self.url, self._raw_author, 'author', None)
             data[self._raw_author] = meta
+
+        for k, v in data.items():
+            if v.role == 'author' and not v.date:
+                data[k] = v._replace(date=self.created[:10])
+
         return data
 
     @property
