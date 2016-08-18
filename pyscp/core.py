@@ -227,7 +227,7 @@ class Page(metaclass=abc.ABCMeta):
 
         for k, v in data.items():
             if v.role == 'author' and not v.date:
-                data[k] = v._replace(date=self.created[:10])
+                data[k] = v._replace(date=self.created)
 
         return data
 
@@ -312,8 +312,6 @@ class Page(metaclass=abc.ABCMeta):
 
         for (role, date), users in itemdict.items():
 
-            if role == 'author' and not date:
-                date = self.created
             hdate = arrow.get(date).humanize() if date else ''
 
             if group_templates and len(users) > 1:
