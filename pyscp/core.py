@@ -410,30 +410,29 @@ class Wiki(metaclass=abc.ABCMeta):
         """Dict of url/title pairs for scp articles."""
         if 'scp-wiki' not in self.site:
             return {}
+
         pages = map(self, (
             'scp-series', 'scp-series-2', 'scp-series-3',
             'joke-scps', 'scp-ex', 'archived-scps'))
+
         elems = [p._soup.select('ul > li') for p in pages]
         elems = list(itertools.chain(*elems))
         elems += list(self('scp-001')._soup(class_='series')[1]('p'))
+
         titles = {}
-        splash = set(self.list_pages(tag='splash'))
         for elem in elems:
-            if not (
-                    re.search('[SCP]+-[0-9]+', elem.text) or
-                    'CODE NAME' in elem.text):
+
+            sep = ' - ' if ' - ' in elem.text else ', '
+            try:
+                url1 = self.site + elem.a['href']
+                skip, title = elem.text.split(sep, maxsplit=1)
+            except (ValueError, TypeError):
                 continue
-            url = self.site + elem.a['href']
-            if ' - ' in elem.text:
-                skip, title = elem.text.split(' - ', maxsplit=1)
-            elif ', ' in elem.text:
-                skip, title = elem.text.split(', ', maxsplit=1)
-            else:
-                continue
-            if url in splash:
-                url = '{}/{}'.format(self.site, skip.lower())
+
             if title != '[ACCESS DENIED]':
-                titles[url] = title
+                url2 = self.site + '/' + skip.lower()
+                titles[url1] = titles[url2] = title
+
         return titles
 
     def list_pages(self, **kwargs):
