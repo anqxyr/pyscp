@@ -418,6 +418,14 @@ class Wiki(metaclass=abc.ABCMeta):
             'scp-series', 'scp-series-2', 'scp-series-3',
             'joke-scps', 'scp-ex', 'archived-scps'))
 
+        for p in pages:
+            try:
+                p._soup
+            except Exception as e:
+                log.exception(e)
+                log.info(p.url)
+                log.info(p._soup)
+
         elems = [p._soup.select('ul > li') for p in pages]
         elems = list(itertools.chain(*elems))
         elems += list(self('scp-001')._soup(class_='series')[1]('p'))
