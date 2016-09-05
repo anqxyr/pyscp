@@ -27,7 +27,7 @@ import bs4
 import collections
 import functools
 import itertools
-import logging
+import logbook
 import re
 import urllib.parse
 
@@ -37,7 +37,8 @@ import pyscp.utils
 # Global Constants And Variables
 ###############################################################################
 
-log = logging.getLogger(__name__)
+logbook.FileHandler('pyscp.log').push_application()
+log = logbook.Logger(__name__)
 
 ###############################################################################
 # Abstract Base Classes
@@ -406,6 +407,8 @@ class Wiki(metaclass=abc.ABCMeta):
         return results
 
     @functools.lru_cache(maxsize=1)
+    @pyscp.utils.ignore(value={})
+    @pyscp.utils.log_errors(logger=log.error)
     def titles(self):
         """Dict of url/title pairs for scp articles."""
         if 'scp-wiki' not in self.site:
