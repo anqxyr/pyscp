@@ -376,6 +376,7 @@ class Wiki(metaclass=abc.ABCMeta):
         if '.' not in netloc:
             netloc += '.wikidot.com'
         self.site = urllib.parse.urlunparse(['http', netloc, '', '', '', ''])
+        self._title_data = {}
 
     def __call__(self, name):
         url = name if self.site in name else '{}/{}'.format(self.site, name)
@@ -406,29 +407,33 @@ class Wiki(metaclass=abc.ABCMeta):
             results.append(pyscp.core.Metadata(url, user, type_, date))
         return results
 
-    @functools.lru_cache(maxsize=1)
+    def _update_titles(self):
+        for name in (
+                'scp-series', 'scp-series-2', 'scp-series-3',
+                'joke-scps', 'scp-ex', 'archived-scps'):
+            page = self(name)
+            try:
+                soup = page._soup
+            except:
+                continue
+            self._title_data[name] = soup
+
     @pyscp.utils.ignore(value={})
     @pyscp.utils.log_errors(logger=log.error)
+    @functools.lru_cache(maxsize=1)
     def titles(self):
         """Dict of url/title pairs for scp articles."""
         if 'scp-wiki' not in self.site:
             return {}
 
-        pages = map(self, (
-            'scp-series', 'scp-series-2', 'scp-series-3',
-            'joke-scps', 'scp-ex', 'archived-scps'))
+        self._update_titles()
 
-        for p in pages:
-            try:
-                p._soup
-            except Exception as e:
-                log.exception(e)
-                log.info(p.url)
-                log.info(p._soup)
-
-        elems = [p._soup.select('ul > li') for p in pages]
+        elems = [i.select('ul > li') for i in self._title_data.values()]
         elems = list(itertools.chain(*elems))
-        elems += list(self('scp-001')._soup(class_='series')[1]('p'))
+        try:
+            elems += list(self('scp-001')._soup(class_='series')[1]('p'))
+        except:
+            pass
 
         titles = {}
         for elem in elems:
