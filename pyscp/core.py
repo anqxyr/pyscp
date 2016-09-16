@@ -75,6 +75,11 @@ class Page(metaclass=abc.ABCMeta):
             self.__module__, self.__class__.__name__,
             repr(self.url), repr(self._wiki))
 
+    def __eq__(self, other):
+        if not hasattr(other, 'url') or not hasattr(other, '_wiki'):
+            return False
+        return self.url == other.url and self._wiki is other._wiki
+
     ###########################################################################
     # Abstract Methods
     ###########################################################################
@@ -463,7 +468,7 @@ class Wiki(metaclass=abc.ABCMeta):
             if meta.user == author:
                 # if username matches, include regardless of type
                 include.add(meta.url)
-            elif meta.type == 'author':
+            elif meta.role == 'author':
                 # exclude only if override type is author.
                 # if url has author and rewrite author,
                 # it will appear in list_pages for both.
