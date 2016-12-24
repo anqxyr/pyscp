@@ -25,5 +25,6 @@ setuptools.setup(
         'blessings',
         'lxml==3.3.3',
         'requests',
-        'peewee==2.8.0'],
+        'peewee==2.8.0',
+        'logbook'],
 )
