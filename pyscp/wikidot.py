@@ -272,7 +272,7 @@ class Thread(pyscp.core.Thread):
             yield pyscp.core.Post(post_id, title, content, user, time, parent)
 
     def new_post(self, source, title=None, parent_id=None):
-        self._wiki._module(
+        return self._wiki._module(
             'Empty',
             threadId=self._id,
             parentId=parent_id,
@@ -322,7 +322,7 @@ class Wiki(pyscp.core.Wiki):
         Almost all other methods of the class are using _module in one way
         or another.
         """
-        return self.req.post(
+        response = self.req.post(
             self.site + '/ajax-module-connector.php',
             data=dict(
                 pageId=kwargs.get('page_id', None),  # fuck wikidot
@@ -333,6 +333,9 @@ class Wiki(pyscp.core.Wiki):
                 **kwargs),
             headers={'Content-Type': 'application/x-www-form-urlencoded;'},
             cookies={'wikidot_token7': '123456'}).json()
+        if response['status'] != 'ok':
+            raise RuntimeError(response['message'])
+        return response
 
     def _pager(self, _name, _key, _update=None, **kwargs):
         """Iterate over multi-page module results."""
