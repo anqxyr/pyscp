@@ -230,6 +230,23 @@ class Page(pyscp.core.Page):
         self._flush('history', '_pdata')
         return res
 
+    def upload(self, name, data):
+        url = self._wiki.site + '/default--flow/files__UploadTarget'
+        kwargs = dict(
+            pageId=self._id,
+            page_id=self._id,
+            action='FileAction',
+            event='uploadFile',
+            MAX_FILE_SIZE=52428800)
+        response = self._wiki.req.post(
+            url,
+            data=kwargs,
+            files={'userfile': (name, data)},
+            cookies={'wikidot_token7': '123456'})
+        if response['status'] != 'ok':
+            raise RuntimeError(response['message'])
+        return response
+
     ###########################################################################
     # Voting Methods
     ###########################################################################
