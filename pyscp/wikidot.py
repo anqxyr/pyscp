@@ -243,8 +243,11 @@ class Page(pyscp.core.Page):
             data=kwargs,
             files={'userfile': (name, data)},
             cookies={'wikidot_token7': '123456'})
-        if response['status'] != 'ok':
-            raise RuntimeError(response['message'])
+        response = bs4.BeautifulSoup(response.text, 'lxml')
+        status = response.find(id='status').text
+        message = response.find(id='message').text
+        if status != 'ok':
+            raise RuntimeError(message)
         return response
 
     ###########################################################################
