@@ -27,9 +27,9 @@ import bs4
 import collections
 import functools
 import itertools
-import logbook
 import re
 import urllib.parse
+import logging
 
 import pyscp.utils
 
@@ -37,8 +37,7 @@ import pyscp.utils
 # Global Constants And Variables
 ###############################################################################
 
-logbook.FileHandler('pyscp.log').push_application()
-log = logbook.Logger(__name__)
+log = logging.getLogger(__name__)
 
 ###############################################################################
 # Abstract Base Classes
