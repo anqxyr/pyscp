@@ -423,9 +423,9 @@ class Wiki(metaclass=abc.ABCMeta):
                 continue
             self._title_data[name] = soup
 
+    @functools.lru_cache(maxsize=1)
     @pyscp.utils.ignore(value={})
     @pyscp.utils.log_errors(logger=log.error)
-    @functools.lru_cache(maxsize=1)
     def titles(self):
         """Dict of url/title pairs for scp articles."""
         if 'scp-wiki' not in self.site:
@@ -491,6 +491,7 @@ nt = collections.namedtuple
 Revision = nt('Revision', 'id number user time comment')
 Vote = nt('Vote', 'user value')
 Post = nt('Post', 'id title content user time parent')
+File = nt('File', 'url name filetype size')
 Metadata = nt('Metadata', 'url user role date')
 Category = nt('Category', 'id title description size')
 Image = nt('Image', 'url source status notes data')
