@@ -186,6 +186,23 @@ class Page(pyscp.core.Page):
             return int(self._body['rating'])
         return super().rating
 
+    @pyscp.utils.cached_property
+    def files(self):
+        """List all files attached to the page."""
+        data = self._module('files/PageFilesModule')['body']
+        soup = bs4.BeautifulSoup(data, 'lxml')
+        if not soup.select('table.page-files'):
+            return []
+        files = soup.select('table.page-files')[0]('tr')[1:]
+        parsed = []
+        for file in files:
+            url = self._wiki.site + file.find('a')['href']
+            name = file.find('a').text.strip()
+            filetype = file('td')[1].text.strip()
+            size = file('td')[2].text.strip()
+            parsed.append(pyscp.core.File(url, name, filetype, size))
+        return parsed
+
     ###########################################################################
     # Page-Modifying Methods
     ###########################################################################
