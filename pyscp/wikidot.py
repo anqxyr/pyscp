@@ -371,7 +371,8 @@ class Wiki(pyscp.core.Wiki):
             headers={'Content-Type': 'application/x-www-form-urlencoded;'},
             cookies={'wikidot_token7': '123456'}).json()
         if response['status'] != 'ok':
-            raise RuntimeError(response['message'])
+            log.error(response)
+            raise RuntimeError(response.get('message') or response['status'])
         return response
 
     def _pager(self, _name, _key, _update=None, **kwargs):
