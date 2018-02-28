@@ -43,7 +43,10 @@ class InsistentRequest(requests.Session):
             self.__class__.__name__, self.max_attempts)
 
     def request(self, method, url, **kwargs):
-        log.debug('%s: %s %s', method, url, repr(kwargs) if kwargs else '')
+        logged_kwargs = hide_pass(kwargs)
+        logged_kwargs = repr(logged_kwargs) if logged_kwargs else ''
+        log.debug('%s: %s %s', method, url, logged_kwargs)
+
         kwargs.setdefault('timeout', 60)
         kwargs.setdefault('allow_redirects', False)
         for _ in range(self.max_attempts):
@@ -69,6 +72,18 @@ class InsistentRequest(requests.Session):
 
     def post(self, url, **kwargs):
         return self.request('POST', url, **kwargs)
+
+
+def hide_pass(nested_dict):
+    result = {}
+    for k, v in nested_dict.items():
+        if k in ('pass', 'password', 'pasw'):
+            result[k] = '********'
+        elif isinstance(v, dict):
+            result[k] = hide_pass(v)
+        else:
+            result[k] = v
+    return result
 
 
 ###############################################################################

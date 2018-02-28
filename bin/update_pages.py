@@ -48,7 +48,7 @@ class Updater:
 
     def get_author(self, page):
         return page.build_attribution_string(
-            user='[[user {}]]', separator=' _\n')
+            user_formatter='[[user {}]]', separator=' _\n')
 
     def get_section(self, idx):
         name = self.keys()[idx]
@@ -96,7 +96,7 @@ class TaleUpdater(Updater):
 
     def update(self, target):
         targets = [
-            'component:tales-by-{}-{}'.format(target, i + 1) for i in range(4)]
+            'component:tales-by-{}-{}'.format(target, i + 1) for i in range(5)]
         super().update(*targets)
 
 
@@ -106,6 +106,8 @@ class TalesByTitle(TaleUpdater):
         return list(string.ascii_uppercase) + ['misc']
 
     def keyfunc(self, page):
+        if not page._body['title']:
+            return 'misc'
         l = page._body['title'][0]
         return l.upper() if l.isalpha() else 'misc'
 
@@ -241,7 +243,7 @@ def update_credit_hubs(wiki):
 ###############################################################################
 
 wiki = pyscp.wikidot.Wiki('scp-wiki')
-with open('pyscp_bot.pass') as file:
+with open('/media/hdd0/code/pyscp/bin/pyscp_bot.pass') as file:
     wiki.auth('jarvis-bot', file.read())
 
 pyscp.utils.default_logging()

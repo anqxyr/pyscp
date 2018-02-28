@@ -286,7 +286,7 @@ class SnapshotCreator:
         orm.ForumThread.create(
             category=c_id, id=thread._id,
             title=thread.title, description=thread.description)
-        posts = orm.User.convert_to_id(map(vars, thread.posts))
+        posts = orm.User.convert_to_id([i._asdict() for i in thread.posts])
         orm.ForumPost.insert_many(
             dict(p, thread=thread._id) for p in posts)
 
