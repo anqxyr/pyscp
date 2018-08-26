@@ -413,7 +413,7 @@ class Wiki(metaclass=abc.ABCMeta):
 
     def _update_titles(self):
         for name in (
-                'scp-series', 'scp-series-2', 'scp-series-3', 'scp-series-4',
+                'scp-series', 'scp-series-2', 'scp-series-3', 'scp-series-4', 'scp-series-5',
                 'joke-scps', 'scp-ex', 'archived-scps'):
             page = self(name)
             try:
