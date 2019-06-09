@@ -23,7 +23,7 @@ setuptools.setup(
         'arrow',
         'beautifulsoup4',
         'blessings',
-        'lxml==3.3.3',
+        'lxml',
         'requests',
-        'peewee==2.8.0'],
+        'peewee'],
 )
