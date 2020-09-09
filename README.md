@@ -1,6 +1,6 @@
 # pyscp
 
-**pyscp** is a python library for interacting with wikidot-hosted websites. The library is mainly intended for use by the administrative staff of the www.scp-wiki.net website, and has a host of feature exclusive to it. However, the majority of the core functionality should be applicalbe to any wikidot-based site.
+**pyscp** is a python library for interacting with wikidot-hosted websites. The library is mainly intended for use by the administrative staff of the www.scpwiki.com website, and has a host of feature exclusive to it. However, the majority of the core functionality should be applicalbe to any wikidot-based site.
 
 ## Installation
 
@@ -17,7 +17,7 @@ Done.
 ```python
 import pyscp
 
-wiki = pyscp.wikidot.Wiki('www.scp-wiki.net')
+wiki = pyscp.wikidot.Wiki('www.scpwiki.com')
 p = wiki('scp-837')
 print(
     '"{}" has a rating of {}, {} revisions, and {} comments.'
