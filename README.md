@@ -30,7 +30,7 @@ print(
 You can access other sites as well:
 
 ```python
-ru_wiki = pyscp.wikidot.Wiki('scpfoundation.ru')
+ru_wiki = pyscp.wikidot.Wiki('scpfoundation.net')
 p = ru_wiki('scp-837')
 print('"{}" was created by {} on {}.'.format(p.title, p.author, p.created))
 ```
