@@ -4,9 +4,9 @@
 
 ## Installation
 
-Download the latest code, open the containing folder, and run the following command:
+Open console and run the following command:
 ```
-pip install . --user
+pip install pyscp
 ```
 Done.
 
@@ -44,7 +44,7 @@ If the site doesn't use a custom domain, you can use the name of the site instea
 
 ```python
 
-wiki = pyscp.wikidot.Wiki('scpsandbox2')
+wiki = pyscp.wikidot.Wiki('scp-sandbox-3')
 wiki.auth('example_username', 'example_password')
 p = wiki('test')
 last_revision = p.history[-1].number
