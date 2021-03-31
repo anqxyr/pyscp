@@ -17,7 +17,7 @@ Done.
 ```python
 import pyscp
 
-wiki = pyscp.wikidot.Wiki('www.scp-wiki.net')
+wiki = pyscp.wikidot.Wiki('www.scpwiki.com')
 p = wiki('scp-837')
 print(
     '"{}" has a rating of {}, {} revisions, and {} comments.'
@@ -30,7 +30,7 @@ print(
 You can access other sites as well:
 
 ```python
-ru_wiki = pyscp.wikidot.Wiki('scpfoundation.ru')
+ru_wiki = pyscp.wikidot.Wiki('scpfoundation.net')
 p = ru_wiki('scp-837')
 print('"{}" was created by {} on {}.'.format(p.title, p.author, p.created))
 ```
@@ -68,7 +68,7 @@ When working with large number of pages, it could be faster to create a snapshot
 ```python
 import pyscp
 
-creator = pyscp.snapshot.SnapshotCreator('www.scp-wiki.net', 'snapshot_file.db')
+creator = pyscp.snapshot.SnapshotCreator('www.scpwiki.com', 'snapshot_file.db')
 creator.take_snapshot(forums=False)
 # that's where we wait half an hour for it to finish
 ```
