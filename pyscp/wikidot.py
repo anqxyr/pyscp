@@ -354,6 +354,7 @@ class Wiki(pyscp.core.Wiki):
     def __init__(self, site):
         super().__init__(site)
         self.req = InsistentRequest()
+        self.cookies = 'wikidot_token7=123456;'
 
     def __repr__(self):
         return '{}.{}({})'.format(
@@ -446,13 +447,34 @@ class Wiki(pyscp.core.Wiki):
 
     def auth(self, username, password):
         """Login to wikidot with the given username/password pair."""
-        return self.req.post(
-            'https://www.wikidot.com/default--flow/login__LoginPopupScreen',
+        login = self.req.post(
+            "https://www.wikidot.com/default--flow/login__LoginPopupScreen",
             data=dict(
-                login=username,
-                password=password,
-                action='Login2Action',
-                event='login'))
+                login=username, password=password, action="Login2Action", event="login"
+            ),
+        )
+        if self.custom_domain == True:
+            cd = self.req.get(self.site)
+            soup = bs4.BeautifulSoup(cd.text, "html.parser")
+            s = soup.find_all("script")
+
+            for i in s:
+                if (
+                    "http://www.wikidot.com/default__flow/login__CustomDomainScript"
+                    in str(i)
+                ):
+                    siteid = i.get("src")
+            redirect = self.req.get(siteid, headers=login.cookies.get_dict())
+            redir_url = re.findall(
+                r"var redir_url = '\b((?:https?:\/\/|www\d{0,3}[.]|[a-z0-9.\-]+[.][a-z]{2,4}\/)(?:[^\s()<>]+|\((?:[^\s()<>]+|(?:\([^\s()<>]+\)))*\))+(?:\((?:[^\s()<>]+|(?:\([^\s()<>]+\)))*\)|[^\s`!()\[\]{};:'\".,<>?«»“”‘’]))';",
+                redirect.text,
+            )[0]
+            auth = self.req.get(redir_url)
+            for i in auth.cookies.get_dict():
+                self.cookies += f"{i}={auth.cookies.get_dict()[i]};"
+            return
+
+        self.cookies += f'WIKIDOT_SESSION_ID={login.cookies["WIKIDOT_SESSION_ID"]};'
 
     def list_categories(self):
         """Return forum categories."""
