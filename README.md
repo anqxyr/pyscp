@@ -17,7 +17,7 @@ Done.
 ```python
 import pyscp
 
-wiki = pyscp.wikidot.Wiki('www.scp-wiki.net')
+wiki = pyscp.wikidot.Wiki('scp-wiki.wikidot.com')
 p = wiki('scp-837')
 print(
     '"{}" has a rating of {}, {} revisions, and {} comments.'
@@ -68,7 +68,7 @@ When working with large number of pages, it could be faster to create a snapshot
 ```python
 import pyscp
 
-creator = pyscp.snapshot.SnapshotCreator('www.scp-wiki.net', 'snapshot_file.db')
+creator = pyscp.snapshot.SnapshotCreator('scp-wiki.wikidot.com', 'snapshot_file.db')
 creator.take_snapshot(forums=False)
 # that's where we wait half an hour for it to finish
 ```
@@ -76,7 +76,7 @@ creator.take_snapshot(forums=False)
 Once a snapshot is created, you can use `snapshot.Wiki` to read pages same as in the first example:
 
 ```python
-wiki = pyscp.snapshot.Wiki('www.scp-wiki.net', 'snapshot_file.db')
+wiki = pyscp.snapshot.Wiki('scp-wiki.wikidot.com', 'snapshot_file.db')
 p = wiki('scp-9005-2')
 print(
     '"{}" has a rating of {}, was created by {}, and is awesome.'
